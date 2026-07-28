@@ -13,7 +13,6 @@ import { CommonModule } from './common/common.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
-import { WorkspacesModule } from './modules/workspaces/workspaces.module';
 import { AgentsModule } from './modules/agents/agents.module';
 import { ConversationsModule } from './modules/conversations/conversations.module';
 import { MemoryModule } from './modules/memory/memory.module';
@@ -42,7 +41,6 @@ import { SharedModule } from './shared/shared.module';
     AuthModule,
     UsersModule,
     OrganizationsModule,
-    WorkspacesModule,
     AgentsModule,
     ConversationsModule,
     MemoryModule,
