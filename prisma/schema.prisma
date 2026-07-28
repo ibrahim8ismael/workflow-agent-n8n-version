@@ -168,22 +168,23 @@ model OrganizationMember {
 // ──────────────────────────────────────────────
 
 model Session {
-  id         String   @id @default(uuid())
-  userId     String
-  device     String?
-  browser    String?
-  ip         String?
-  lastUsedAt DateTime @default(now())
-  expiresAt  DateTime
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  deletedAt  DateTime?
+  id               String   @id @default(uuid())
+  userId           String
+  refreshTokenHash String
+  device           String?
+  browser          String?
+  ip               String?
+  lastUsedAt       DateTime @default(now())
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  deletedAt        DateTime?
 
   user User @relation(fields: [userId], references: [id])
 
+  @@index([refreshTokenHash])
   @@index([userId])
   @@index([userId, expiresAt])
-  @@map("sessions")
 }
 
 model ApiKey {
