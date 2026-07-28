@@ -90,6 +90,7 @@ enum IntegrationCategory {
 model User {
   id              String     @id @default(uuid())
   email           String     @unique
+  phone           String?
   name            String?
   avatarUrl       String?
   emailVerifiedAt DateTime?

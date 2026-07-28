@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { randomBytes, createHash } from 'crypto';
 import { argon2id, hash as argon2Hash, verify as argon2Verify } from 'argon2';
 import { RedisService } from '../../../infrastructure/cache/redis.service';
+import { NotificationService } from '../../../infrastructure/email/notification.service';
 import { AuthRepository } from '../repositories/auth.repository';
 import {
   OTP_LENGTH,
@@ -21,6 +22,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly redis: RedisService,
     private readonly repo: AuthRepository,
+    private readonly notification: NotificationService,
   ) {}
 
   async requestOtp(email: string, ip: string): Promise<void> {
@@ -50,7 +52,7 @@ export class AuthService {
 
     await this.redis.storeOtp(email, hashedOtp, OTP_EXPIRY_SECONDS);
 
-    this.logger.log(`OTP for ${email}: ${otp}`);
+    await this.notification.sendOtp(email, otp);
   }
 
   async verifyOtp(email: string, otp: string, ip: string, userAgent: string) {
