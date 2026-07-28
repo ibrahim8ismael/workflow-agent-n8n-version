@@ -5,3 +5,594 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+// ──────────────────────────────────────────────
+// Enums
+// ──────────────────────────────────────────────
+
+enum UserRole {
+  USER
+  SYSTEM_ADMINISTRATOR
+}
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum AgentStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+  ERROR
+}
+
+enum ConversationStatus {
+  ACTIVE
+  RESOLVED
+  ARCHIVED
+}
+
+enum MemoryType {
+  SHORT_TERM
+  LONG_TERM
+  BUSINESS
+}
+
+enum ChannelType {
+  WIDGET
+  WHATSAPP
+  MESSENGER
+  INSTAGRAM
+  TELEGRAM
+  EMAIL
+  SLACK
+  DISCORD
+  API
+}
+
+enum ApiKeyStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+
+enum SubscriptionTier {
+  FREE
+  PRO
+  BUSINESS
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  EXPIRED
+}
+
+enum IntegrationCategory {
+  AI
+  COMMUNICATION
+  CRM
+  PAYMENT
+  ANALYTICS
+  STORAGE
+  OTHER
+}
+
+// ──────────────────────────────────────────────
+// Layer 1 — Identity
+// ──────────────────────────────────────────────
+
+model User {
+  id              String     @id @default(uuid())
+  email           String     @unique
+  name            String?
+  avatarUrl       String?
+  emailVerifiedAt DateTime?
+  role            UserRole   @default(USER)
+  isActive        Boolean    @default(true)
+  tokenVersion    Int        @default(0)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  deletedAt       DateTime?
+
+  sessions             Session[]
+  apiKeys              ApiKey[]
+  organizationMembers  OrganizationMember[]
+  sentInvitations      OrganizationMember[]  @relation("SentInvitations")
+  agents               Agent[]              @relation("UserAgents")
+  conversations        Conversation[]       @relation("UserConversations")
+  knowledgeDocuments   KnowledgeDocument[]  @relation("UserKnowledgeDocuments")
+  memories             Memory[]             @relation("UserMemories")
+  integrations         Integration[]        @relation("UserIntegrations")
+  notifications        Notification[]
+  subscription         Subscription?        @relation("UserSubscription")
+  auditLogs            AuditLog[]
+
+  @@map("users")
+}
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  logoUrl   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  members            OrganizationMember[]
+  apiKeys            ApiKey[]
+  agents             Agent[]              @relation("OrganizationAgents")
+  conversations      Conversation[]       @relation("OrganizationConversations")
+  knowledgeDocuments KnowledgeDocument[]  @relation("OrganizationKnowledgeDocuments")
+  memories           Memory[]             @relation("OrganizationMemories")
+  integrations       Integration[]        @relation("OrganizationIntegrations")
+  notifications      Notification[]
+  subscription       Subscription?        @relation("OrganizationSubscription")
+
+  @@map("organizations")
+}
+
+// ──────────────────────────────────────────────
+// Layer 2 — Identity Relations
+// ──────────────────────────────────────────────
+
+model OrganizationMember {
+  id             String           @id @default(uuid())
+  organizationId String
+  userId         String
+  role           OrganizationRole @default(MEMBER)
+  invitedById    String?
+  joinedAt       DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+  invitedBy    User?        @relation("SentInvitations", fields: [invitedById], references: [id])
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@index([organizationId])
+  @@map("organization_members")
+}
+
+// ──────────────────────────────────────────────
+// Layer 3 — Authentication
+// ──────────────────────────────────────────────
+
+model Session {
+  id         String   @id @default(uuid())
+  userId     String
+  device     String?
+  browser    String?
+  ip         String?
+  lastUsedAt DateTime @default(now())
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  deletedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([userId, expiresAt])
+  @@map("sessions")
+}
+
+model ApiKey {
+  id             String       @id @default(uuid())
+  name           String
+  key            String       @unique
+  keyPrefix      String
+  status         ApiKeyStatus @default(ACTIVE)
+  lastUsedAt     DateTime?
+  expiresAt      DateTime?
+  userId         String?
+  organizationId String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  deletedAt      DateTime?
+
+  user         User?         @relation(fields: [userId], references: [id])
+  organization Organization? @relation(fields: [organizationId], references: [id])
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([status])
+  @@map("api_keys")
+}
+
+// ──────────────────────────────────────────────
+// Layer 4 — Core Business
+// ──────────────────────────────────────────────
+
+model Agent {
+  id             String      @id @default(uuid())
+  name           String
+  description    String?
+  instructions   String?
+  personality    String?
+  model          String
+  status         AgentStatus @default(DRAFT)
+  userId         String?
+  organizationId String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  deletedAt      DateTime?
+
+  user               User?                @relation("UserAgents", fields: [userId], references: [id])
+  organization       Organization?        @relation("OrganizationAgents", fields: [organizationId], references: [id])
+  skills             AgentSkill[]
+  conversations      Conversation[]
+  channels           Channel[]
+  memories           Memory[]
+  runtimeDeployments RuntimeDeployment[]
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([status])
+  @@map("agents")
+}
+
+model AgentSkill {
+  id        String   @id @default(uuid())
+  agentId   String
+  skillId   String
+  name      String
+  enabled   Boolean  @default(true)
+  config    Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  agent Agent @relation(fields: [agentId], references: [id])
+
+  @@unique([agentId, skillId])
+  @@index([agentId])
+  @@map("agent_skills")
+}
+
+model Conversation {
+  id             String             @id @default(uuid())
+  title          String?
+  status         ConversationStatus @default(ACTIVE)
+  metadata       Json?
+  agentId        String
+  userId         String?
+  organizationId String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  deletedAt      DateTime?
+
+  agent        Agent     @relation(fields: [agentId], references: [id])
+  user         User?     @relation("UserConversations", fields: [userId], references: [id])
+  organization Organization? @relation("OrganizationConversations", fields: [organizationId], references: [id])
+  messages     Message[]
+
+  @@index([agentId])
+  @@index([userId])
+  @@index([organizationId])
+  @@index([status])
+  @@index([agentId, status])
+  @@map("conversations")
+}
+
+model Message {
+  id             String   @id @default(uuid())
+  conversationId String
+  role           String
+  content        String
+  metadata       Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id])
+
+  @@index([conversationId])
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+// ──────────────────────────────────────────────
+// Layer 5 — Knowledge & Memory
+// ──────────────────────────────────────────────
+
+model KnowledgeDocument {
+  id             String   @id @default(uuid())
+  title          String
+  source         String?
+  contentType    String
+  content        String?
+  metadata       Json?
+  userId         String?
+  organizationId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
+
+  user         User?                    @relation("UserKnowledgeDocuments", fields: [userId], references: [id])
+  organization Organization?            @relation("OrganizationKnowledgeDocuments", fields: [organizationId], references: [id])
+  chunks       KnowledgeDocumentChunk[]
+
+  @@index([userId])
+  @@index([organizationId])
+  @@map("knowledge_documents")
+}
+
+model KnowledgeDocumentChunk {
+  id                  String   @id @default(uuid())
+  knowledgeDocumentId String
+  content             String
+  embedding           Unsupported("vector(1536)")?
+  metadata            Json?
+  chunkIndex          Int
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  deletedAt           DateTime?
+
+  knowledgeDocument KnowledgeDocument @relation(fields: [knowledgeDocumentId], references: [id])
+
+  @@index([knowledgeDocumentId])
+  @@index([knowledgeDocumentId, chunkIndex])
+  @@map("knowledge_document_chunks")
+}
+
+model Memory {
+  id             String     @id @default(uuid())
+  agentId        String
+  type           MemoryType
+  key            String
+  content        String
+  metadata       Json?
+  userId         String?
+  organizationId String?
+  expiresAt      DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  deletedAt      DateTime?
+
+  agent        Agent         @relation(fields: [agentId], references: [id])
+  user         User?         @relation("UserMemories", fields: [userId], references: [id])
+  organization Organization? @relation("OrganizationMemories", fields: [organizationId], references: [id])
+
+  @@unique([agentId, key, type])
+  @@index([agentId])
+  @@index([userId])
+  @@index([organizationId])
+  @@index([type])
+  @@map("memories")
+}
+
+// ──────────────────────────────────────────────
+// Layer 6 — Integrations & Channels
+// ──────────────────────────────────────────────
+
+model Integration {
+  id             String              @id @default(uuid())
+  name           String
+  category       IntegrationCategory
+  provider       String
+  status         String              @default("DISCONNECTED")
+  config         Json?
+  userId         String?
+  organizationId String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  deletedAt      DateTime?
+
+  user         User?                  @relation("UserIntegrations", fields: [userId], references: [id])
+  organization Organization?          @relation("OrganizationIntegrations", fields: [organizationId], references: [id])
+  credentials  IntegrationCredential[]
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([provider])
+  @@index([category])
+  @@map("integrations")
+}
+
+model IntegrationCredential {
+  id            String   @id @default(uuid())
+  integrationId String
+  encryptedData String
+  expiresAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@index([integrationId])
+  @@map("integration_credentials")
+}
+
+model Channel {
+  id        String      @id @default(uuid())
+  agentId   String
+  type      ChannelType
+  name      String?
+  status    String      @default("ACTIVE")
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  deletedAt DateTime?
+
+  agent   Agent           @relation(fields: [agentId], references: [id])
+  configs ChannelConfig[]
+
+  @@unique([agentId, type])
+  @@index([agentId])
+  @@map("channels")
+}
+
+model ChannelConfig {
+  id        String   @id @default(uuid())
+  channelId String
+  key       String
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, key])
+  @@index([channelId])
+  @@map("channel_configs")
+}
+
+// ──────────────────────────────────────────────
+// Layer 7 — Runtime
+// ──────────────────────────────────────────────
+
+model RuntimeDeployment {
+  id                  String   @id @default(uuid())
+  agentId             String
+  version             Int
+  status              String   @default("PENDING")
+  runtimeUrl          String?
+  runtimeDeploymentId String?
+  metadata            Json?
+  deployedAt          DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  deletedAt           DateTime?
+
+  agent Agent @relation(fields: [agentId], references: [id])
+
+  @@unique([agentId, version])
+  @@index([agentId])
+  @@index([status])
+  @@map("runtime_deployments")
+}
+
+// ──────────────────────────────────────────────
+// Layer 8 — Billing
+// ──────────────────────────────────────────────
+
+model SubscriptionPlan {
+  id          String           @id @default(uuid())
+  tier        SubscriptionTier @unique
+  name        String
+  description String?
+  price       Decimal
+  currency    String           @default("USD")
+  interval    String
+  features    Json?
+  isActive    Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  deletedAt   DateTime?
+
+  subscriptions Subscription[]
+
+  @@map("subscription_plans")
+}
+
+model Subscription {
+  id                    String             @id @default(uuid())
+  planId                String
+  status                SubscriptionStatus @default(ACTIVE)
+  currentPeriodStart    DateTime
+  currentPeriodEnd      DateTime
+  provider              String
+  providerSubscriptionId String            @unique
+  trialEndsAt           DateTime?
+  canceledAt            DateTime?
+  userId                String?
+  organizationId        String?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  deletedAt             DateTime?
+
+  plan         SubscriptionPlan @relation(fields: [planId], references: [id])
+  user         User?            @relation("UserSubscription", fields: [userId], references: [id])
+  organization Organization?    @relation("OrganizationSubscription", fields: [organizationId], references: [id])
+  invoices     Invoice[]
+  @@unique([userId])
+  @@unique([organizationId])
+
+  @@index([planId])
+  @@index([userId])
+  @@index([organizationId])
+  @@index([status])
+  @@index([provider, providerSubscriptionId])
+  @@map("subscriptions")
+}
+
+model Invoice {
+  id                String    @id @default(uuid())
+  subscriptionId    String
+  amount            Decimal
+  currency          String    @default("USD")
+  status            String    @default("PENDING")
+  providerInvoiceId String?
+  paidAt            DateTime?
+  dueDate           DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  deletedAt         DateTime?
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id])
+
+  @@index([subscriptionId])
+  @@index([status])
+  @@index([subscriptionId, status])
+  @@map("invoices")
+}
+
+// ──────────────────────────────────────────────
+// Layer 9 — System
+// ──────────────────────────────────────────────
+
+model Notification {
+  id             String   @id @default(uuid())
+  type           String
+  title          String
+  message        String?
+  data           Json?
+  readAt         DateTime?
+  userId         String?
+  organizationId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
+
+  user         User?         @relation(fields: [userId], references: [id])
+  organization Organization? @relation(fields: [organizationId], references: [id])
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([readAt])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  action     String
+  entityType String
+  entityId   String?
+  userId     String?
+  metadata   Json?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  deletedAt  DateTime?
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
