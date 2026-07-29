@@ -1,0 +1,479 @@
+import type { INestApplication } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { Test, type TestingModule } from '@nestjs/testing';
+import 'reflect-metadata';
+import _cookieParser from 'cookie-parser';
+import * as _supertest from 'supertest';
+
+const request = (_supertest as any).default ?? _supertest;
+
+import { AppModule } from '../src/app.module';
+import { DatabaseService } from '../src/database/database.service';
+import { RedisService } from '../src/infrastructure/cache/redis.service';
+import { NotificationService } from '../src/infrastructure/email/notification.service';
+import { AuthController } from '../src/modules/auth/controllers/auth.controller';
+import { AuthService } from '../src/modules/auth/services/auth.service';
+
+export class MockDatabaseService {
+  private store: Map<string, Map<string, unknown>> = new Map();
+
+  private collection(name: string): Map<string, unknown> {
+    if (!this.store.has(name)) {
+      this.store.set(name, new Map());
+    }
+    return this.store.get(name)!;
+  }
+
+  findUnique(
+    model: string,
+    args: { where: Record<string, unknown>; select?: Record<string, unknown> },
+  ) {
+    const col = this.collection(model);
+    const entry = Array.from(col.values()).find((item: any) =>
+      Object.entries(args.where).every(([k, v]) => (item as any)[k] === v),
+    );
+    return Promise.resolve(entry ?? null);
+  }
+
+  findFirst(model: string, args: { where: Record<string, unknown> }) {
+    return this.findUnique(model, args);
+  }
+
+  findMany(model: string, args: { where?: Record<string, unknown>; orderBy?: unknown } = {}) {
+    const col = this.collection(model);
+    let results = Array.from(col.values());
+    if (args.where) {
+      results = results.filter((item: any) =>
+        Object.entries(args.where!).every(([k, v]) => (item as any)[k] === v),
+      );
+    }
+    return Promise.resolve(results);
+  }
+
+  create(
+    model: string,
+    args: {
+      data: Record<string, unknown>;
+      select?: Record<string, unknown>;
+      include?: Record<string, unknown>;
+    },
+  ) {
+    const col = this.collection(model);
+    const id = args.data.id ?? `mock-${model}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const record = {
+      id,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      ...args.data,
+    } as Record<string, unknown>;
+    col.set(id as string, record);
+
+    if (args.select) {
+      const selected: Record<string, unknown> = {};
+      for (const key of Object.keys(args.select)) {
+        if (key in record) selected[key] = record[key];
+      }
+      return Promise.resolve(selected);
+    }
+    if (args.include) {
+      return Promise.resolve({ ...record });
+    }
+    return Promise.resolve(record);
+  }
+
+  update(
+    model: string,
+    args: {
+      where: { id: string };
+      data: Record<string, unknown>;
+      select?: Record<string, unknown>;
+    },
+  ) {
+    const col = this.collection(model);
+    const existing = col.get(args.where.id);
+    if (!existing) return Promise.resolve(null);
+    const updated = { ...(existing as object), ...args.data, updatedAt: new Date() } as Record<
+      string,
+      unknown
+    >;
+    col.set(args.where.id, updated);
+    if (args.select) {
+      const selected: Record<string, unknown> = {};
+      for (const key of Object.keys(args.select)) {
+        if (key in updated) selected[key] = updated[key];
+      }
+      return Promise.resolve(selected);
+    }
+    return Promise.resolve(updated);
+  }
+
+  updateMany(
+    model: string,
+    args: { where: Record<string, unknown>; data: Record<string, unknown> },
+  ) {
+    const col = this.collection(model);
+    let count = 0;
+    for (const [id, item] of col.entries()) {
+      const record = item as Record<string, unknown>;
+      if (Object.entries(args.where).every(([k, v]) => record[k] === v)) {
+        Object.assign(record, args.data, { updatedAt: new Date() });
+        col.set(id as string, record);
+        count++;
+      }
+    }
+    return Promise.resolve({ count });
+  }
+
+  delete(model: string, args: { where: { id: string } }) {
+    const col = this.collection(model);
+    const existing = col.get(args.where.id);
+    if (!existing) return Promise.resolve(null);
+    col.delete(args.where.id);
+    return Promise.resolve(existing);
+  }
+
+  count(model: string, args: { where: Record<string, unknown> } = { where: {} }) {
+    const col = this.collection(model);
+    let count = col.size;
+    if (args.where && Object.keys(args.where).length > 0) {
+      count = Array.from(col.values()).filter((item: any) =>
+        Object.entries(args.where!).every(([k, v]) => (item as any)[k] === v),
+      ).length;
+    }
+    return Promise.resolve(count);
+  }
+
+  aggregate(
+    model: string,
+    args: { where: Record<string, unknown>; _sum?: Record<string, unknown> },
+  ) {
+    const col = this.collection(model);
+    const items = Array.from(col.values()).filter((item: any) => {
+      if (!args.where) return true;
+      return Object.entries(args.where).every(([k, v]) => (item as any)[k] === v);
+    });
+    const result: Record<string, unknown> = { _sum: {} };
+    if (args._sum) {
+      for (const field of Object.keys(args._sum)) {
+        (result._sum as Record<string, unknown>)[field] = items.reduce((acc: number, item: any) => {
+          const val = Number(item[field]) || 0;
+          return acc + val;
+        }, 0);
+      }
+    }
+    return Promise.resolve(result);
+  }
+
+  groupBy(args: { by: string[]; where: Record<string, unknown>; _count: boolean }) {
+    const model = 'subscription';
+    const col = this.collection(model);
+    const items = Array.from(col.values()).filter((item: any) => {
+      if (!args.where) return true;
+      return Object.entries(args.where).every(([k, v]) => (item as any)[k] === v);
+    });
+    const groups: Record<string, { _count: number }> = {};
+    for (const item of items) {
+      const key = (item as any)[args.by[0]] ?? 'unknown';
+      if (!groups[key]) groups[key] = { _count: 0 };
+      groups[key]._count++;
+    }
+    return Promise.resolve(
+      Object.entries(groups).map(([key, val]) => ({ [args.by[0]]: key, _count: val._count })),
+    );
+  }
+
+  // Prisma client-style accessors
+  get user() {
+    return this;
+  }
+  get session() {
+    return this;
+  }
+  get subscription() {
+    return this;
+  }
+  get subscriptionPlan() {
+    return this;
+  }
+  get wallet() {
+    return this;
+  }
+  get walletTransaction() {
+    return this;
+  }
+  get usageMeter() {
+    return this;
+  }
+  get topUpPackage() {
+    return this;
+  }
+  get topUpPurchase() {
+    return this;
+  }
+  get coupon() {
+    return this;
+  }
+  get couponRedemption() {
+    return this;
+  }
+  get billingEvent() {
+    return this;
+  }
+  get featureFlag() {
+    return this;
+  }
+  get featureFlagOverride() {
+    return this;
+  }
+  get impersonationLog() {
+    return this;
+  }
+  get auditLog() {
+    return this;
+  }
+  get notification() {
+    return this;
+  }
+  get organization() {
+    return this;
+  }
+  get organizationMember() {
+    return this;
+  }
+  get apiKey() {
+    return this;
+  }
+  get invoice() {
+    return this;
+  }
+}
+
+export class MockRedisService {
+  private store = new Map<string, string>();
+
+  get(key: string): Promise<string | null> {
+    return Promise.resolve(this.store.get(key) ?? null);
+  }
+
+  set(key: string, value: string, mode?: string, ttl?: number): Promise<'OK'> {
+    this.store.set(key, value);
+    if (mode === 'EX' && ttl) {
+      setTimeout(() => this.store.delete(key), ttl * 1000);
+    }
+    return Promise.resolve('OK');
+  }
+
+  del(key: string): Promise<number> {
+    const existed = this.store.has(key) ? 1 : 0;
+    this.store.delete(key);
+    return Promise.resolve(existed);
+  }
+
+  exists(key: string): Promise<number> {
+    return Promise.resolve(this.store.has(key) ? 1 : 0);
+  }
+
+  expire(key: string, _ttl: number): Promise<number> {
+    return Promise.resolve(this.store.has(key) ? 1 : 0);
+  }
+
+  incr(key: string): Promise<number> {
+    const raw = this.store.get(key) ?? '0';
+    const next = parseInt(raw, 10) + 1;
+    this.store.set(key, String(next));
+    return Promise.resolve(next);
+  }
+
+  setnx(key: string, value: string): Promise<number> {
+    if (this.store.has(key)) return Promise.resolve(0);
+    this.store.set(key, value);
+    return Promise.resolve(1);
+  }
+
+  quit(): Promise<'OK'> {
+    this.store.clear();
+    return Promise.resolve('OK');
+  }
+
+  get keyPrefix(): string {
+    return 'woops';
+  }
+
+  async checkRateLimit(key: string, maxRequests: number, _windowSeconds: number): Promise<boolean> {
+    const current = await this.incr(`ratelimit:${key}`);
+    return current <= maxRequests;
+  }
+
+  async storeOtp(email: string, hashedOtp: string, _ttlSeconds = 300): Promise<void> {
+    await this.set(`otp:${email}`, JSON.stringify({ hashedOtp, attempts: 0 }));
+  }
+
+  async getOtpData(email: string): Promise<{ hashedOtp: string; attempts: number } | null> {
+    const raw = await this.get(`otp:${email}`);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  }
+
+  async incrementOtpAttempts(email: string): Promise<number> {
+    const data = await this.getOtpData(email);
+    if (!data) return 0;
+    data.attempts += 1;
+    await this.set(`otp:${email}`, JSON.stringify(data));
+    return data.attempts;
+  }
+
+  async deleteOtp(email: string): Promise<void> {
+    await this.del(`otp:${email}`);
+  }
+
+  async createSession(
+    sessionId: string,
+    data: Record<string, unknown>,
+    _ttlSeconds: number,
+  ): Promise<void> {
+    await this.set(`session:${sessionId}`, JSON.stringify(data));
+  }
+
+  async getSession(sessionId: string): Promise<Record<string, unknown> | null> {
+    const raw = await this.get(`session:${sessionId}`);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  }
+
+  async destroySession(sessionId: string): Promise<void> {
+    await this.del(`session:${sessionId}`);
+  }
+
+  async extendSession(_sessionId: string, _ttlSeconds: number): Promise<void> {
+    // no-op in mock
+  }
+}
+
+export const mockNotificationService = {
+  sendOtp: (_target: string, _code: string): Promise<void> => Promise.resolve(),
+  sendOtpEmail: (_email: string, _code: string): Promise<void> => Promise.resolve(),
+  sendOtpSms: (_phone: string, _code: string): Promise<void> => Promise.resolve(),
+};
+
+let cachedApp: INestApplication | null = null;
+let cachedModule: TestingModule | null = null;
+
+export async function bootstrapApp(): Promise<INestApplication> {
+  if (cachedApp) return cachedApp;
+
+  const mockDb = new MockDatabaseService();
+  const mockRedis = new MockRedisService();
+
+  // Debug: check param types metadata
+  const paramTypes = Reflect.getMetadata('design:paramtypes', AuthController);
+  console.log('AuthController param metadata exists:', !!paramTypes);
+  if (paramTypes) {
+    console.log(
+      'AuthController expects:',
+      paramTypes[0]?.name,
+      'AuthService from import:',
+      AuthService.name,
+      'same:',
+      paramTypes[0] === AuthService,
+    );
+  }
+
+  cachedModule = await Test.createTestingModule({
+    imports: [AppModule],
+  })
+    .overrideProvider(DatabaseService)
+    .useValue(mockDb)
+    .overrideProvider(RedisService)
+    .useValue(mockRedis)
+    .overrideProvider(NotificationService)
+    .useValue(mockNotificationService)
+    .overrideProvider(AuthService)
+    .useValue({
+      requestOtp: async (_email: string, _ip: string) => undefined,
+      verifyOtp: async (_email: string, _otp: string, _ip: string, _userAgent: string) => ({
+        accessToken: 'mock-access-token',
+        refreshToken: 'mock-refresh-token',
+        expiresIn: 900,
+      }),
+    } as any)
+    .compile();
+
+  const app = cachedModule.createNestApplication();
+  app.use(_cookieParser());
+  app.setGlobalPrefix('api/v1');
+
+  await app.init();
+  cachedApp = app;
+  return app;
+}
+
+export async function closeApp(): Promise<void> {
+  if (cachedApp) {
+    await cachedApp.close();
+    cachedApp = null;
+    cachedModule = null;
+  }
+}
+
+export function getMockDb(): MockDatabaseService {
+  const module = cachedModule;
+  if (!module) throw new Error('App not bootstrapped. Call bootstrapApp() first.');
+  return module.get(DatabaseService) as unknown as MockDatabaseService;
+}
+
+export function getJwtService(): JwtService {
+  const module = cachedModule;
+  if (!module) throw new Error('App not bootstrapped. Call bootstrapApp() first.');
+  return module.get(JwtService);
+}
+
+export function generateTestToken(
+  overrides: Partial<{
+    sub: string;
+    email: string;
+    role: string;
+    tokenVersion: number;
+    sessionId: string;
+    activeContext: string;
+    organizationId?: string;
+  }> = {},
+): string {
+  const jwt = getJwtService();
+  return jwt.sign({
+    sub: overrides.sub ?? 'test-user-id',
+    email: overrides.email ?? 'test@woops.ai',
+    role: overrides.role ?? 'USER',
+    tokenVersion: overrides.tokenVersion ?? 1,
+    sessionId: overrides.sessionId ?? 'test-session-id',
+    activeContext: overrides.activeContext ?? 'individual',
+    ...(overrides.organizationId ? { organizationId: overrides.organizationId } : {}),
+  });
+}
+
+export function setTestUserInDb(
+  mockDb: MockDatabaseService,
+  overrides: Record<string, unknown> = {},
+) {
+  const user = {
+    id: 'test-user-id',
+    email: 'test@woops.ai',
+    name: 'Test User',
+    phone: null,
+    avatarUrl: null,
+    role: 'USER',
+    isActive: true,
+    tokenVersion: 1,
+    emailVerifiedAt: new Date(),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    deletedAt: null,
+    ...overrides,
+  };
+  mockDb.create('user', { data: user as any });
+  return user;
+}
+
+export function defaultTestAgent(app?: INestApplication) {
+  if (!app) throw new Error('App not provided');
+  return request(app.getHttpServer());
+}
