@@ -17,6 +17,7 @@ import { RuntimeModule } from './modules/runtime/runtime.module';
 import { ChannelsModule } from './modules/channels/channels.module';
 import { IntegrationsModule } from './modules/integrations/integrations.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { AdminModule } from './modules/admin/admin.module';
 import { SharedModule } from './shared/shared.module';
 
 @Module({
@@ -35,6 +36,7 @@ import { SharedModule } from './shared/shared.module';
     KnowledgeModule,
     MemoryModule,
     BillingModule,
+    AdminModule,
     RuntimeModule,
     ChannelsModule,
     IntegrationsModule,

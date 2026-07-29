@@ -189,6 +189,7 @@ grep -rl "^category: finance" "<VaultRoot>/woops-cc/"
 find "<VaultRoot>" -maxdepth 1 -type d ! -path "<VaultRoot>"
 ```
 
+- Vault => /Users/ceo/Documents/Obsidian Vault/woops
 ## 7. Deliberately out of scope
 
 - **No GraphQL API, no external database.** The graph is the wikilink +

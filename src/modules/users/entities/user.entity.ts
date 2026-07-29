@@ -6,6 +6,7 @@ export enum UserRole {
 export class UserEntity {
   id!: string;
   email!: string;
+  phone!: string | null;
   name!: string | null;
   avatarUrl!: string | null;
   emailVerifiedAt!: Date | null;
