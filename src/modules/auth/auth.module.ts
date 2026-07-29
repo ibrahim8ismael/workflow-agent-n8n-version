@@ -1,17 +1,18 @@
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
-import { AuthController } from './controllers/auth.controller';
-import { AuthService } from './services/auth.service';
-import { AuthRepository } from './repositories/auth.repository';
-import { JwtStrategy } from './strategies/jwt.strategy';
-import { ApiKeyStrategy } from './strategies/api-key.strategy';
 import { jwtConfig } from '../../config/jwt.config';
+import { AuthController } from './controllers/auth.controller';
+import { AuthRepository } from './repositories/auth.repository';
+import { AuthService } from './services/auth.service';
+import { ApiKeyStrategy } from './strategies/api-key.strategy';
+import { JwtStrategy } from './strategies/jwt.strategy';
 
 @Module({
   imports: [
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
+      global: true,
       useFactory: () => ({
         secret: jwtConfig().secret,
         signOptions: {

@@ -1,35 +1,35 @@
 import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../../database/database.module';
 import { BillingController } from './controllers/billing.controller';
-import { SubscriptionController } from './controllers/subscription.controller';
-import { WalletController } from './controllers/wallet.controller';
-import { TopUpController } from './controllers/top-up.controller';
 import { CouponController } from './controllers/coupon.controller';
-import { UsageController } from './controllers/usage.controller';
 import { InvoiceController } from './controllers/invoice.controller';
-import { BillingService } from './services/billing.service';
-import { SubscriptionService } from './services/subscription.service';
-import { WalletService } from './services/wallet.service';
-import { QuotaEnforcerService } from './services/quota-enforcer.service';
-import { UsageMeterService } from './services/usage-meter.service';
-import { TopUpService } from './services/top-up.service';
-import { CouponService } from './services/coupon.service';
-import { InvoiceService } from './services/invoice.service';
-import { CostEngineService } from './services/cost-engine.service';
-import { BillingEventService } from './services/billing-event.service';
-import { PaymentProviderService } from './services/payment-provider.service';
+import { SubscriptionController } from './controllers/subscription.controller';
+import { TopUpController } from './controllers/top-up.controller';
+import { UsageController } from './controllers/usage.controller';
+import { WalletController } from './controllers/wallet.controller';
 import { BillingRepository } from './repositories/billing.repository';
-import { WalletRepository } from './repositories/wallet.repository';
-import { WalletTransactionRepository } from './repositories/wallet-transaction.repository';
-import { SubscriptionRepository } from './repositories/subscription.repository';
-import { UsageMeterRepository } from './repositories/usage-meter.repository';
-import { TopUpRepository } from './repositories/top-up.repository';
+import { BillingEventRepository } from './repositories/billing-event.repository';
 import { CouponRepository } from './repositories/coupon.repository';
 import { InvoiceRepository } from './repositories/invoice.repository';
-import { BillingEventRepository } from './repositories/billing-event.repository';
+import { SubscriptionRepository } from './repositories/subscription.repository';
+import { TopUpRepository } from './repositories/top-up.repository';
+import { UsageMeterRepository } from './repositories/usage-meter.repository';
+import { WalletRepository } from './repositories/wallet.repository';
+import { WalletTransactionRepository } from './repositories/wallet-transaction.repository';
+import { BillingService } from './services/billing.service';
+import { BillingEventService } from './services/billing-event.service';
+import { CostEngineService } from './services/cost-engine.service';
+import { CouponService } from './services/coupon.service';
+import { InvoiceService } from './services/invoice.service';
+import { PaymentProviderService } from './services/payment-provider.service';
+import { QuotaEnforcerService } from './services/quota-enforcer.service';
+import { SubscriptionService } from './services/subscription.service';
+import { TopUpService } from './services/top-up.service';
+import { UsageMeterService } from './services/usage-meter.service';
+import { WalletService } from './services/wallet.service';
+import { ExpiryCheckWorker } from './workers/expiry-check.worker';
 import { SubscriptionRenewalWorker } from './workers/subscription-renewal.worker';
 import { UsageResetWorker } from './workers/usage-reset.worker';
-import { ExpiryCheckWorker } from './workers/expiry-check.worker';
 
 @Module({
   imports: [DatabaseModule],
@@ -71,6 +71,7 @@ import { ExpiryCheckWorker } from './workers/expiry-check.worker';
     BillingService,
     SubscriptionService,
     WalletService,
+    WalletRepository,
     QuotaEnforcerService,
     UsageMeterService,
     TopUpService,

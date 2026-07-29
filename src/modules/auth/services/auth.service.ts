@@ -1,23 +1,21 @@
-import { Injectable, UnauthorizedException, ConflictException, Logger } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
-import { randomBytes, createHash } from 'crypto';
-import { argon2id, hash as argon2Hash, verify as argon2Verify } from 'argon2';
-import { RedisService } from '../../../infrastructure/cache/redis.service';
-import { NotificationService } from '../../../infrastructure/email/notification.service';
-import { AuthRepository } from '../repositories/auth.repository';
+import { createHash, randomBytes } from 'node:crypto';
+import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
+import type { JwtService } from '@nestjs/jwt';
+import { hash as argon2Hash, argon2id, verify as argon2Verify } from 'argon2';
+import type { RedisService } from '../../../infrastructure/cache/redis.service';
+import type { NotificationService } from '../../../infrastructure/email/notification.service';
 import {
-  OTP_LENGTH,
   OTP_EXPIRY_SECONDS,
+  OTP_LENGTH,
   OTP_MAX_ATTEMPTS,
   OTP_RATE_LIMIT_PER_EMAIL,
   OTP_RATE_LIMIT_PER_IP,
   OTP_RATE_LIMIT_WINDOW,
 } from '../constants/auth.constants';
+import type { AuthRepository } from '../repositories/auth.repository';
 
 @Injectable()
 export class AuthService {
-  private readonly logger = new Logger(AuthService.name);
-
   constructor(
     private readonly jwtService: JwtService,
     private readonly redis: RedisService,

@@ -1,18 +1,22 @@
-import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
-import { QueueService } from '../../../infrastructure/queue/queue.service';
-import { SubscriptionService } from '../services/subscription.service';
+import { Injectable, Logger, type OnModuleInit, Optional } from '@nestjs/common';
+import type { QueueService } from '../../../infrastructure/queue/queue.service';
 import { BILLING_QUEUES } from '../constants/billing.constants';
+import type { SubscriptionService } from '../services/subscription.service';
 
 @Injectable()
 export class ExpiryCheckWorker implements OnModuleInit {
   private readonly logger = new Logger(ExpiryCheckWorker.name);
 
   constructor(
-    private readonly queueService: QueueService,
+    @Optional() private readonly queueService: QueueService | null,
     private readonly subscriptionService: SubscriptionService,
   ) {}
 
   onModuleInit() {
+    if (!this.queueService) {
+      this.logger.warn('QueueService not available, skipping worker initialization');
+      return;
+    }
     this.queueService.createWorker(BILLING_QUEUES.EXPIRY_CHECK, async () => {
       try {
         const expired = await this.subscriptionService.findExpired();

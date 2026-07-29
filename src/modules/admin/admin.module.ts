@@ -1,31 +1,30 @@
 import { Module } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
 import { DatabaseModule } from '../../database/database.module';
 import { BillingModule } from '../billing/billing.module';
-import { AdminUsersController } from './controllers/admin-users.controller';
-import { AdminOrganizationsController } from './controllers/admin-organizations.controller';
-import { AdminSubscriptionsController } from './controllers/admin-subscriptions.controller';
-import { AdminBillingController } from './controllers/admin-billing.controller';
-import { AdminPlansController } from './controllers/admin-plans.controller';
-import { AdminCouponsController } from './controllers/admin-coupons.controller';
 import { AdminAnalyticsController } from './controllers/admin-analytics.controller';
-import { AdminFeatureFlagsController } from './controllers/admin-feature-flags.controller';
 import { AdminAuditController } from './controllers/admin-audit.controller';
-import { AdminUsersService } from './services/admin-users.service';
-import { AdminOrganizationsService } from './services/admin-organizations.service';
-import { AdminSubscriptionsService } from './services/admin-subscriptions.service';
-import { AdminBillingService } from './services/admin-billing.service';
-import { AdminAnalyticsService } from './services/admin-analytics.service';
-import { AdminImpersonationService } from './services/admin-impersonation.service';
-import { AdminFeatureFlagsService } from './services/admin-feature-flags.service';
-import { AdminUsersRepository } from './repositories/admin-users.repository';
+import { AdminBillingController } from './controllers/admin-billing.controller';
+import { AdminCouponsController } from './controllers/admin-coupons.controller';
+import { AdminFeatureFlagsController } from './controllers/admin-feature-flags.controller';
+import { AdminOrganizationsController } from './controllers/admin-organizations.controller';
+import { AdminPlansController } from './controllers/admin-plans.controller';
+import { AdminSubscriptionsController } from './controllers/admin-subscriptions.controller';
+import { AdminUsersController } from './controllers/admin-users.controller';
+import { SystemAdminGuard } from './guards/system-admin.guard';
+import { AdminAuditRepository } from './repositories/admin-audit.repository';
 import { AdminOrganizationsRepository } from './repositories/admin-organizations.repository';
 import { AdminSubscriptionsRepository } from './repositories/admin-subscriptions.repository';
-import { AdminAuditRepository } from './repositories/admin-audit.repository';
-import { SystemAdminGuard } from './guards/system-admin.guard';
+import { AdminUsersRepository } from './repositories/admin-users.repository';
+import { AdminAnalyticsService } from './services/admin-analytics.service';
+import { AdminBillingService } from './services/admin-billing.service';
+import { AdminFeatureFlagsService } from './services/admin-feature-flags.service';
+import { AdminImpersonationService } from './services/admin-impersonation.service';
+import { AdminOrganizationsService } from './services/admin-organizations.service';
+import { AdminSubscriptionsService } from './services/admin-subscriptions.service';
+import { AdminUsersService } from './services/admin-users.service';
 
 @Module({
-  imports: [DatabaseModule, JwtModule, BillingModule],
+  imports: [DatabaseModule, BillingModule],
   controllers: [
     AdminUsersController,
     AdminOrganizationsController,

@@ -1,18 +1,22 @@
-import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
-import { QueueService } from '../../../infrastructure/queue/queue.service';
-import { SubscriptionService } from '../services/subscription.service';
+import { Injectable, Logger, type OnModuleInit, Optional } from '@nestjs/common';
+import type { QueueService } from '../../../infrastructure/queue/queue.service';
 import { BILLING_QUEUES } from '../constants/billing.constants';
+import type { SubscriptionService } from '../services/subscription.service';
 
 @Injectable()
 export class SubscriptionRenewalWorker implements OnModuleInit {
   private readonly logger = new Logger(SubscriptionRenewalWorker.name);
 
   constructor(
-    private readonly queueService: QueueService,
+    @Optional() private readonly queueService: QueueService | null,
     private readonly subscriptionService: SubscriptionService,
   ) {}
 
   onModuleInit() {
+    if (!this.queueService) {
+      this.logger.warn('QueueService not available, skipping worker initialization');
+      return;
+    }
     this.queueService.createWorker(BILLING_QUEUES.SUBSCRIPTION_RENEWAL, async (job) => {
       const { subscriptionId } = job.data as { subscriptionId: string };
       try {

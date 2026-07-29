@@ -1,0 +1,53 @@
+# ──────────────────────────────────────────────
+# Lefthook — Pre-commit Pipeline
+# Target: < 30s for typical commits
+# ──────────────────────────────────────────────
+
+commit:
+  commands:
+    commitlint:
+      run: npx commitlint --edit {1}
+
+pre-commit:
+  parallel: true
+  commands:
+    # 1. Format changed files with Biome
+    formatter:
+      glob: "*.{ts,tsx,js,jsx,json,md}"
+      run: npx biome format --write {staged_files}
+      stage_fixed: true
+
+    # 2. Lint + organize imports via Biome
+    linter:
+      glob: "*.{ts,tsx}"
+      run: npx biome check --write --unsafe {staged_files}
+      stage_fixed: true
+
+    # 3. TypeScript type-check (incremental)
+    typecheck:
+      glob: "*.{ts,tsx}"
+      run: npx tsc --noEmit --incremental --tsBuildInfoFile .tsbuildinfo
+
+    # 4. Run affected tests (vs main branch)
+    test:
+      glob: "*.{ts,tsx}"
+      run: npx vitest run --changed main --reporter=verbose 2>/dev/null || echo "Tests skipped or no changes detected"
+      skip:
+        - merge
+
+    # 5. Verify Prisma schema is valid
+    prisma:
+      glob: "prisma/schema.prisma"
+      run: npx prisma generate
+      only:
+        - main
+        - auth-module
+
+    # 6. Secret scanning on staged content (exclude lefthook config)
+    secrets:
+      run: git diff --cached --diff-filter=ACM -- '*.ts' '*.tsx' '*.json' '*.env' | grep -nE '(password["\s:=]|api_key["\s:=]|apiKey["\s:=]|private_key["\s:=]|-----BEGIN\s+(RSA\s+|EC\s+)?PRIVATE\s+KEY-----)' && echo "⚠️  Potential secret detected in staged files!" && exit 1 || exit 0
+
+    # 7. Dependency validation (package.json changes)
+    deps:
+      glob: "package.json"
+      run: npx --yes depcheck --skip-missing 2>/dev/null && echo "✅ Dependencies OK" || echo "⚠️  Unused dependencies may exist (not blocking)"

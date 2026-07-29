@@ -1,18 +1,22 @@
-import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
-import { QueueService } from '../../../infrastructure/queue/queue.service';
-import { UsageMeterService } from '../services/usage-meter.service';
+import { Injectable, Logger, type OnModuleInit, Optional } from '@nestjs/common';
+import type { QueueService } from '../../../infrastructure/queue/queue.service';
 import { BILLING_QUEUES } from '../constants/billing.constants';
+import type { UsageMeterService } from '../services/usage-meter.service';
 
 @Injectable()
 export class UsageResetWorker implements OnModuleInit {
   private readonly logger = new Logger(UsageResetWorker.name);
 
   constructor(
-    private readonly queueService: QueueService,
+    @Optional() private readonly queueService: QueueService | null,
     private readonly usageMeter: UsageMeterService,
   ) {}
 
   onModuleInit() {
+    if (!this.queueService) {
+      this.logger.warn('QueueService not available, skipping worker initialization');
+      return;
+    }
     this.queueService.createWorker(BILLING_QUEUES.USAGE_RESET, async (job) => {
       const { subscriptionId, aiCreditsLimit, operationsLimit, resetAt } = job.data as {
         subscriptionId: string;
