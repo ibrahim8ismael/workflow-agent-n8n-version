@@ -83,6 +83,39 @@ enum IntegrationCategory {
   OTHER
 }
 
+enum WalletTransactionType {
+  SUBSCRIPTION_CREDIT
+  TOP_UP_PURCHASE
+  BONUS_GRANT
+  CONSUMPTION
+  REFUND
+  EXPIRATION
+  ADJUSTMENT
+}
+
+enum BillingEventType {
+  SUBSCRIPTION_CREATED
+  SUBSCRIPTION_RENEWED
+  SUBSCRIPTION_UPGRADED
+  SUBSCRIPTION_DOWNGRADED
+  SUBSCRIPTION_CANCELED
+  SUBSCRIPTION_EXPIRED
+  TOP_UP_PURCHASED
+  CREDIT_CONSUMED
+  OPERATION_CONSUMED
+  REFUND_ISSUED
+  CHARGE_FAILED
+  GRACE_PERIOD_STARTED
+  HARD_LIMIT_REACHED
+}
+
+enum CouponType {
+  PERCENTAGE
+  FIXED_AMOUNT
+  FREE_CREDITS
+  FREE_OPERATIONS
+}
+
 // ──────────────────────────────────────────────
 // Layer 1 — Identity
 // ──────────────────────────────────────────────
@@ -112,6 +145,10 @@ model User {
   integrations         Integration[]        @relation("UserIntegrations")
   notifications        Notification[]
   subscription         Subscription?        @relation("UserSubscription")
+  wallet               Wallet?
+  couponRedemptions    CouponRedemption[]
+  adminImpersonations  ImpersonationLog[]  @relation("AdminImpersonations")
+  targetImpersonations ImpersonationLog[]  @relation("TargetImpersonations")
   auditLogs            AuditLog[]
 
   @@map("users")
@@ -135,6 +172,7 @@ model Organization {
   integrations       Integration[]        @relation("OrganizationIntegrations")
   notifications      Notification[]
   subscription       Subscription?        @relation("OrganizationSubscription")
+  wallet             Wallet?
 
   @@map("organizations")
 }
@@ -494,8 +532,29 @@ model SubscriptionPlan {
   deletedAt   DateTime?
 
   subscriptions Subscription[]
+  quota         PlanQuota?
 
   @@map("subscription_plans")
+}
+
+model PlanQuota {
+  id                    String @id @default(uuid())
+  planId                String @unique
+  aiCreditsPerMonth     BigInt
+  operationsPerMonth    BigInt
+  maxAgents             Int
+  maxTeamMembers        Int
+  maxKnowledgeBases     Int
+  storageBytes          BigInt
+  maxChannels           Int
+  maxIntegrations       Int?
+  maxApiKeys            Int?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  plan SubscriptionPlan @relation(fields: [planId], references: [id])
+
+  @@map("plan_quotas")
 }
 
 model Subscription {
@@ -518,6 +577,7 @@ model Subscription {
   user         User?            @relation("UserSubscription", fields: [userId], references: [id])
   organization Organization?    @relation("OrganizationSubscription", fields: [organizationId], references: [id])
   invoices     Invoice[]
+  usageMeters  UsageMeter[]
   @@unique([userId])
   @@unique([organizationId])
 
@@ -551,7 +611,270 @@ model Invoice {
 }
 
 // ──────────────────────────────────────────────
-// Layer 9 — System
+// Layer 9 — Billing Wallet & Credits
+// ──────────────────────────────────────────────
+
+model Wallet {
+  id              String   @id @default(uuid())
+  balanceCredits  BigInt   @default(0)
+  balanceCreditsUsd Decimal @default(0)
+  lifetimeCredits BigInt   @default(0)
+  lifetimeSpendUsd Decimal  @default(0)
+  currency        String   @default("USD")
+  softLimit       BigInt?
+  hardLimit       BigInt?
+  gracePeriodEnd  DateTime?
+  isFrozen        Boolean  @default(false)
+  version         Int      @default(0)
+  userId          String?
+  organizationId  String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  user         User?                @relation(fields: [userId], references: [id])
+  organization Organization?        @relation(fields: [organizationId], references: [id])
+  transactions WalletTransaction[]
+  purchases    TopUpPurchase[]
+
+  @@unique([userId])
+  @@unique([organizationId])
+  @@index([userId])
+  @@index([organizationId])
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id              String                @id @default(uuid())
+  walletId        String
+  type            WalletTransactionType
+  amountCredits   BigInt
+  amountUsd       Decimal?
+  currency        String                @default("USD")
+  balanceBefore   BigInt
+  balanceAfter    BigInt
+  description     String?
+  referenceType   String?
+  referenceId     String?
+  metadata        Json?
+  couponId        String?
+  expiresAt       DateTime?
+  createdAt       DateTime              @default(now())
+
+  wallet Wallet @relation(fields: [walletId], references: [id])
+  coupon Coupon? @relation(fields: [couponId], references: [id])
+
+  @@index([walletId])
+  @@index([walletId, createdAt])
+  @@index([referenceType, referenceId])
+  @@index([type])
+  @@index([couponId])
+  @@map("wallet_transactions")
+}
+
+// ──────────────────────────────────────────────
+// Layer 10 — Usage & Metering
+// ──────────────────────────────────────────────
+
+model UsageMeter {
+  id             String   @id @default(uuid())
+  subscriptionId String
+  aiCreditsUsed  BigInt   @default(0)
+  aiCreditsLimit BigInt   @default(0)
+  operationsUsed BigInt   @default(0)
+  operationsLimit BigInt  @default(0)
+  resetAt        DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id])
+
+  @@unique([subscriptionId, resetAt])
+  @@index([subscriptionId])
+  @@index([resetAt])
+  @@map("usage_meters")
+}
+
+// ──────────────────────────────────────────────
+// Layer 11 — Top-Up Packages & Coupons
+// ──────────────────────────────────────────────
+
+model TopUpPackage {
+  id            String   @id @default(uuid())
+  name          String
+  description   String?
+  priceUsd      Decimal
+  creditsAmount BigInt
+  operationsAmount BigInt?
+  isActive      Boolean  @default(true)
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+
+  purchases TopUpPurchase[]
+
+  @@index([isActive])
+  @@map("top_up_packages")
+}
+
+model TopUpPurchase {
+  id              String   @id @default(uuid())
+  packageId       String
+  walletId        String
+  amountPaidUsd   Decimal
+  currency        String   @default("USD")
+  creditsGranted  BigInt
+  operationsGranted BigInt?
+  status          String   @default("COMPLETED")
+  provider        String   @default("manual")
+  providerPaymentId String?
+  invoiceId       String?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  package TopUpPackage @relation(fields: [packageId], references: [id])
+  wallet  Wallet       @relation(fields: [walletId], references: [id])
+
+  @@index([packageId])
+  @@index([walletId])
+  @@index([status])
+  @@index([providerPaymentId])
+  @@map("top_up_purchases")
+}
+
+model Coupon {
+  id              String     @id @default(uuid())
+  code            String     @unique
+  type            CouponType
+  value           Decimal
+  maxRedemptions  Int?
+  currentRedemptions Int    @default(0)
+  minAmountUsd    Decimal?
+  maxAmountUsd    Decimal?
+  startsAt        DateTime?
+  expiresAt       DateTime?
+  isActive        Boolean    @default(true)
+  metadata        Json?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  deletedAt       DateTime?
+
+  redemptions CouponRedemption[]
+  transactions WalletTransaction[]
+
+  @@index([code])
+  @@index([isActive])
+  @@index([expiresAt])
+  @@map("coupons")
+}
+
+model CouponRedemption {
+  id         String   @id @default(uuid())
+  couponId   String
+  userId     String
+  walletId   String?
+  walletTransactionId String?
+  amountUsd  Decimal?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  coupon    Coupon   @relation(fields: [couponId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([couponId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("coupon_redemptions")
+}
+
+// ──────────────────────────────────────────────
+// Layer 12 — Billing Events
+// ──────────────────────────────────────────────
+
+model BillingEvent {
+  id          String          @id @default(uuid())
+  type        BillingEventType
+  entityType  String
+  entityId    String
+  userId      String?
+  organizationId String?
+  metadata    Json?
+  createdAt   DateTime        @default(now())
+
+  @@index([type])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@index([userId])
+  @@index([organizationId])
+  @@index([createdAt, type])
+  @@map("billing_events")
+}
+
+// ──────────────────────────────────────────────
+// Layer 13 — Admin & System
+// ──────────────────────────────────────────────
+
+model FeatureFlag {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  name        String
+  description String?
+  enabled     Boolean  @default(false)
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  overrides FeatureFlagOverride[]
+
+  @@index([key])
+  @@index([enabled])
+  @@map("feature_flags")
+}
+
+model FeatureFlagOverride {
+  id          String   @id @default(uuid())
+  flagId      String
+  entityType  String
+  entityId    String
+  enabled     Boolean
+  reason      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  flag FeatureFlag @relation(fields: [flagId], references: [id])
+
+  @@unique([flagId, entityType, entityId])
+  @@index([flagId])
+  @@index([entityType, entityId])
+  @@map("feature_flag_overrides")
+}
+
+model ImpersonationLog {
+  id              String   @id @default(uuid())
+  adminId         String
+  targetUserId    String
+  targetOrganizationId String?
+  reason          String?
+  sessionToken    String?
+  impersonatedAt  DateTime @default(now())
+  endedAt         DateTime?
+  metadata        Json?
+
+  admin      User         @relation("AdminImpersonations", fields: [adminId], references: [id])
+  targetUser User         @relation("TargetImpersonations", fields: [targetUserId], references: [id])
+
+  @@index([adminId])
+  @@index([targetUserId])
+  @@index([impersonatedAt])
+  @@map("impersonation_logs")
+}
+
+// ──────────────────────────────────────────────
+// Layer 14 — System
 // ──────────────────────────────────────────────
 
 model Notification {
