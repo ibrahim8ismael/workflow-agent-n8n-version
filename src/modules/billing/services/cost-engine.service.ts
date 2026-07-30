@@ -1,10 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { CostEngineInterface, CostCalculationResult } from '../interfaces/cost-engine.interface';
+import { Injectable } from '@nestjs/common';
+import type {
+  CostCalculationResult,
+  CostEngineInterface,
+} from '../interfaces/cost-engine.interface';
 
 @Injectable()
 export class CostEngineService implements CostEngineInterface {
-  private readonly logger = new Logger(CostEngineService.name);
-
   private readonly modelCostMultipliers: Record<string, { input: number; output: number }> = {
     'gpt-4o': { input: 2.5, output: 10 },
     'gpt-4o-mini': { input: 0.5, output: 1.5 },

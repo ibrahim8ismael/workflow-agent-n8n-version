@@ -1,10 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { UsageMeterRepository } from '../repositories/usage-meter.repository';
+import { Injectable } from '@nestjs/common';
+import type { UsageMeterRepository } from '../repositories/usage-meter.repository';
 
 @Injectable()
 export class UsageMeterService {
-  private readonly logger = new Logger(UsageMeterService.name);
-
   constructor(private readonly usageMeterRepo: UsageMeterRepository) {}
 
   async createMeter(

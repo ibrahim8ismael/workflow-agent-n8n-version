@@ -1,12 +1,10 @@
-import { Injectable, NotFoundException, Logger } from '@nestjs/common';
-import { TopUpRepository } from '../repositories/top-up.repository';
-import { WalletService } from './wallet.service';
-import { BillingEventService } from './billing-event.service';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import type { TopUpRepository } from '../repositories/top-up.repository';
+import type { BillingEventService } from './billing-event.service';
+import type { WalletService } from './wallet.service';
 
 @Injectable()
 export class TopUpService {
-  private readonly logger = new Logger(TopUpService.name);
-
   constructor(
     private readonly topUpRepo: TopUpRepository,
     private readonly walletService: WalletService,

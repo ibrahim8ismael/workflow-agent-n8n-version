@@ -1,4 +1,4 @@
-import { AIProvider } from './ai.interface';
+import type { AIProvider } from './ai.interface';
 
 export class AIProviderFactory {
   static create(provider: string): AIProvider {

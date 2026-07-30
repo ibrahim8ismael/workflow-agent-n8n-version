@@ -1,4 +1,4 @@
-import { UserResponseDto } from '../dto/user-response.dto';
+import type { UserResponseDto } from '../dto/user-response.dto';
 
 interface UserRecord {
   id: string;

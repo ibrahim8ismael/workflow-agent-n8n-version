@@ -1,5 +1,5 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import { Queue, Worker, WorkerOptions, Job } from 'bullmq';
+import { Injectable, type OnModuleDestroy } from '@nestjs/common';
+import { type Job, Queue, Worker, type WorkerOptions } from 'bullmq';
 import { Redis } from 'ioredis';
 
 @Injectable()

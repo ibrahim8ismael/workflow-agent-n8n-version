@@ -1,5 +1,5 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { DatabaseService } from '../../../database/database.service';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import type { DatabaseService } from '../../../database/database.service';
 
 @Injectable()
 export class AdminFeatureFlagsService {

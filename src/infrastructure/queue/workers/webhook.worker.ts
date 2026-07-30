@@ -1,4 +1,4 @@
-import { Job } from 'bullmq';
+import type { Job } from 'bullmq';
 
 export async function processWebhookJob(job: Job): Promise<{ status: string }> {
   const { url } = job.data;

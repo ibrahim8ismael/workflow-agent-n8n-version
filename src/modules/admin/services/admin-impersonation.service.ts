@@ -1,7 +1,7 @@
-import { Injectable, NotFoundException, UnauthorizedException, Logger } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
-import { AdminAuditRepository } from '../repositories/admin-audit.repository';
-import { AdminUsersRepository } from '../repositories/admin-users.repository';
+import { Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import type { JwtService } from '@nestjs/jwt';
+import type { AdminAuditRepository } from '../repositories/admin-audit.repository';
+import type { AdminUsersRepository } from '../repositories/admin-users.repository';
 
 @Injectable()
 export class AdminImpersonationService {

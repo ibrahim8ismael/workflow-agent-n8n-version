@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { DatabaseService } from '../../../database/database.service';
-import { WalletTransactionType } from '@prisma/client';
+import type { WalletTransactionType } from '@prisma/client';
+import type { DatabaseService } from '../../../database/database.service';
 
 @Injectable()
 export class WalletTransactionRepository {

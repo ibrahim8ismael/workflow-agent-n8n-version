@@ -1,13 +1,13 @@
 import {
+  ConflictException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
-  ConflictException,
 } from '@nestjs/common';
-import { UsersRepository } from '../repositories/users.repository';
+import type { UpdateUserDto } from '../dto/update-user.dto';
+import type { UserResponseDto } from '../dto/user-response.dto';
 import { UserMapper } from '../mappers/user.mapper';
-import { UpdateUserDto } from '../dto/update-user.dto';
-import { UserResponseDto } from '../dto/user-response.dto';
+import type { UsersRepository } from '../repositories/users.repository';
 
 @Injectable()
 export class UsersService {

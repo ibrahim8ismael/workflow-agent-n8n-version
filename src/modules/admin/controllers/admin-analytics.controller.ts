@@ -1,7 +1,7 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
-import { AdminAnalyticsService } from '../services/admin-analytics.service';
-import { SystemAdminGuard } from '../guards/system-admin.guard';
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
+import { SystemAdminGuard } from '../guards/system-admin.guard';
+import type { AdminAnalyticsService } from '../services/admin-analytics.service';
 
 @Controller('admin/analytics')
 @UseGuards(JwtAuthGuard, SystemAdminGuard)

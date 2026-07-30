@@ -36,9 +36,9 @@ enum ConversationStatus {
 }
 
 enum MemoryType {
-  SHORT_TERM
-  LONG_TERM
-  BUSINESS
+  CONVERSATION
+  USER
+  AGENT
 }
 
 enum ChannelType {
@@ -139,6 +139,7 @@ model User {
   organizationMembers  OrganizationMember[]
   sentInvitations      OrganizationMember[]  @relation("SentInvitations")
   agents               Agent[]              @relation("UserAgents")
+  skills               Skill[]              @relation("UserSkills")
   conversations        Conversation[]       @relation("UserConversations")
   knowledgeDocuments   KnowledgeDocument[]  @relation("UserKnowledgeDocuments")
   memories             Memory[]             @relation("UserMemories")
@@ -166,6 +167,7 @@ model Organization {
   members            OrganizationMember[]
   apiKeys            ApiKey[]
   agents             Agent[]              @relation("OrganizationAgents")
+  skills             Skill[]              @relation("OrganizationSkills")
   conversations      Conversation[]       @relation("OrganizationConversations")
   knowledgeDocuments KnowledgeDocument[]  @relation("OrganizationKnowledgeDocuments")
   memories           Memory[]             @relation("OrganizationMemories")
@@ -273,12 +275,57 @@ model Agent {
   conversations      Conversation[]
   channels           Channel[]
   memories           Memory[]
+  runs               Run[]
   runtimeDeployments RuntimeDeployment[]
 
   @@index([userId])
   @@index([organizationId])
   @@index([status])
   @@map("agents")
+}
+
+enum SkillExecutionMode {
+  AI_ONLY
+  N8N_WORKFLOW
+  KNOWLEDGE_RETRIEVAL
+  MEMORY_RETRIEVAL
+  HYBRID
+  HUMAN_APPROVAL
+}
+
+model Skill {
+  id              String               @id @default(uuid())
+  name            String
+  slug            String               @unique
+  description     String?
+  category        String?
+  version         Int                  @default(1)
+  executionMode   SkillExecutionMode   @default(AI_ONLY)
+  status          String               @default("DRAFT")
+  visibility      String               @default("PRIVATE")
+  inputSchema     Json?
+  outputSchema    Json?
+  instructions    String?
+  timeout         Int?
+  retryPolicy     Json?
+  successCriteria Json?
+  metadata        Json?
+  userId          String?
+  organizationId  String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  deletedAt       DateTime?
+
+  user         User?               @relation("UserSkills", fields: [userId], references: [id])
+  organization Organization?       @relation("OrganizationSkills", fields: [organizationId], references: [id])
+  agentSkills  AgentSkill[]
+
+  @@index([slug])
+  @@index([userId])
+  @@index([organizationId])
+  @@index([status])
+  @@index([category])
+  @@map("skills")
 }
 
 model AgentSkill {
@@ -293,9 +340,11 @@ model AgentSkill {
   deletedAt DateTime?
 
   agent Agent @relation(fields: [agentId], references: [id])
+  skill Skill @relation(fields: [skillId], references: [id])
 
   @@unique([agentId, skillId])
   @@index([agentId])
+  @@index([skillId])
   @@map("agent_skills")
 }
 
@@ -315,6 +364,7 @@ model Conversation {
   user         User?     @relation("UserConversations", fields: [userId], references: [id])
   organization Organization? @relation("OrganizationConversations", fields: [organizationId], references: [id])
   messages     Message[]
+  runs         Run[]
 
   @@index([agentId])
   @@index([userId])
@@ -489,8 +539,57 @@ model ChannelConfig {
 }
 
 // ──────────────────────────────────────────────
-// Layer 7 — Runtime
+// Layer 7 — Runs & Runtime
 // ──────────────────────────────────────────────
+
+enum RunStatus {
+  CREATED
+  PREPARING
+  PLANNING
+  EXECUTING
+  WAITING
+  GENERATING
+  PERSISTING
+  COMPLETED
+  FAILED
+  CANCELLED
+  TIMEOUT
+}
+
+model Run {
+  id              String    @id @default(uuid())
+  agentId         String
+  conversationId  String?
+  userId          String?
+  organizationId  String?
+  status          RunStatus @default(CREATED)
+
+  agent        Agent         @relation(fields: [agentId], references: [id])
+  conversation Conversation? @relation(fields: [conversationId], references: [id])
+  plan            Json?
+  result          String?
+  error           String?
+  metadata        Json?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  promptTokens    Int       @default(0)
+  completionTokens Int      @default(0)
+  totalTokens     Int       @default(0)
+  estimatedCost   Decimal   @default(0)
+  durationMs      Int?
+  version         Int       @default(1)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  @@index([agentId])
+  @@index([conversationId])
+  @@index([userId])
+  @@index([organizationId])
+  @@index([status])
+  @@index([agentId, status])
+  @@map("runs")
+}
 
 model RuntimeDeployment {
   id                  String   @id @default(uuid())

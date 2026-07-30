@@ -1,9 +1,19 @@
 import { z } from 'zod';
 
 export const createChannelSchema = z.object({
-  name: z.string(),
-  type: z.string(),
-  organizationId: z.string(),
+  agentId: z.string(),
+  type: z.enum([
+    'WIDGET',
+    'WHATSAPP',
+    'MESSENGER',
+    'INSTAGRAM',
+    'TELEGRAM',
+    'EMAIL',
+    'SLACK',
+    'DISCORD',
+    'API',
+  ]),
+  name: z.string().optional(),
 });
 
 export type CreateChannelDto = z.infer<typeof createChannelSchema>;

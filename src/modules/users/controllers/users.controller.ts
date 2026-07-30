@@ -1,20 +1,20 @@
 import {
-  Controller,
-  Get,
-  Patch,
-  Delete,
-  Param,
   Body,
-  UseGuards,
+  Controller,
+  Delete,
+  Get,
   HttpCode,
   HttpStatus,
+  Param,
+  Patch,
+  UseGuards,
 } from '@nestjs/common';
-import { UsersService } from '../services/users.service';
-import { updateUserSchema } from '../dto/update-user.dto';
-import { ZodValidationPipe } from '../../../common/pipes/zod-validation.pipe';
-import { JwtAuthGuard } from '../../../common/guards/jwt-auth.guard';
-import { UserOwnerGuard } from '../guards/user-owner.guard';
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
+import { JwtAuthGuard } from '../../../common/guards/jwt-auth.guard';
+import { ZodValidationPipe } from '../../../common/pipes/zod-validation.pipe';
+import { updateUserSchema } from '../dto/update-user.dto';
+import { UserOwnerGuard } from '../guards/user-owner.guard';
+import type { UsersService } from '../services/users.service';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard)

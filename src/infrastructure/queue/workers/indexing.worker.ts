@@ -1,4 +1,4 @@
-import { Job } from 'bullmq';
+import type { Job } from 'bullmq';
 
 export async function processIndexingJob(job: Job): Promise<{ status: string }> {
   const { documentId, content } = job.data;

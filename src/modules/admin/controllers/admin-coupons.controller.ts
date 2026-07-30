@@ -1,7 +1,7 @@
-import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards } from '@nestjs/common';
-import { CouponService } from '../../billing/services/coupon.service';
-import { SystemAdminGuard } from '../guards/system-admin.guard';
+import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
+import type { CouponService } from '../../billing/services/coupon.service';
+import { SystemAdminGuard } from '../guards/system-admin.guard';
 
 @Controller('admin/coupons')
 @UseGuards(JwtAuthGuard, SystemAdminGuard)
@@ -16,13 +16,7 @@ export class AdminCouponsController {
   @Post()
   async create(
     @Body()
-    dto: {
-      code: string;
-      type: string;
-      value: number;
-      maxRedemptions?: number;
-      expiresAt?: string;
-    },
+    dto: { code: string; type: string; value: number; maxRedemptions?: number; expiresAt?: string },
   ) {
     return this.couponService.create({
       ...dto,

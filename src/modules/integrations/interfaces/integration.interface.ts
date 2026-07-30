@@ -1,10 +1,12 @@
 export interface IIntegration {
   id: string;
   name: string;
-  type: string;
+  category: string;
+  provider: string;
+  status: string;
   config?: Record<string, unknown>;
-  organizationId: string;
-  enabled: boolean;
+  userId?: string;
+  organizationId?: string;
   createdAt: Date;
   updatedAt: Date;
 }

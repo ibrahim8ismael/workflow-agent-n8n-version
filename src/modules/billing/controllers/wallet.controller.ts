@@ -1,6 +1,6 @@
-import { Controller, Get, Query, UseGuards, Req } from '@nestjs/common';
-import { WalletService } from '../services/wallet.service';
+import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
+import type { WalletService } from '../services/wallet.service';
 
 @Controller('wallet')
 @UseGuards(JwtAuthGuard)

@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { AdminOrganizationsRepository } from '../repositories/admin-organizations.repository';
+import type { AdminOrganizationsRepository } from '../repositories/admin-organizations.repository';
 
 @Injectable()
 export class AdminOrganizationsService {

@@ -1,7 +1,7 @@
-import { Controller, Get, Post, Body, Param, UseGuards, Req } from '@nestjs/common';
-import { TopUpService } from '../services/top-up.service';
-import { purchaseTopUpSchema, PurchaseTopUpDto } from '../dto/purchase-top-up.dto';
+import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
+import { type PurchaseTopUpDto, purchaseTopUpSchema } from '../dto/purchase-top-up.dto';
+import type { TopUpService } from '../services/top-up.service';
 
 @Controller('top-up')
 @UseGuards(JwtAuthGuard)

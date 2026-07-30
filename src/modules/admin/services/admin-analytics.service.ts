@@ -1,12 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { AdminSubscriptionsRepository } from '../repositories/admin-subscriptions.repository';
-import { AdminUsersRepository } from '../repositories/admin-users.repository';
-import { DatabaseService } from '../../../database/database.service';
+import { Injectable } from '@nestjs/common';
+import type { DatabaseService } from '../../../database/database.service';
+import type { AdminSubscriptionsRepository } from '../repositories/admin-subscriptions.repository';
+import type { AdminUsersRepository } from '../repositories/admin-users.repository';
 
 @Injectable()
 export class AdminAnalyticsService {
-  private readonly logger = new Logger(AdminAnalyticsService.name);
-
   constructor(
     private readonly subRepo: AdminSubscriptionsRepository,
     private readonly userRepo: AdminUsersRepository,

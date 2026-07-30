@@ -1,4 +1,4 @@
-import { Job } from 'bullmq';
+import type { Job } from 'bullmq';
 
 export async function processNotificationJob(job: Job): Promise<{ status: string }> {
   const { userId, type, title } = job.data;

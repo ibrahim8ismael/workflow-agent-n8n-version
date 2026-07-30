@@ -1,9 +1,20 @@
-export const INTEGRATION_TYPES = {
-  SLACK: 'SLACK',
-  DISCORD: 'DISCORD',
-  TELEGRAM: 'TELEGRAM',
-  GMAIL: 'GMAIL',
-  CUSTOM: 'CUSTOM',
+export const INTEGRATION_STATUS = {
+  CONNECTED: 'CONNECTED',
+  DISCONNECTED: 'DISCONNECTED',
+  ERROR: 'ERROR',
+  EXPIRED: 'EXPIRED',
 } as const;
 
-export type IntegrationType = (typeof INTEGRATION_TYPES)[keyof typeof INTEGRATION_TYPES];
+export type IntegrationStatus = (typeof INTEGRATION_STATUS)[keyof typeof INTEGRATION_STATUS];
+
+export const INTEGRATION_CATEGORY = {
+  AI: 'AI',
+  COMMUNICATION: 'COMMUNICATION',
+  CRM: 'CRM',
+  PAYMENT: 'PAYMENT',
+  ANALYTICS: 'ANALYTICS',
+  STORAGE: 'STORAGE',
+  OTHER: 'OTHER',
+} as const;
+
+export type IntegrationCategory = (typeof INTEGRATION_CATEGORY)[keyof typeof INTEGRATION_CATEGORY];

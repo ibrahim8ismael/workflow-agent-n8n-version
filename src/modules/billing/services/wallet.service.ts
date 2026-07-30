@@ -1,14 +1,12 @@
-import { Injectable, BadRequestException, ConflictException, Logger } from '@nestjs/common';
-import { WalletRepository } from '../repositories/wallet.repository';
-import { WalletTransactionRepository } from '../repositories/wallet-transaction.repository';
-import { BillingEventService } from './billing-event.service';
+import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
 import { WalletTransactionType } from '@prisma/client';
-import { IConsumptionResult } from '../interfaces/billing.interface';
+import type { IConsumptionResult } from '../interfaces/billing.interface';
+import type { WalletRepository } from '../repositories/wallet.repository';
+import type { WalletTransactionRepository } from '../repositories/wallet-transaction.repository';
+import type { BillingEventService } from './billing-event.service';
 
 @Injectable()
 export class WalletService {
-  private readonly logger = new Logger(WalletService.name);
-
   constructor(
     private readonly walletRepo: WalletRepository,
     private readonly txRepo: WalletTransactionRepository,
