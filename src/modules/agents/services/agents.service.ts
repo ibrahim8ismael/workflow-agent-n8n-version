@@ -1,9 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import type { Agent } from '@prisma/client';
+import { Agent } from '@prisma/client';
 import { AGENT_STATUS } from '../constants/agent.constants';
-import type { CreateAgentDto } from '../dto/create-agent.dto';
-import type { UpdateAgentDto } from '../dto/update-agent.dto';
-import type { AgentsRepository } from '../repositories/agents.repository';
+import { CreateAgentDto } from '../dto/create-agent.dto';
+import { UpdateAgentDto } from '../dto/update-agent.dto';
+import { AgentsRepository } from '../repositories/agents.repository';
 
 @Injectable()
 export class AgentsService {

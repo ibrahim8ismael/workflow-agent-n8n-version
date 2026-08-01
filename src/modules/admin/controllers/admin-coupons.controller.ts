@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
-import type { CouponService } from '../../billing/services/coupon.service';
+import { CouponService } from '../../billing/services/coupon.service';
 import { SystemAdminGuard } from '../guards/system-admin.guard';
 
 @Controller('admin/coupons')

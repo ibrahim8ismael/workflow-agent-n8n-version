@@ -1,17 +1,14 @@
 import { configSchema } from './schema';
 
-export function validateConfig() {
-  const result = configSchema.safeParse(process.env);
+export function validateConfig(config: Record<string, unknown>) {
+  const result = configSchema.safeParse(config);
 
   if (!result.success) {
-    console.error('❌ Invalid environment variables:');
-    for (const issue of result.error.issues) {
-      console.error(`  - ${issue.path.join('.')}: ${issue.message}`);
-    }
-    process.exit(1);
+    const issues = result.error.issues.map(
+      (issue) => `  - ${issue.path.join('.')}: ${issue.message}`,
+    );
+    throw new Error(`Invalid environment variables:\n${issues.join('\n')}`);
   }
 
   return result.data;
 }
-
-export const validatedConfig = validateConfig();

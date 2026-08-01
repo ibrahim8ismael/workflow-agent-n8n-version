@@ -1,9 +1,9 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import type { Skill } from '@prisma/client';
+import { Skill } from '@prisma/client';
 import { SKILL_STATUS } from '../constants/skill.constants';
-import type { CreateSkillDto } from '../dto/create-skill.dto';
-import type { UpdateSkillDto } from '../dto/update-skill.dto';
-import type { SkillsRepository } from '../repositories/skills.repository';
+import { CreateSkillDto } from '../dto/create-skill.dto';
+import { UpdateSkillDto } from '../dto/update-skill.dto';
+import { SkillsRepository } from '../repositories/skills.repository';
 
 @Injectable()
 export class SkillsService {

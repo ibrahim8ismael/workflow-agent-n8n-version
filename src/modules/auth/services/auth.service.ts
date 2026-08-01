@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
-import type { JwtService } from '@nestjs/jwt';
+import { JwtService } from '@nestjs/jwt';
 import { hash as argon2Hash, argon2id, verify as argon2Verify } from 'argon2';
-import type { RedisService } from '../../../infrastructure/cache/redis.service';
-import type { NotificationService } from '../../../infrastructure/email/notification.service';
+import { RedisService } from '../../../infrastructure/cache/redis.service';
+import { NotificationService } from '../../../infrastructure/email/notification.service';
 import {
   OTP_EXPIRY_SECONDS,
   OTP_LENGTH,
@@ -12,7 +12,7 @@ import {
   OTP_RATE_LIMIT_PER_IP,
   OTP_RATE_LIMIT_WINDOW,
 } from '../constants/auth.constants';
-import type { AuthRepository } from '../repositories/auth.repository';
+import { AuthRepository } from '../repositories/auth.repository';
 
 @Injectable()
 export class AuthService {

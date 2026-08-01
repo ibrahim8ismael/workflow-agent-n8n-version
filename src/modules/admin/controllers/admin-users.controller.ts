@@ -3,8 +3,8 @@ import { JwtAuthGuard } from '../../auth/guards/auth.guard';
 import { type ImpersonationDto, impersonationSchema } from '../dto/admin-impersonation.dto';
 import { type SuspensionDto, suspensionSchema } from '../dto/admin-suspension.dto';
 import { SystemAdminGuard } from '../guards/system-admin.guard';
-import type { AdminImpersonationService } from '../services/admin-impersonation.service';
-import type { AdminUsersService } from '../services/admin-users.service';
+import { AdminImpersonationService } from '../services/admin-impersonation.service';
+import { AdminUsersService } from '../services/admin-users.service';
 
 @Controller('admin/users')
 @UseGuards(JwtAuthGuard, SystemAdminGuard)

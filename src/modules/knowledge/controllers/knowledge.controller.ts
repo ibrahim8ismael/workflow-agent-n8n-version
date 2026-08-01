@@ -1,11 +1,11 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
-import type { KnowledgeDocument, KnowledgeDocumentChunk } from '@prisma/client';
+import { KnowledgeDocument, KnowledgeDocumentChunk } from '@prisma/client';
 import {
   type CreateKnowledgeDocumentDto,
   createKnowledgeDocumentSchema,
 } from '../dto/create-knowledge.dto';
 import { type SearchKnowledgeDto, searchKnowledgeSchema } from '../dto/search-knowledge.dto';
-import type { KnowledgeService } from '../services/knowledge.service';
+import { KnowledgeService } from '../services/knowledge.service';
 
 @Controller('knowledge')
 export class KnowledgeController {

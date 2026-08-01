@@ -1,9 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { SUBSCRIPTION_PROVIDER } from '../constants/billing.constants';
-import type { SubscriptionRepository } from '../repositories/subscription.repository';
-import type { BillingEventService } from './billing-event.service';
-import type { UsageMeterService } from './usage-meter.service';
-import type { WalletService } from './wallet.service';
+import { SubscriptionRepository } from '../repositories/subscription.repository';
+import { BillingEventService } from './billing-event.service';
+import { UsageMeterService } from './usage-meter.service';
+import { WalletService } from './wallet.service';
 
 @Injectable()
 export class SubscriptionService {

@@ -1,8 +1,8 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import type { Memory, Prisma } from '@prisma/client';
-import type { CreateMemoryDto } from '../dto/create-memory.dto';
-import type { UpdateMemoryDto } from '../dto/update-memory.dto';
-import type { MemoryRepository } from '../repositories/memory.repository';
+import { Memory, Prisma } from '@prisma/client';
+import { CreateMemoryDto } from '../dto/create-memory.dto';
+import { UpdateMemoryDto } from '../dto/update-memory.dto';
+import { MemoryRepository } from '../repositories/memory.repository';
 
 function toJson(value: Record<string, unknown> | undefined): Prisma.InputJsonValue | undefined {
   return value as Prisma.InputJsonValue | undefined;

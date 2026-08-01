@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
-import type { Integration } from '@prisma/client';
-import type { IntegrationsService } from '../services/integrations.service';
+import { Integration } from '@prisma/client';
+import { IntegrationsService } from '../services/integrations.service';
 
 @Controller('integrations')
 export class IntegrationsController {

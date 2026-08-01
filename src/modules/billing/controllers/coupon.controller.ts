@@ -1,7 +1,7 @@
 import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
 import { type RedeemCouponDto, redeemCouponSchema } from '../dto/redeem-coupon.dto';
-import type { CouponService } from '../services/coupon.service';
+import { CouponService } from '../services/coupon.service';
 
 @Controller('coupons')
 @UseGuards(JwtAuthGuard)

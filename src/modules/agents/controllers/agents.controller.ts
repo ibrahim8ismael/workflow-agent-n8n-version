@@ -1,8 +1,8 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
-import type { Agent } from '@prisma/client';
+import { Agent } from '@prisma/client';
 import { type CreateAgentDto, createAgentSchema } from '../dto/create-agent.dto';
 import { type UpdateAgentDto, updateAgentSchema } from '../dto/update-agent.dto';
-import type { AgentsService } from '../services/agents.service';
+import { AgentsService } from '../services/agents.service';
 
 @Controller('agents')
 export class AgentsController {

@@ -1,4 +1,5 @@
-import type { z } from 'zod';
+import type { ToolSet } from 'ai';
+import { z } from 'zod';
 
 export interface AdapterMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -24,6 +25,7 @@ export interface AdapterGenerateParams {
   systemPrompt?: string;
   messages: AdapterMessage[];
   tools?: AdapterTool[];
+  sdkTools?: ToolSet;
   temperature?: number;
   maxTokens?: number;
   stream?: boolean;

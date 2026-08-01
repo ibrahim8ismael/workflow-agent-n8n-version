@@ -1,7 +1,7 @@
 import { Controller, Get, Param, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
-import type { InvoiceService } from '../services/invoice.service';
-import type { SubscriptionService } from '../services/subscription.service';
+import { InvoiceService } from '../services/invoice.service';
+import { SubscriptionService } from '../services/subscription.service';
 
 @Controller('invoices')
 @UseGuards(JwtAuthGuard)

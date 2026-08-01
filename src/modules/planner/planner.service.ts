@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
-import type { AIAdapterService } from '../../infrastructure/ai-adapter/ai-adapter.service';
-import type { Plan, PlannerInput } from './interfaces/plan.interface';
+import { AIAdapterService } from '../../infrastructure/ai-adapter/ai-adapter.service';
+import { Plan, PlannerInput } from './interfaces/plan.interface';
 
 const planSchema = z.object({
   goal: z.string(),

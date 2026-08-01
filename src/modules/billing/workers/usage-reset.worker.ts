@@ -1,7 +1,7 @@
 import { Injectable, Logger, type OnModuleInit, Optional } from '@nestjs/common';
-import type { QueueService } from '../../../infrastructure/queue/queue.service';
+import { QueueService } from '../../../infrastructure/queue/queue.service';
 import { BILLING_QUEUES } from '../constants/billing.constants';
-import type { UsageMeterService } from '../services/usage-meter.service';
+import { UsageMeterService } from '../services/usage-meter.service';
 
 @Injectable()
 export class UsageResetWorker implements OnModuleInit {

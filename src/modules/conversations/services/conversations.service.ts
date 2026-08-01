@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import type { Conversation, Message } from '@prisma/client';
-import type { ConversationsRepository } from '../repositories/conversations.repository';
+import { Conversation, Message } from '@prisma/client';
+import { ConversationsRepository } from '../repositories/conversations.repository';
 
 @Injectable()
 export class ConversationsService {

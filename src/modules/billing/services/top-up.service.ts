@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import type { TopUpRepository } from '../repositories/top-up.repository';
-import type { BillingEventService } from './billing-event.service';
-import type { WalletService } from './wallet.service';
+import { TopUpRepository } from '../repositories/top-up.repository';
+import { BillingEventService } from './billing-event.service';
+import { WalletService } from './wallet.service';
 
 @Injectable()
 export class TopUpService {

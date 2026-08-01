@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
 import { SystemAdminGuard } from '../guards/system-admin.guard';
-import type { AdminFeatureFlagsService } from '../services/admin-feature-flags.service';
+import { AdminFeatureFlagsService } from '../services/admin-feature-flags.service';
 
 @Controller('admin/feature-flags')
 @UseGuards(JwtAuthGuard, SystemAdminGuard)

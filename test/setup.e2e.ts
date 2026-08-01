@@ -1,4 +1,4 @@
-import type { INestApplication } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Test, type TestingModule } from '@nestjs/testing';
 import 'reflect-metadata';

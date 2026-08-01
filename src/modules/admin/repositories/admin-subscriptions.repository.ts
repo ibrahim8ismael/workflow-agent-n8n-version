@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { DatabaseService } from '../../../database/database.service';
+import { DatabaseService } from '../../../database/database.service';
 
 @Injectable()
 export class AdminSubscriptionsRepository {
@@ -43,10 +43,11 @@ export class AdminSubscriptionsRepository {
       where: { deletedAt: null },
       _count: true,
     });
-    return statuses.reduce(
-      (acc, s) => ({ ...acc, [s.status]: s._count }),
-      {} as Record<string, number>,
-    );
+    const counts: Record<string, number> = {};
+    for (const s of statuses) {
+      counts[s.status] = s._count;
+    }
+    return counts;
   }
 
   async totalRevenue() {

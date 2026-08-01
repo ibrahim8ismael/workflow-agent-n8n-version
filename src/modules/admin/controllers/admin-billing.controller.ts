@@ -5,7 +5,7 @@ import {
   creditAdjustmentSchema,
 } from '../dto/admin-credit-adjustment.dto';
 import { SystemAdminGuard } from '../guards/system-admin.guard';
-import type { AdminBillingService } from '../services/admin-billing.service';
+import { AdminBillingService } from '../services/admin-billing.service';
 
 @Controller('admin/wallets')
 @UseGuards(JwtAuthGuard, SystemAdminGuard)

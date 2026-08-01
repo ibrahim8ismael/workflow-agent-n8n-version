@@ -1,8 +1,8 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
-import type { Skill } from '@prisma/client';
+import { Skill } from '@prisma/client';
 import { type CreateSkillDto, createSkillSchema } from '../dto/create-skill.dto';
 import { type UpdateSkillDto, updateSkillSchema } from '../dto/update-skill.dto';
-import type { SkillsService } from '../services/skills.service';
+import { SkillsService } from '../services/skills.service';
 
 @Controller('skills')
 export class SkillsController {

@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/co
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
 import { type SuspensionDto, suspensionSchema } from '../dto/admin-suspension.dto';
 import { SystemAdminGuard } from '../guards/system-admin.guard';
-import type { AdminOrganizationsService } from '../services/admin-organizations.service';
+import { AdminOrganizationsService } from '../services/admin-organizations.service';
 
 @Controller('admin/organizations')
 @UseGuards(JwtAuthGuard, SystemAdminGuard)

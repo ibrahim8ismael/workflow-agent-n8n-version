@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import type { AdminAuditRepository } from '../repositories/admin-audit.repository';
-import type { AdminUsersRepository } from '../repositories/admin-users.repository';
+import { AdminAuditRepository } from '../repositories/admin-audit.repository';
+import { AdminUsersRepository } from '../repositories/admin-users.repository';
 
 @Injectable()
 export class AdminUsersService {

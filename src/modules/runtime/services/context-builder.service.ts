@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import type { KnowledgeService } from '../../knowledge/services/knowledge.service';
-import type { MemoryService } from '../../memory/services/memory.service';
+import { KnowledgeService } from '../../knowledge/services/knowledge.service';
+import { MemoryService } from '../../memory/services/memory.service';
 
 export interface ContextBuilderInput {
   systemPrompt?: string;

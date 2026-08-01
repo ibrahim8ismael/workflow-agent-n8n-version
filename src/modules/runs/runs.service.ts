@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import type { Run } from '@prisma/client';
-import type { CreateRunDto } from './dto/create-run.dto';
-import type { RunsRepository } from './runs.repository';
+import { Run } from '@prisma/client';
+import { CreateRunDto } from './dto/create-run.dto';
+import { RunsRepository } from './runs.repository';
 
 @Injectable()
 export class RunsService {

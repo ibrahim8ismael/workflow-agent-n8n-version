@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { DatabaseService } from '../../../database/database.service';
+import { DatabaseService } from '../../../database/database.service';
 
 @Injectable()
 export class AdminAuditRepository {

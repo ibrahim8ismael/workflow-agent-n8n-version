@@ -1,7 +1,7 @@
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
-import type { ConfigService } from '@nestjs/config';
-import type { NodemailerEmailProvider } from './providers/nodemailer.provider';
-import type { TwilioSmsProvider } from './providers/twilio.provider';
+import { ConfigService } from '@nestjs/config';
+import { NodemailerEmailProvider } from './providers/nodemailer.provider';
+import { TwilioSmsProvider } from './providers/twilio.provider';
 
 @Injectable()
 export class NotificationService implements OnModuleInit {

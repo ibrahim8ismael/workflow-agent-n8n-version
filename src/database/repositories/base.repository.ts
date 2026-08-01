@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { generateId } from '../../common/utils/uuid';
-import type { DatabaseService } from '../database.service';
+import { DatabaseService } from '../database.service';
 
 @Injectable()
 export abstract class BaseRepository<T, CreateDto, UpdateDto> {

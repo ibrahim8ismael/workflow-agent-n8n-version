@@ -14,7 +14,7 @@ import { JwtAuthGuard } from '../../../common/guards/jwt-auth.guard';
 import { ZodValidationPipe } from '../../../common/pipes/zod-validation.pipe';
 import { updateUserSchema } from '../dto/update-user.dto';
 import { UserOwnerGuard } from '../guards/user-owner.guard';
-import type { UsersService } from '../services/users.service';
+import { UsersService } from '../services/users.service';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard)

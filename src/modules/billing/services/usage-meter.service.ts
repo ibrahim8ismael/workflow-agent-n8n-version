@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { UsageMeterRepository } from '../repositories/usage-meter.repository';
+import { UsageMeterRepository } from '../repositories/usage-meter.repository';
 
 @Injectable()
 export class UsageMeterService {

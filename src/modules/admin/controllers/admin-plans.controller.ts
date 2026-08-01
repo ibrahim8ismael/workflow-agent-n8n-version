@@ -8,7 +8,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import type { DatabaseService } from '../../../database/database.service';
+import { DatabaseService } from '../../../database/database.service';
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
 import {
   type PlanCreateDto,

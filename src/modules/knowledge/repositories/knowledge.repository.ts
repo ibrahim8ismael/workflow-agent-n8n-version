@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import type { KnowledgeDocument, KnowledgeDocumentChunk, Prisma } from '@prisma/client';
-import type { DatabaseService } from '../../../database/database.service';
+import { KnowledgeDocument, KnowledgeDocumentChunk, Prisma } from '@prisma/client';
+import { DatabaseService } from '../../../database/database.service';
 
 @Injectable()
 export class KnowledgeRepository {

@@ -8,7 +8,7 @@ import {
   type UpgradeSubscriptionDto,
   upgradeSubscriptionSchema,
 } from '../dto/upgrade-subscription.dto';
-import type { SubscriptionService } from '../services/subscription.service';
+import { SubscriptionService } from '../services/subscription.service';
 
 @Controller('subscriptions')
 @UseGuards(JwtAuthGuard)

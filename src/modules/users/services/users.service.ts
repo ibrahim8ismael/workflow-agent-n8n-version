@@ -4,10 +4,10 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import type { UpdateUserDto } from '../dto/update-user.dto';
-import type { UserResponseDto } from '../dto/user-response.dto';
+import { UpdateUserDto } from '../dto/update-user.dto';
+import { UserResponseDto } from '../dto/user-response.dto';
 import { UserMapper } from '../mappers/user.mapper';
-import type { UsersRepository } from '../repositories/users.repository';
+import { UsersRepository } from '../repositories/users.repository';
 
 @Injectable()
 export class UsersService {

@@ -1,4 +1,4 @@
-import type { Job } from 'bullmq';
+import { Job } from 'bullmq';
 
 export async function processEmailJob(job: Job): Promise<{ status: string }> {
   const { to, subject } = job.data;

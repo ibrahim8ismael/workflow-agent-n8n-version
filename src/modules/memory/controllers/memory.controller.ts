@@ -1,8 +1,8 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
-import type { Memory } from '@prisma/client';
+import { Memory } from '@prisma/client';
 import { type CreateMemoryDto, createMemorySchema } from '../dto/create-memory.dto';
 import { type UpdateMemoryDto, updateMemorySchema } from '../dto/update-memory.dto';
-import type { MemoryService } from '../services/memory.service';
+import { MemoryService } from '../services/memory.service';
 
 @Controller('memory')
 export class MemoryController {

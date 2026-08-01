@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import type { BillingEventType } from '@prisma/client';
-import type { BillingEventRepository } from '../repositories/billing-event.repository';
+import { BillingEventType } from '@prisma/client';
+import { BillingEventRepository } from '../repositories/billing-event.repository';
 
 @Injectable()
 export class BillingEventService {

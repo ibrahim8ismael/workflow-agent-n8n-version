@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
-import type { Conversation, Message } from '@prisma/client';
-import type { ConversationsService } from '../services/conversations.service';
+import { Conversation, Message } from '@prisma/client';
+import { ConversationsService } from '../services/conversations.service';
 
 @Controller('conversations')
 export class ConversationsController {

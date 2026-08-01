@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { WalletTransactionType } from '@prisma/client';
-import type { WalletRepository } from '../../billing/repositories/wallet.repository';
-import type { WalletService } from '../../billing/services/wallet.service';
+import { WalletRepository } from '../../billing/repositories/wallet.repository';
+import { WalletService } from '../../billing/services/wallet.service';
 
 @Injectable()
 export class AdminBillingService {

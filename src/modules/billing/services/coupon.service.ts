@@ -1,8 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import type { ICouponValidation } from '../interfaces/billing.interface';
-import type { CouponRepository } from '../repositories/coupon.repository';
-import type { BillingEventService } from './billing-event.service';
-import type { WalletService } from './wallet.service';
+import { ICouponValidation } from '../interfaces/billing.interface';
+import { CouponRepository } from '../repositories/coupon.repository';
+import { BillingEventService } from './billing-event.service';
+import { WalletService } from './wallet.service';
 
 @Injectable()
 export class CouponService {

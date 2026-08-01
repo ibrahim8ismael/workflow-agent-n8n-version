@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common';
-import { AgentsController } from './controllers/agents.controller';
-import { AgentsService } from './services/agents.service';
-import { AgentsRepository } from './repositories/agents.repository';
 import { DatabaseModule } from '../../database/database.module';
+import { AgentsController } from './controllers/agents.controller';
+import { AgentsRepository } from './repositories/agents.repository';
+import { AgentsService } from './services/agents.service';
 
 @Module({
   imports: [DatabaseModule],

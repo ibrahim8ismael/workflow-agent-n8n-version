@@ -1,4 +1,4 @@
-import type { WalletTransactionType } from '@prisma/client';
+import { WalletTransactionType } from '@prisma/client';
 
 export interface IBillingPlan {
   id: string;

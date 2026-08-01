@@ -1,8 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import type { KnowledgeDocument, KnowledgeDocumentChunk } from '@prisma/client';
-import type { CreateKnowledgeDocumentDto } from '../dto/create-knowledge.dto';
-import type { SearchKnowledgeDto } from '../dto/search-knowledge.dto';
-import type { KnowledgeRepository } from '../repositories/knowledge.repository';
+import { KnowledgeDocument, KnowledgeDocumentChunk } from '@prisma/client';
+import { CreateKnowledgeDocumentDto } from '../dto/create-knowledge.dto';
+import { SearchKnowledgeDto } from '../dto/search-knowledge.dto';
+import { KnowledgeRepository } from '../repositories/knowledge.repository';
 
 @Injectable()
 export class KnowledgeService {

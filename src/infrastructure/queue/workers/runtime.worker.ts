@@ -1,4 +1,4 @@
-import type { Job } from 'bullmq';
+import { Job } from 'bullmq';
 
 export async function processRuntimeJob(job: Job): Promise<{ status: string }> {
   const { action, agentId } = job.data;

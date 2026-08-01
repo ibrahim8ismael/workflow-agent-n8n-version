@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import type { Channel } from '@prisma/client';
-import type { CreateChannelDto } from '../dto/create-channel.dto';
-import type { ChannelsRepository } from '../repositories/channels.repository';
+import { Channel } from '@prisma/client';
+import { CreateChannelDto } from '../dto/create-channel.dto';
+import { ChannelsRepository } from '../repositories/channels.repository';
 
 @Injectable()
 export class ChannelsService {

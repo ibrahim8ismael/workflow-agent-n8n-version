@@ -1,11 +1,11 @@
 import { Body, Controller, HttpCode, HttpStatus, Post, Req, Res, UseGuards } from '@nestjs/common';
-import type { Request, Response } from 'express';
+import { Request, Response } from 'express';
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import { ZodValidationPipe } from '../../../common/pipes/zod-validation.pipe';
 import { requestOtpSchema } from '../dto/request-otp.dto';
 import { verifyOtpSchema } from '../dto/verify-otp.dto';
 import { JwtAuthGuard } from '../guards/auth.guard';
-import type { AuthService } from '../services/auth.service';
+import { AuthService } from '../services/auth.service';
 
 @Controller('auth')
 export class AuthController {

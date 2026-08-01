@@ -4,8 +4,8 @@ import {
   HARD_LIMIT_THRESHOLD,
   SOFT_LIMIT_THRESHOLD,
 } from '../constants/billing.constants';
-import type { IQuotaCheckResult } from '../interfaces/billing.interface';
-import type { UsageMeterRepository } from '../repositories/usage-meter.repository';
+import { IQuotaCheckResult } from '../interfaces/billing.interface';
+import { UsageMeterRepository } from '../repositories/usage-meter.repository';
 
 @Injectable()
 export class QuotaEnforcerService {

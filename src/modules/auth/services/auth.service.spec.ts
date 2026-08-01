@@ -1,10 +1,10 @@
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
-import type { JwtService } from '@nestjs/jwt';
+import { JwtService } from '@nestjs/jwt';
 import { argon2id, hash } from 'argon2';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RedisService } from '../../../infrastructure/cache/redis.service';
-import type { NotificationService } from '../../../infrastructure/email/notification.service';
-import type { AuthRepository } from '../repositories/auth.repository';
+import { RedisService } from '../../../infrastructure/cache/redis.service';
+import { NotificationService } from '../../../infrastructure/email/notification.service';
+import { AuthRepository } from '../repositories/auth.repository';
 import { AuthService } from './auth.service';
 
 describe('AuthService', () => {

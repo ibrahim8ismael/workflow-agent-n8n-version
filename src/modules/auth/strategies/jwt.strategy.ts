@@ -2,7 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { jwtConfig } from '../../../config/jwt.config';
-import type { DatabaseService } from '../../../database/database.service';
+import { DatabaseService } from '../../../database/database.service';
 
 interface JwtPayload {
   sub: string;
