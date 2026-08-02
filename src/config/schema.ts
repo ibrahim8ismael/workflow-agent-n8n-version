@@ -44,6 +44,8 @@ export const configSchema = z.object({
 
   SENTRY_DSN: z.string().optional(),
   SENTRY_ENV: z.string().default('development'),
+  SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.1),
+  SENTRY_RELEASE: z.string().optional(),
 
   OTEL_ENABLED: z.coerce.boolean().default(false),
   OTEL_ENDPOINT: z.string().default('http://localhost:4318'),
