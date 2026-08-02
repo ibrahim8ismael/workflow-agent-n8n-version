@@ -98,12 +98,14 @@ export class KnowledgeService {
     if (content.length <= maxChunkSize) return [content];
 
     const chunks: string[] = [];
+    const step = Math.max(maxChunkSize - overlap, 1);
     let start = 0;
 
     while (start < content.length) {
       const end = Math.min(start + maxChunkSize, content.length);
       chunks.push(content.slice(start, end));
-      start = end - overlap;
+      if (end >= content.length) break;
+      start += step;
     }
 
     return chunks;
