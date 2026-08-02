@@ -4,6 +4,7 @@ import {
   type ExceptionFilter,
   HttpException,
   HttpStatus,
+  Logger,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as Sentry from '@sentry/node';
@@ -11,6 +12,8 @@ import { ZodError } from 'zod';
 
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(GlobalExceptionFilter.name);
+
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse();
@@ -30,6 +33,18 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     } else if (exception instanceof Prisma.PrismaClientValidationError) {
       status = HttpStatus.BAD_REQUEST;
       message = 'Database validation error';
+    }
+
+    if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
+      this.logger.error(
+        `${ctx.getRequest<{ method: string; url: string }>().method} ${
+          ctx.getRequest<{ method: string; url: string }>().url
+        } failed`,
+        exception instanceof Error ? exception.stack : String(exception),
+      );
+      Sentry.captureException(exception, {
+        extra: { path: ctx.getRequest<{ url?: string }>().url },
+      });
     }
 
     if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {

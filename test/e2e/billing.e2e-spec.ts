@@ -33,6 +33,19 @@ describe('Billing (e2e)', () => {
         deletedAt: null,
       } as any,
     });
+    mockDb.create('wallet', {
+      data: {
+        id: 'wallet-billing',
+        userId: 'test-billing-user',
+        balanceCredits: 0,
+        balanceCreditsUsd: 0,
+        currency: 'USD',
+        version: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        deletedAt: null,
+      } as any,
+    });
 
     authToken = generateTestToken({ sub: 'test-billing-user' });
   });

@@ -43,7 +43,7 @@ describe('Auth (e2e)', () => {
         .send({ email: 'test@woops.ai', otp: '000000' })
         .expect(401);
 
-      expect(res.body.error).toBeDefined();
+      expect(res.body.message).toBeDefined();
     });
   });
 
