@@ -1,5 +1,5 @@
-import type { INestApplication } from '@nestjs/common';
-import type * as request from 'supertest';
+import { INestApplication } from '@nestjs/common';
+import * as request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   bootstrapApp,
@@ -93,11 +93,25 @@ describe('Users (e2e)', () => {
     });
 
     it('should return 401 for another user', async () => {
+      getMockDb().create('user', {
+        data: {
+          id: 'other-user-id',
+          email: 'other@woops.ai',
+          name: 'Other User',
+          role: 'USER',
+          isActive: true,
+          tokenVersion: 1,
+          emailVerifiedAt: new Date(),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          deletedAt: null,
+        } as any,
+      });
       const otherToken = generateTestToken({ sub: 'other-user-id' });
       await http
         .get('/api/v1/users/test-user-id')
         .set('Authorization', `Bearer ${otherToken}`)
-        .expect(403);
+        .expect(401);
     });
   });
 

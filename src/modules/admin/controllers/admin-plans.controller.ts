@@ -1,14 +1,22 @@
-import { Controller, Get, Post, Patch, Param, Body, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { DatabaseService } from '../../../database/database.service';
-import { SystemAdminGuard } from '../guards/system-admin.guard';
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
 import {
+  type PlanCreateDto,
+  type PlanUpdateDto,
   planCreateSchema,
   planUpdateSchema,
-  PlanCreateDto,
-  PlanUpdateDto,
 } from '../dto/admin-plan-update.dto';
-import { NotFoundException } from '@nestjs/common';
+import { SystemAdminGuard } from '../guards/system-admin.guard';
 
 @Controller('admin/plans')
 @UseGuards(JwtAuthGuard, SystemAdminGuard)

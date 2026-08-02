@@ -1,15 +1,22 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import { Queue, Worker, WorkerOptions, Job } from 'bullmq';
+import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
+import { type Job, Queue, Worker, type WorkerOptions } from 'bullmq';
 import { Redis } from 'ioredis';
 
 @Injectable()
 export class QueueService implements OnModuleDestroy {
+  private readonly logger = new Logger(QueueService.name);
   private connection: Redis;
   private queues = new Map<string, Queue>();
   private workers = new Map<string, Worker>();
 
   constructor() {
-    this.connection = new Redis(process.env.REDIS_URL ?? 'redis://localhost:6379');
+    this.connection = new Redis(process.env.REDIS_URL ?? 'redis://localhost:6379', {
+      maxRetriesPerRequest: null,
+      retryStrategy: (times) => Math.min(times * 200, 2000),
+    });
+    this.connection.on('error', (err) => {
+      this.logger.error(`Queue Redis connection error: ${err.message}`);
+    });
   }
 
   getQueue(name: string): Queue {

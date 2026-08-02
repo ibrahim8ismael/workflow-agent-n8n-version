@@ -1,9 +1,9 @@
 export interface IChannel {
   id: string;
-  name: string;
+  agentId: string;
   type: string;
-  organizationId: string;
-  config?: Record<string, unknown>;
+  name?: string;
+  status: string;
   createdAt: Date;
   updatedAt: Date;
 }

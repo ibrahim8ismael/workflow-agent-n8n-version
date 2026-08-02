@@ -1,11 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { BillingEventRepository } from '../repositories/billing-event.repository';
+import { Injectable } from '@nestjs/common';
 import { BillingEventType } from '@prisma/client';
+import { BillingEventRepository } from '../repositories/billing-event.repository';
 
 @Injectable()
 export class BillingEventService {
-  private readonly logger = new Logger(BillingEventService.name);
-
   constructor(private readonly eventRepo: BillingEventRepository) {}
 
   async logEvent(data: {

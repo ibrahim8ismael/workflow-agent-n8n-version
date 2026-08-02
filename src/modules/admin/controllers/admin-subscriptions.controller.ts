@@ -1,7 +1,7 @@
-import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards } from '@nestjs/common';
-import { AdminSubscriptionsService } from '../services/admin-subscriptions.service';
-import { SystemAdminGuard } from '../guards/system-admin.guard';
+import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
+import { SystemAdminGuard } from '../guards/system-admin.guard';
+import { AdminSubscriptionsService } from '../services/admin-subscriptions.service';
 
 @Controller('admin/subscriptions')
 @UseGuards(JwtAuthGuard, SystemAdminGuard)

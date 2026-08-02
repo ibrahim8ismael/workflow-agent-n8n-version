@@ -1,8 +1,8 @@
-import { Controller, Get, Post, Param, Body, Query, UseGuards } from '@nestjs/common';
-import { AdminOrganizationsService } from '../services/admin-organizations.service';
-import { SystemAdminGuard } from '../guards/system-admin.guard';
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
-import { suspensionSchema, SuspensionDto } from '../dto/admin-suspension.dto';
+import { type SuspensionDto, suspensionSchema } from '../dto/admin-suspension.dto';
+import { SystemAdminGuard } from '../guards/system-admin.guard';
+import { AdminOrganizationsService } from '../services/admin-organizations.service';
 
 @Controller('admin/organizations')
 @UseGuards(JwtAuthGuard, SystemAdminGuard)

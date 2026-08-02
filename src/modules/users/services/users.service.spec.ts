@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { NotFoundException, UnauthorizedException, ConflictException } from '@nestjs/common';
+
+import { ConflictException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UsersService } from './users.service';
 
 const mockUser = {

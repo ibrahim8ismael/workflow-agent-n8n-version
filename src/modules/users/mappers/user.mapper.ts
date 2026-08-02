@@ -15,8 +15,8 @@ interface UserRecord {
   deletedAt: Date | null;
 }
 
-export class UserMapper {
-  static toResponse(entity: UserRecord): UserResponseDto {
+export const UserMapper = {
+  toResponse(entity: UserRecord): UserResponseDto {
     return {
       id: entity.id,
       email: entity.email,
@@ -28,13 +28,13 @@ export class UserMapper {
       createdAt: entity.createdAt.toISOString(),
       updatedAt: entity.updatedAt.toISOString(),
     };
-  }
+  },
 
-  static toBrief(entity: UserRecord) {
+  toBrief(entity: UserRecord) {
     return {
       id: entity.id,
       email: entity.email,
       name: entity.name,
     };
-  }
-}
+  },
+};

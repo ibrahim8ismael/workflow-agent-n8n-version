@@ -1,17 +1,15 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
-import { CouponRepository } from '../repositories/coupon.repository';
-import { WalletService } from './wallet.service';
-import { BillingEventService } from './billing-event.service';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ICouponValidation } from '../interfaces/billing.interface';
+import { CouponRepository } from '../repositories/coupon.repository';
+import { BillingEventService } from './billing-event.service';
+import { WalletService } from './wallet.service';
 
 @Injectable()
 export class CouponService {
-  private readonly logger = new Logger(CouponService.name);
-
   constructor(
     private readonly couponRepo: CouponRepository,
     private readonly walletService: WalletService,
-    private readonly billingEvent: BillingEventService,
+    readonly _billingEvent: BillingEventService,
   ) {}
 
   async validate(code: string): Promise<ICouponValidation> {

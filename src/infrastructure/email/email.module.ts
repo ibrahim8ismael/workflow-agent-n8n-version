@@ -1,7 +1,7 @@
 import { Global, Module } from '@nestjs/common';
+import { NotificationService } from './notification.service';
 import { NodemailerEmailProvider } from './providers/nodemailer.provider';
 import { TwilioSmsProvider } from './providers/twilio.provider';
-import { NotificationService } from './notification.service';
 
 @Global()
 @Module({

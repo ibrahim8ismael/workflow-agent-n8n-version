@@ -1,0 +1,29 @@
+export const SKILL_STATUS = {
+  DRAFT: 'DRAFT',
+  TESTING: 'TESTING',
+  PUBLISHED: 'PUBLISHED',
+  ACTIVE: 'ACTIVE',
+  DEPRECATED: 'DEPRECATED',
+  ARCHIVED: 'ARCHIVED',
+} as const;
+
+export type SkillStatus = (typeof SKILL_STATUS)[keyof typeof SKILL_STATUS];
+
+export const SKILL_VISIBILITY = {
+  PRIVATE: 'PRIVATE',
+  ORGANIZATION: 'ORGANIZATION',
+  PUBLIC: 'PUBLIC',
+} as const;
+
+export type SkillVisibility = (typeof SKILL_VISIBILITY)[keyof typeof SKILL_VISIBILITY];
+
+export const SKILL_EXECUTION_MODE = {
+  AI_ONLY: 'AI_ONLY',
+  N8N_WORKFLOW: 'N8N_WORKFLOW',
+  KNOWLEDGE_RETRIEVAL: 'KNOWLEDGE_RETRIEVAL',
+  MEMORY_RETRIEVAL: 'MEMORY_RETRIEVAL',
+  HYBRID: 'HYBRID',
+  HUMAN_APPROVAL: 'HUMAN_APPROVAL',
+} as const;
+
+export type SkillExecutionMode = (typeof SKILL_EXECUTION_MODE)[keyof typeof SKILL_EXECUTION_MODE];

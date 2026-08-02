@@ -1,8 +1,11 @@
-import { Controller, Post, Param, Body, UseGuards } from '@nestjs/common';
-import { AdminBillingService } from '../services/admin-billing.service';
-import { SystemAdminGuard } from '../guards/system-admin.guard';
+import { Body, Controller, Param, Post, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
-import { creditAdjustmentSchema, CreditAdjustmentDto } from '../dto/admin-credit-adjustment.dto';
+import {
+  type CreditAdjustmentDto,
+  creditAdjustmentSchema,
+} from '../dto/admin-credit-adjustment.dto';
+import { SystemAdminGuard } from '../guards/system-admin.guard';
+import { AdminBillingService } from '../services/admin-billing.service';
 
 @Controller('admin/wallets')
 @UseGuards(JwtAuthGuard, SystemAdminGuard)

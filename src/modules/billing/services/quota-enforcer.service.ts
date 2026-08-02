@@ -1,16 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { UsageMeterRepository } from '../repositories/usage-meter.repository';
+import { Injectable } from '@nestjs/common';
 import {
-  SOFT_LIMIT_THRESHOLD,
-  HARD_LIMIT_THRESHOLD,
   GRACE_LIMIT_THRESHOLD,
+  HARD_LIMIT_THRESHOLD,
+  SOFT_LIMIT_THRESHOLD,
 } from '../constants/billing.constants';
 import { IQuotaCheckResult } from '../interfaces/billing.interface';
+import { UsageMeterRepository } from '../repositories/usage-meter.repository';
 
 @Injectable()
 export class QuotaEnforcerService {
-  private readonly logger = new Logger(QuotaEnforcerService.name);
-
   constructor(private readonly usageMeterRepo: UsageMeterRepository) {}
 
   async checkAiCredits(subscriptionId: string, estimatedCost: bigint): Promise<IQuotaCheckResult> {

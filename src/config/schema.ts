@@ -22,8 +22,20 @@ export const configSchema = z.object({
   STORAGE_BUCKET: z.string().default('woops-assets'),
   STORAGE_PUBLIC_URL: z.string().default('http://localhost:9000/woops-assets'),
 
-  EMAIL_PROVIDER: z.enum(['resend', 'ses', 'mailgun', 'sendgrid']).default('resend'),
+  NOTIFICATION_PROVIDER: z.enum(['nodemailer', 'twilio']).default('nodemailer'),
+  EMAIL_PROVIDER: z
+    .enum(['nodemailer', 'resend', 'ses', 'mailgun', 'sendgrid'])
+    .default('nodemailer'),
   RESEND_API_KEY: z.string().optional(),
+  SMTP_HOST: z.string().default('localhost'),
+  SMTP_PORT: z.coerce.number().default(1025),
+  SMTP_SECURE: z.coerce.boolean().default(false),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  SMTP_FROM: z.string().default('noreply@woops.com'),
+  TWILIO_ACCOUNT_SID: z.string().optional(),
+  TWILIO_AUTH_TOKEN: z.string().optional(),
+  TWILIO_PHONE_NUMBER: z.string().optional(),
 
   AI_PROVIDER: z
     .enum(['openai', 'gemini', 'anthropic', 'openrouter', 'azure-openai', 'ollama'])
@@ -32,6 +44,8 @@ export const configSchema = z.object({
 
   SENTRY_DSN: z.string().optional(),
   SENTRY_ENV: z.string().default('development'),
+  SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.1),
+  SENTRY_RELEASE: z.string().optional(),
 
   OTEL_ENABLED: z.coerce.boolean().default(false),
   OTEL_ENDPOINT: z.string().default('http://localhost:4318'),

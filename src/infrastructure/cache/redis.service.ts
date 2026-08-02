@@ -1,12 +1,20 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
 import Redis from 'ioredis';
 
 @Injectable()
 export class RedisService extends Redis implements OnModuleDestroy {
+  private readonly logger = new Logger(RedisService.name);
   private readonly keyPrefix = 'woops';
 
   constructor() {
-    super(process.env.REDIS_URL ?? 'redis://localhost:6379');
+    super(process.env.REDIS_URL ?? 'redis://localhost:6379', {
+      lazyConnect: true,
+      maxRetriesPerRequest: 3,
+      retryStrategy: (times) => Math.min(times * 200, 2000),
+    });
+    this.on('error', (err) => {
+      this.logger.error(`Redis connection error: ${err.message}`);
+    });
   }
 
   private prefixed(key: string): string {

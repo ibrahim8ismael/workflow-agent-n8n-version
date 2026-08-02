@@ -1,8 +1,14 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Req } from '@nestjs/common';
-import { SubscriptionService } from '../services/subscription.service';
-import { createSubscriptionSchema, CreateSubscriptionDto } from '../dto/create-subscription.dto';
-import { upgradeSubscriptionSchema, UpgradeSubscriptionDto } from '../dto/upgrade-subscription.dto';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
+import {
+  type CreateSubscriptionDto,
+  createSubscriptionSchema,
+} from '../dto/create-subscription.dto';
+import {
+  type UpgradeSubscriptionDto,
+  upgradeSubscriptionSchema,
+} from '../dto/upgrade-subscription.dto';
+import { SubscriptionService } from '../services/subscription.service';
 
 @Controller('subscriptions')
 @UseGuards(JwtAuthGuard)

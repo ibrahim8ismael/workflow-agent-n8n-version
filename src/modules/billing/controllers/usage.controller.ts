@@ -1,7 +1,7 @@
-import { Controller, Get, UseGuards, Req } from '@nestjs/common';
-import { UsageMeterService } from '../services/usage-meter.service';
-import { SubscriptionService } from '../services/subscription.service';
+import { Controller, Get, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
+import { SubscriptionService } from '../services/subscription.service';
+import { UsageMeterService } from '../services/usage-meter.service';
 
 @Controller('usage')
 @UseGuards(JwtAuthGuard)

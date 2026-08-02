@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { hash, argon2id } from 'argon2';
-import { AuthService } from './auth.service';
-import { AuthRepository } from '../repositories/auth.repository';
+import { argon2id, hash } from 'argon2';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RedisService } from '../../../infrastructure/cache/redis.service';
 import { NotificationService } from '../../../infrastructure/email/notification.service';
+import { AuthRepository } from '../repositories/auth.repository';
+import { AuthService } from './auth.service';
 
 describe('AuthService', () => {
   let service: AuthService;

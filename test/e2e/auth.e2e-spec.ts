@@ -1,5 +1,5 @@
-import type { INestApplication } from '@nestjs/common';
-import type * as request from 'supertest';
+import { INestApplication } from '@nestjs/common';
+import * as request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { bootstrapApp, closeApp, defaultTestAgent, getJwtService, getMockDb } from '../setup.e2e';
 
@@ -43,7 +43,7 @@ describe('Auth (e2e)', () => {
         .send({ email: 'test@woops.ai', otp: '000000' })
         .expect(401);
 
-      expect(res.body.error).toBeDefined();
+      expect(res.body.message).toBeDefined();
     });
   });
 

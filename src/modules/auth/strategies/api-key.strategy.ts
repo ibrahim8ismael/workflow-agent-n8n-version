@@ -1,8 +1,8 @@
+import { createHash } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
-import { Strategy } from 'passport-strategy';
 import { Request } from 'express';
+import { Strategy } from 'passport-strategy';
 import { DatabaseService } from '../../../database/database.service';
-import { createHash } from 'crypto';
 
 class ApiKeyStrategyBase extends Strategy {
   name = 'api-key';

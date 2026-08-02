@@ -1,11 +1,11 @@
-import { Controller, Post, Body, Req, Res, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { Request, Response } from 'express';
-import { AuthService } from '../services/auth.service';
+import { CurrentUser } from '../../../common/decorators/current-user.decorator';
+import { ZodValidationPipe } from '../../../common/pipes/zod-validation.pipe';
 import { requestOtpSchema } from '../dto/request-otp.dto';
 import { verifyOtpSchema } from '../dto/verify-otp.dto';
-import { ZodValidationPipe } from '../../../common/pipes/zod-validation.pipe';
 import { JwtAuthGuard } from '../guards/auth.guard';
-import { CurrentUser } from '../../../common/decorators/current-user.decorator';
+import { AuthService } from '../services/auth.service';
 
 @Controller('auth')
 export class AuthController {
@@ -56,7 +56,7 @@ export class AuthController {
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const token = req.cookies?.['woops_refresh'];
+    const token = req.cookies?.woops_refresh;
     if (!token) {
       return res.status(HttpStatus.UNAUTHORIZED).json({
         success: false,
@@ -84,7 +84,7 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const token = req.cookies?.['woops_refresh'];
+    const token = req.cookies?.woops_refresh;
     const user = req.user as { id: string; sessionId: string } | undefined;
 
     await this.authService.logout(token, user?.sessionId);

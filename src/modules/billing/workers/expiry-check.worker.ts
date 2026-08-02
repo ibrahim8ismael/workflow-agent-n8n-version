@@ -1,7 +1,7 @@
 import { Injectable, Logger, type OnModuleInit, Optional } from '@nestjs/common';
-import type { QueueService } from '../../../infrastructure/queue/queue.service';
+import { QueueService } from '../../../infrastructure/queue/queue.service';
 import { BILLING_QUEUES } from '../constants/billing.constants';
-import type { SubscriptionService } from '../services/subscription.service';
+import { SubscriptionService } from '../services/subscription.service';
 
 @Injectable()
 export class ExpiryCheckWorker implements OnModuleInit {

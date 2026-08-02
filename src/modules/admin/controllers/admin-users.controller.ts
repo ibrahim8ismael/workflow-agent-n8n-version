@@ -1,10 +1,10 @@
-import { Controller, Get, Post, Param, Body, Query, UseGuards, Req } from '@nestjs/common';
-import { AdminUsersService } from '../services/admin-users.service';
-import { AdminImpersonationService } from '../services/admin-impersonation.service';
-import { SystemAdminGuard } from '../guards/system-admin.guard';
+import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/auth.guard';
-import { impersonationSchema, ImpersonationDto } from '../dto/admin-impersonation.dto';
-import { suspensionSchema, SuspensionDto } from '../dto/admin-suspension.dto';
+import { type ImpersonationDto, impersonationSchema } from '../dto/admin-impersonation.dto';
+import { type SuspensionDto, suspensionSchema } from '../dto/admin-suspension.dto';
+import { SystemAdminGuard } from '../guards/system-admin.guard';
+import { AdminImpersonationService } from '../services/admin-impersonation.service';
+import { AdminUsersService } from '../services/admin-users.service';
 
 @Controller('admin/users')
 @UseGuards(JwtAuthGuard, SystemAdminGuard)

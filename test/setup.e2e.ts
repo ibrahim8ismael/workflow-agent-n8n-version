@@ -1,4 +1,4 @@
-import type { INestApplication } from '@nestjs/common';
+import { INestApplication, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Test, type TestingModule } from '@nestjs/testing';
 import 'reflect-metadata';
@@ -16,6 +16,19 @@ import { AuthService } from '../src/modules/auth/services/auth.service';
 
 export class MockDatabaseService {
   private store: Map<string, Map<string, unknown>> = new Map();
+
+  private modelProxy(name: string): this {
+    return new Proxy(this, {
+      get: (target, prop) => {
+        const member = (target as Record<string, unknown>)[prop as string];
+        if (typeof member === 'function') {
+          return (...args: unknown[]) =>
+            (member as (...a: unknown[]) => unknown).call(target, name, ...args);
+        }
+        return member;
+      },
+    });
+  }
 
   private collection(name: string): Map<string, unknown> {
     if (!this.store.has(name)) {
@@ -58,12 +71,16 @@ export class MockDatabaseService {
       include?: Record<string, unknown>;
     },
   ) {
+    if (!args?.data) {
+      throw new Error(`MockDatabaseService.create(${model}) called without data`);
+    }
     const col = this.collection(model);
     const id = args.data.id ?? `mock-${model}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const record = {
       id,
       createdAt: new Date(),
       updatedAt: new Date(),
+      deletedAt: null,
       ...args.data,
     } as Record<string, unknown>;
     col.set(id as string, record);
@@ -164,8 +181,7 @@ export class MockDatabaseService {
     return Promise.resolve(result);
   }
 
-  groupBy(args: { by: string[]; where: Record<string, unknown>; _count: boolean }) {
-    const model = 'subscription';
+  groupBy(model: string, args: { by: string[]; where: Record<string, unknown>; _count: boolean }) {
     const col = this.collection(model);
     const items = Array.from(col.values()).filter((item: any) => {
       if (!args.where) return true;
@@ -184,67 +200,97 @@ export class MockDatabaseService {
 
   // Prisma client-style accessors
   get user() {
-    return this;
+    return this.modelProxy('user');
   }
   get session() {
-    return this;
+    return this.modelProxy('session');
   }
   get subscription() {
-    return this;
+    return this.modelProxy('subscription');
   }
   get subscriptionPlan() {
-    return this;
+    return this.modelProxy('subscriptionPlan');
   }
   get wallet() {
-    return this;
+    return this.modelProxy('wallet');
   }
   get walletTransaction() {
-    return this;
+    return this.modelProxy('walletTransaction');
   }
   get usageMeter() {
-    return this;
+    return this.modelProxy('usageMeter');
   }
   get topUpPackage() {
-    return this;
+    return this.modelProxy('topUpPackage');
   }
   get topUpPurchase() {
-    return this;
+    return this.modelProxy('topUpPurchase');
   }
   get coupon() {
-    return this;
+    return this.modelProxy('coupon');
   }
   get couponRedemption() {
-    return this;
+    return this.modelProxy('couponRedemption');
   }
   get billingEvent() {
-    return this;
+    return this.modelProxy('billingEvent');
   }
   get featureFlag() {
-    return this;
+    return this.modelProxy('featureFlag');
   }
   get featureFlagOverride() {
-    return this;
+    return this.modelProxy('featureFlagOverride');
   }
   get impersonationLog() {
-    return this;
+    return this.modelProxy('impersonationLog');
   }
   get auditLog() {
-    return this;
+    return this.modelProxy('auditLog');
   }
   get notification() {
-    return this;
+    return this.modelProxy('notification');
   }
   get organization() {
-    return this;
+    return this.modelProxy('organization');
   }
   get organizationMember() {
-    return this;
+    return this.modelProxy('organizationMember');
   }
   get apiKey() {
-    return this;
+    return this.modelProxy('apiKey');
   }
   get invoice() {
-    return this;
+    return this.modelProxy('invoice');
+  }
+  get agent() {
+    return this.modelProxy('agent');
+  }
+  get agentSkill() {
+    return this.modelProxy('agentSkill');
+  }
+  get skill() {
+    return this.modelProxy('skill');
+  }
+  get run() {
+    return this.modelProxy('run');
+  }
+  get memory() {
+    return this.modelProxy('memory');
+  }
+  get conversation() {
+    return this.modelProxy('conversation');
+  }
+  get conversationMessage() {
+    return this.modelProxy('conversationMessage');
+  }
+  get knowledgeDocument() {
+    return this.modelProxy('knowledgeDocument');
+  }
+  get knowledgeDocumentChunk() {
+    return this.modelProxy('knowledgeDocumentChunk');
+  }
+  get plan() {
+    return this.modelProxy('plan');
   }
 }
 
@@ -390,11 +436,18 @@ export async function bootstrapApp(): Promise<INestApplication> {
     .overrideProvider(AuthService)
     .useValue({
       requestOtp: async (_email: string, _ip: string) => undefined,
-      verifyOtp: async (_email: string, _otp: string, _ip: string, _userAgent: string) => ({
-        accessToken: 'mock-access-token',
-        refreshToken: 'mock-refresh-token',
-        expiresIn: 900,
-      }),
+      verifyOtp: async (_email: string, otp: string) => {
+        if (otp === '000000') {
+          throw new UnauthorizedException('Invalid OTP');
+        }
+        return {
+          accessToken: 'mock-access-token',
+          refreshToken: 'mock-refresh-token',
+          expiresIn: 900,
+        };
+      },
+      logout: async (_token?: string, _sessionId?: string) => undefined,
+      logoutAll: async (_userId: string) => undefined,
     } as any)
     .compile();
 

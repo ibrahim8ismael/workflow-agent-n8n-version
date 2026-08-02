@@ -25,6 +25,7 @@
       },
       "style": {
         "noNonNullAssertion": "off",
+        "useImportType": "off",
         "useTemplate": "error"
       },
       "suspicious": {

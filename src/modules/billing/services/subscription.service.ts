@@ -1,14 +1,12 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
-import { SubscriptionRepository } from '../repositories/subscription.repository';
-import { WalletService } from './wallet.service';
-import { UsageMeterService } from './usage-meter.service';
-import { BillingEventService } from './billing-event.service';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { SUBSCRIPTION_PROVIDER } from '../constants/billing.constants';
+import { SubscriptionRepository } from '../repositories/subscription.repository';
+import { BillingEventService } from './billing-event.service';
+import { UsageMeterService } from './usage-meter.service';
+import { WalletService } from './wallet.service';
 
 @Injectable()
 export class SubscriptionService {
-  private readonly logger = new Logger(SubscriptionService.name);
-
   constructor(
     private readonly subRepo: SubscriptionRepository,
     private readonly walletService: WalletService,
