@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({
+  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+});
 
 function generateId(): string {
   return randomUUID();
@@ -59,12 +62,11 @@ async function main() {
   });
   console.log('  ✓ System Administrator created');
 
-  const demoUserId = generateId();
-  await prisma.user.upsert({
+  const demoUser = await prisma.user.upsert({
     where: { email: 'demo@woops.ai' },
     update: {},
     create: {
-      id: demoUserId,
+      id: generateId(),
       email: 'demo@woops.ai',
       name: 'Demo User',
       role: 'USER',
@@ -74,12 +76,11 @@ async function main() {
   });
   console.log('  ✓ Demo User created');
 
-  const orgId = generateId();
-  await prisma.organization.upsert({
+  const org = await prisma.organization.upsert({
     where: { slug: 'demo-org' },
     update: {},
     create: {
-      id: orgId,
+      id: generateId(),
       name: 'Demo Organization',
       slug: 'demo-org',
     },
@@ -87,12 +88,12 @@ async function main() {
   console.log('  ✓ Demo Organization created');
 
   await prisma.organizationMember.upsert({
-    where: { organizationId_userId: { organizationId: orgId, userId: demoUserId } },
+    where: { organizationId_userId: { organizationId: org.id, userId: demoUser.id } },
     update: {},
     create: {
       id: generateId(),
-      organizationId: orgId,
-      userId: demoUserId,
+      organizationId: org.id,
+      userId: demoUser.id,
       role: 'OWNER',
       joinedAt: new Date(),
     },
@@ -295,11 +296,11 @@ async function main() {
   console.log('  ✓ Feature Flags created');
 
   await prisma.wallet.upsert({
-    where: { userId: demoUserId },
+    where: { userId: demoUser.id },
     update: {},
     create: {
       id: generateId(),
-      userId: demoUserId,
+      userId: demoUser.id,
       balanceCredits: BigInt(10000),
       lifetimeCredits: BigInt(10000),
     },

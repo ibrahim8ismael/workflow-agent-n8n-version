@@ -3,7 +3,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
-RUN npm run build && npx prisma generate
+RUN npx prisma generate && npm run build
 
 FROM node:24-alpine AS production
 WORKDIR /app
@@ -12,11 +12,11 @@ ENV NODE_ENV=production
 RUN addgroup -S woops && adduser -S woops -G woops
 
 COPY package.json package-lock.json ./
+COPY prisma ./prisma
+COPY prisma.config.ts ./
 RUN npm ci --omit=dev && npx prisma generate
 
 COPY --from=build /app/dist ./dist
-COPY prisma ./prisma
-COPY prisma.config.ts ./
 
 RUN chown -R woops:woops /app
 USER woops
