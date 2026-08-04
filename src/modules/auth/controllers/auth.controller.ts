@@ -58,10 +58,11 @@ export class AuthController {
   async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const token = req.cookies?.woops_refresh;
     if (!token) {
-      return res.status(HttpStatus.UNAUTHORIZED).json({
+      res.status(HttpStatus.UNAUTHORIZED).json({
         success: false,
         error: { code: 'NO_REFRESH_TOKEN', message: 'Refresh token not found' },
       });
+      return;
     }
 
     const result = await this.authService.refresh(token, req.ip ?? '');
@@ -90,6 +91,7 @@ export class AuthController {
     await this.authService.logout(token, user?.sessionId);
 
     res.clearCookie('woops_refresh', { path: '/api/v1/auth' });
+    return;
   }
 
   @Post('logout-all')
@@ -98,6 +100,7 @@ export class AuthController {
   async logoutAll(@CurrentUser() user: { id: string }, @Res({ passthrough: true }) res: Response) {
     await this.authService.logoutAll(user.id);
     res.clearCookie('woops_refresh', { path: '/api/v1/auth' });
+    return;
   }
 
   @Post('switch-organization')

@@ -72,14 +72,21 @@ services:
     env_file:
       - .env
     environment:
+      NODE_ENV: development
       DATABASE_URL: postgresql://woops:woops@postgres:5432/woops
       REDIS_URL: redis://redis:6379
       STORAGE_ENDPOINT: http://minio:9000
       STORAGE_PUBLIC_URL: http://minio:9000/woops-assets
+      MAILPIT_HOST: mailpit
+      MAILPIT_PORT: 1025
       SMTP_HOST: mailpit
       SMTP_PORT: 1025
+      SMTP_SECURE: 'false'
+      SMTP_USER: ''
+      SMTP_PASS: ''
+
     ports:
-      - 3000:3000
+      - ${PORT:-3000}:${PORT:-3000}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -90,7 +97,7 @@ services:
       mailpit:
         condition: service_healthy
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/api/v1/health || exit 1']
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:${PORT:-3000}/api/v1/health || exit 1']
       interval: 10s
       timeout: 5s
       retries: 5
