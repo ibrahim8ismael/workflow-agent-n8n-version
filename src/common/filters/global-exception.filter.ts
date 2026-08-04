@@ -18,6 +18,10 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse();
 
+    if (response.headersSent) {
+      return;
+    }
+
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message = 'Internal server error';
 
@@ -42,12 +46,6 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         } failed`,
         exception instanceof Error ? exception.stack : String(exception),
       );
-      Sentry.captureException(exception, {
-        extra: { path: ctx.getRequest<{ url?: string }>().url },
-      });
-    }
-
-    if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
       Sentry.captureException(exception, {
         extra: { path: ctx.getRequest<{ url?: string }>().url },
       });
