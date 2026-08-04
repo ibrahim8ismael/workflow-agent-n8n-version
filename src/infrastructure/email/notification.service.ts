@@ -25,7 +25,7 @@ export class NotificationService implements OnModuleInit {
     await this.nodemailerProvider.sendTemplate({
       to: email,
       template: 'otp',
-      data: { code, expiresIn: 5 },
+      data: { code, expiresIn: 5, recipientEmail: email },
     });
     this.logger.log(`OTP email sent to ${email}`);
   }
