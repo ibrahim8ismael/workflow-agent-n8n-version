@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const createKnowledgeDocumentSchema = z.object({
   title: z.string().min(1).max(500),
   source: z.string().optional(),
-  contentType: z.string().default('text'),
+  contentType: z.literal('markdown').default('markdown'),
   content: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),
   organizationId: z.string().optional(),

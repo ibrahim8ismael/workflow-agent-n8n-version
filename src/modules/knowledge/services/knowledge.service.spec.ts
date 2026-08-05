@@ -1,5 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { KNOWLEDGE_MAX_CONTENT_BYTES } from '../constants/knowledge.constants';
 import { KnowledgeRepository } from '../repositories/knowledge.repository';
 import { KnowledgeService } from './knowledge.service';
 
@@ -10,7 +11,7 @@ describe('KnowledgeService', () => {
     id: 'doc-1',
     title: 'Revenue Report',
     source: 'upload',
-    contentType: 'text',
+    contentType: 'markdown',
     content: 'Q2 numbers',
     ...overrides,
   });
@@ -49,7 +50,7 @@ describe('KnowledgeService', () => {
         title: 'Doc',
         content: 'x',
         organizationId: 'org-1',
-        contentType: 'text',
+        contentType: 'markdown',
       });
 
       expect(mockRepo.createDocument).toHaveBeenCalledWith(
@@ -125,12 +126,32 @@ describe('KnowledgeService', () => {
   });
 
   describe('ingestDocument', () => {
+    it('rejects non-Markdown documents', async () => {
+      await expect(
+        service.ingestDocument({ title: 'Doc', contentType: 'text' } as never, 'content'),
+      ).rejects.toThrow('contentType "markdown"');
+    });
+
+    it('rejects empty Markdown content', async () => {
+      await expect(
+        service.ingestDocument({ title: 'Doc', contentType: 'markdown' }, '  '),
+      ).rejects.toThrow('Markdown content cannot be empty');
+    });
+
+    it('rejects Markdown content above the size limit', async () => {
+      const oversizedContent = 'x'.repeat(KNOWLEDGE_MAX_CONTENT_BYTES + 1);
+
+      await expect(
+        service.ingestDocument({ title: 'Doc', contentType: 'markdown' }, oversizedContent),
+      ).rejects.toThrow('5 MB');
+    });
+
     it('should create chunks for long content', async () => {
       const longContent = 'x'.repeat(2500);
       vi.mocked(mockRepo.createDocument).mockResolvedValue(doc({ content: longContent }) as never);
 
       await service.ingestDocument(
-        { title: 'Doc', content: longContent, contentType: 'text' },
+        { title: 'Doc', content: longContent, contentType: 'markdown' },
         longContent,
       );
 
@@ -150,7 +171,7 @@ describe('KnowledgeService', () => {
 
     it('should create a single chunk for short content', async () => {
       await service.ingestDocument(
-        { title: 'Doc', content: 'short', contentType: 'text' },
+        { title: 'Doc', content: 'short', contentType: 'markdown' },
         'short',
       );
 
@@ -168,6 +189,36 @@ describe('KnowledgeService', () => {
         'doc-1',
         expect.objectContaining({ title: 'Updated' }),
       );
+    });
+
+    it('should replace chunks when Markdown content is updated', async () => {
+      await service.updateDocument('doc-1', {
+        title: 'Updated pricing',
+        content: '# New pricing\nPremium costs $25.',
+        source: 'pricing.md',
+      });
+
+      expect(mockRepo.deleteChunksByDocumentId).toHaveBeenCalledWith('doc-1');
+      expect(mockRepo.createChunks).toHaveBeenCalledWith([
+        {
+          knowledgeDocumentId: 'doc-1',
+          content: '# New pricing\nPremium costs $25.',
+          chunkIndex: 0,
+          metadata: { source: 'pricing.md', title: 'Updated pricing' },
+        },
+      ]);
+    });
+
+    it('rejects empty or oversized Markdown edits', async () => {
+      await expect(service.updateDocument('doc-1', { content: '   ' })).rejects.toThrow(
+        'Markdown content cannot be empty',
+      );
+
+      await expect(
+        service.updateDocument('doc-1', {
+          content: 'x'.repeat(KNOWLEDGE_MAX_CONTENT_BYTES + 1),
+        }),
+      ).rejects.toThrow('5 MB');
     });
 
     it('should delete chunks before soft deleting a document', async () => {

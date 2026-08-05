@@ -1,5 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { KnowledgeDocument, KnowledgeDocumentChunk } from '@prisma/client';
+import { KNOWLEDGE_MAX_CONTENT_BYTES } from '../constants/knowledge.constants';
 import { CreateKnowledgeDocumentDto } from '../dto/create-knowledge.dto';
 import { SearchKnowledgeDto } from '../dto/search-knowledge.dto';
 import { KnowledgeRepository } from '../repositories/knowledge.repository';
@@ -9,12 +10,19 @@ export class KnowledgeService {
   constructor(private readonly knowledgeRepository: KnowledgeRepository) {}
 
   async createDocument(dto: CreateKnowledgeDocumentDto): Promise<KnowledgeDocument> {
+    this.assertMarkdown(dto.contentType);
+    this.assertContentSize(dto.content);
+    const metadata = {
+      ...(dto.metadata ?? {}),
+      ...(dto.category ? { category: dto.category } : {}),
+    };
+
     return this.knowledgeRepository.createDocument({
       title: dto.title,
       source: dto.source,
       contentType: dto.contentType,
       content: dto.content,
-      metadata: dto.metadata as never,
+      metadata: Object.keys(metadata).length > 0 ? (metadata as never) : undefined,
       ...(dto.organizationId ? { organization: { connect: { id: dto.organizationId } } } : {}),
     } as never);
   }
@@ -55,6 +63,12 @@ export class KnowledgeService {
     dto: CreateKnowledgeDocumentDto,
     content: string,
   ): Promise<KnowledgeDocument> {
+    this.assertMarkdown(dto.contentType);
+    if (!content.trim()) {
+      throw new BadRequestException('Markdown content cannot be empty');
+    }
+    this.assertContentSize(content);
+
     const doc = await this.createDocument({ ...dto, content });
 
     const chunks = this.chunkContent(content, 1000, 200);
@@ -74,14 +88,45 @@ export class KnowledgeService {
     id: string,
     dto: Partial<CreateKnowledgeDocumentDto>,
   ): Promise<KnowledgeDocument> {
-    await this.findDocumentById(id);
-    return this.knowledgeRepository.updateDocument(id, {
+    const existing = await this.findDocumentById(id);
+    if (dto.contentType) this.assertMarkdown(dto.contentType);
+    if (dto.content !== undefined) {
+      if (!dto.content.trim()) {
+        throw new BadRequestException('Markdown content cannot be empty');
+      }
+      this.assertContentSize(dto.content);
+    }
+
+    const metadata = {
+      ...(dto.metadata ?? {}),
+      ...(dto.category ? { category: dto.category } : {}),
+    };
+
+    const updated = await this.knowledgeRepository.updateDocument(id, {
       title: dto.title,
       source: dto.source,
       contentType: dto.contentType,
       content: dto.content,
-      metadata: dto.metadata as never,
+      ...(Object.keys(metadata).length > 0 ? { metadata: metadata as never } : {}),
     } as never);
+
+    if (dto.content !== undefined) {
+      await this.knowledgeRepository.deleteChunksByDocumentId(id);
+      const chunks = this.chunkContent(dto.content, 1000, 200);
+      await this.knowledgeRepository.createChunks(
+        chunks.map((chunk, index) => ({
+          knowledgeDocumentId: id,
+          content: chunk,
+          chunkIndex: index,
+          metadata: {
+            source: dto.source ?? existing.source,
+            title: dto.title ?? existing.title,
+          },
+        })),
+      );
+    }
+
+    return updated;
   }
 
   async softDeleteDocument(id: string): Promise<KnowledgeDocument> {
@@ -109,5 +154,19 @@ export class KnowledgeService {
     }
 
     return chunks;
+  }
+
+  private assertMarkdown(contentType: string | undefined): void {
+    if (contentType !== 'markdown') {
+      throw new BadRequestException('Knowledge documents must use contentType "markdown"');
+    }
+  }
+
+  private assertContentSize(content: string | undefined): void {
+    if (content && Buffer.byteLength(content, 'utf8') > KNOWLEDGE_MAX_CONTENT_BYTES) {
+      throw new BadRequestException(
+        `Markdown content cannot exceed ${KNOWLEDGE_MAX_CONTENT_BYTES} bytes (5 MB)`,
+      );
+    }
   }
 }

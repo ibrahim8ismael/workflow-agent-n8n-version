@@ -27,3 +27,5 @@ export const KNOWLEDGE_CATEGORY = {
 } as const;
 
 export type KnowledgeCategory = (typeof KNOWLEDGE_CATEGORY)[keyof typeof KNOWLEDGE_CATEGORY];
+
+export const KNOWLEDGE_MAX_CONTENT_BYTES = 5 * 1024 * 1024;

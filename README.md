@@ -84,3 +84,9 @@ Environment is validated at boot via zod (`src/config/schema.ts`) — the app re
 - `GET /api/v1/runs/:id` — run status / result / token usage
 - `GET /api/v1/health` — Redis + Prisma liveness
 - Agents, skills, knowledge, memory, conversations, users, auth, billing, admin — Swagger at `/api/docs`
+
+### Markdown knowledge bases
+
+Knowledge documents are Markdown-only. Upload a `.md` file through `POST /api/v1/knowledge/upload` as multipart form-data using the `file` field. Optional fields include `title`, `organizationId`, and `category`.
+
+The upload limit is 5 MB. The original filename is stored as the document source, and the file is chunked automatically for knowledge retrieval. Raw ingestion is also available through `POST /api/v1/knowledge/ingest`, but it requires `contentType: "markdown"`.
