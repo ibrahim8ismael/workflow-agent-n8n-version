@@ -12,6 +12,7 @@ describe('PlannerService', () => {
   } as unknown as AIAdapterService;
 
   const validPlan: Plan = {
+    intent: 'task_execution',
     goal: 'Answer the question',
     reasoning: 'Use knowledge skill',
     steps: [
@@ -27,6 +28,9 @@ describe('PlannerService', () => {
     successCriteria: ['answer given'],
     estimatedComplexity: 'simple',
     requiresApproval: false,
+    approvalReasons: [],
+    unavailableCapabilities: [],
+    confidence: 0.95,
     agentId: 'agent-1',
   };
 
@@ -104,9 +108,24 @@ describe('PlannerService', () => {
       expect(params.systemPrompt).toContain('Search Knowledge (skill-1)');
       expect(params.systemPrompt).toContain('[Mode: KNOWLEDGE_RETRIEVAL]');
       expect(params.systemPrompt).toContain('last-topic: Q2 revenue');
-      expect(params.systemPrompt).toContain('Agent Instructions:\nBe concise.');
+      expect(params.systemPrompt).toContain('<employee_policies>\nBe concise.');
       expect(params.messages[0].content).toContain('Summarize Q2 revenue');
       expect(params.messages[0].content).toContain('Revenue grew 20%');
+      expect(params.messages[0].content).toContain('user: Hi');
+    });
+
+    it('should use the requested effort level', async () => {
+      vi.mocked(mockAiAdapter.generateObject).mockResolvedValue({
+        object: validPlan,
+        finishReason: 'stop',
+        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+      });
+
+      await service.createPlan({ ...plannerInput, effort: 'low' });
+
+      expect(mockAiAdapter.generateObject).toHaveBeenCalledWith(
+        expect.objectContaining({ mode: 'low' }),
+      );
     });
 
     it('should omit memory and knowledge blocks when empty', async () => {

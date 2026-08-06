@@ -102,6 +102,7 @@ describe('RuntimeService', () => {
   };
 
   const plan: Plan = {
+    intent: 'task_execution',
     goal: 'Summarize revenue',
     reasoning: 'Use knowledge',
     steps: [step],
@@ -109,6 +110,9 @@ describe('RuntimeService', () => {
     successCriteria: ['answer'],
     estimatedComplexity: 'simple',
     requiresApproval: false,
+    approvalReasons: [],
+    unavailableCapabilities: [],
+    confidence: 0.95,
     agentId: 'agent-1',
     conversationId: 'conv-1',
   };
@@ -206,6 +210,28 @@ describe('RuntimeService', () => {
   describe('execute (happy path)', () => {
     beforeEach(() => {
       vi.mocked(mockPlannerService.createPlan).mockResolvedValue(plan as never);
+    });
+
+    it('should use conversation mode for brainstorming without planning tools', async () => {
+      vi.mocked(mockPlannerService.createPlan).mockResolvedValue({
+        ...plan,
+        intent: 'brainstorming',
+        steps: [],
+      } as never);
+
+      const result = await service.execute({
+        ...request,
+        userMessage: 'Help me brainstorm an email employee.',
+      });
+
+      expect(result.status).toBe('COMPLETED');
+      expect(result.response).toBe('answer');
+      expect(mockPlannerService.validatePlan).not.toHaveBeenCalled();
+      expect(mockAiAdapter.generateText).toHaveBeenCalledWith(
+        expect.not.objectContaining({ sdkTools: expect.anything() }),
+      );
+      expect(mockConversationsService.addMessage).toHaveBeenCalledTimes(2);
+      expect(mockMemoryService.upsert).not.toHaveBeenCalled();
     });
 
     it('should create a run and transition through statuses', async () => {
@@ -333,7 +359,8 @@ describe('RuntimeService', () => {
       expect(mockRunsService.transitionStatus).not.toHaveBeenCalledWith('run-1', 'EXECUTING');
       expect(mockRunsService.transitionStatus).toHaveBeenCalledWith('run-1', 'WAITING');
       expect(mockRunsService.complete).not.toHaveBeenCalled();
-      expect(result.response).toContain('I need more information');
+      expect(result.response).toContain('I can help you design that employee');
+      expect(result.response).toContain('Please provide a date range');
     });
 
     it('should fail the run when the agent is not found', async () => {
@@ -458,7 +485,9 @@ describe('RuntimeService', () => {
       expect(mockAiAdapter.generateText).toHaveBeenCalledWith(
         expect.objectContaining({
           mode: 'medium',
-          systemPrompt: 'Search and summarize.',
+          systemPrompt: expect.stringContaining(
+            '<skill_contract name="Search Knowledge">\nSearch and summarize.',
+          ),
           temperature: 0.3,
           maxTokens: 1500,
         }),

@@ -33,6 +33,13 @@ describe('parseModelString', () => {
       modelId: 'llama-3-70b',
     });
   });
+
+  it('should parse an openrouter prefixed model', () => {
+    expect(parseModelString('openrouter:gpt-oss-20b:free')).toEqual({
+      provider: 'openrouter',
+      modelId: 'gpt-oss-20b:free',
+    });
+  });
 });
 
 describe('createVercelProvider', () => {
@@ -56,6 +63,12 @@ describe('createVercelProvider', () => {
 
   it('should create a groq provider', () => {
     const provider = createVercelProvider('groq', 'llama-3-70b');
+
+    expect(provider).toBeDefined();
+  });
+
+  it('should create an openrouter provider', () => {
+    const provider = createVercelProvider('openrouter', 'gpt-oss-20b:free');
 
     expect(provider).toBeDefined();
   });

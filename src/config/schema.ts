@@ -45,6 +45,8 @@ export const configSchema = z.object({
   GOOGLE_GENERATIVE_AI_API_KEY: z.string().optional(),
   GROQ_API_KEY: z.string().optional(),
   OPENROUTER_API_KEY: z.string().optional(),
+  OPENROUTER_HTTP_REFERER: z.string().url().optional(),
+  OPENROUTER_APP_NAME: z.string().optional(),
   LLM_LOW_PROVIDER: z.string().default('openai'),
   LLM_LOW_MODEL: z.string().default('gpt-4o-mini'),
   LLM_LOW_FALLBACKS: z.string().default(''),
@@ -58,6 +60,7 @@ export const configSchema = z.object({
   LLM_HIGH_FALLBACKS: z.string().default(''),
   LLM_HIGH_TIMEOUT_MS: z.coerce.number().positive().default(120000),
   LLM_MAX_RETRIES: z.coerce.number().int().min(0).default(2),
+  BUSINESS_TIMEZONE: z.string().default('UTC'),
 
   SENTRY_DSN: z.string().optional(),
   SENTRY_ENV: z.string().default('development'),

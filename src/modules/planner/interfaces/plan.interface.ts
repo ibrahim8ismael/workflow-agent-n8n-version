@@ -13,6 +13,12 @@ export interface MissingInput {
 }
 
 export interface Plan {
+  intent:
+    | 'brainstorming'
+    | 'employee_design'
+    | 'task_execution'
+    | 'clarification'
+    | 'general_question';
   goal: string;
   reasoning: string;
   steps: PlanStep[];
@@ -20,6 +26,9 @@ export interface Plan {
   successCriteria: string[];
   estimatedComplexity: 'simple' | 'medium' | 'complex';
   requiresApproval: boolean;
+  approvalReasons: string[];
+  unavailableCapabilities: string[];
+  confidence: number;
   agentId: string;
   conversationId?: string;
 }
@@ -42,4 +51,5 @@ export interface PlannerInput {
   memory?: Array<{ key: string; content: string; type: string }>;
   knowledge?: string[];
   conversationHistory?: Array<{ role: string; content: string }>;
+  effort?: 'low' | 'medium' | 'high';
 }

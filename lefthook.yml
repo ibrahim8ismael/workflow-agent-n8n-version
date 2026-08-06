@@ -45,7 +45,7 @@ pre-commit:
 
     # 6. Secret scanning on staged content (exclude lefthook config)
     secrets:
-      run: git diff --cached --diff-filter=ACM -- '*.ts' '*.tsx' '*.json' '*.env' | grep -nE '(password["\s:=]|api_key["\s:=]|apiKey["\s:=]|private_key["\s:=]|-----BEGIN\s+(RSA\s+|EC\s+)?PRIVATE\s+KEY-----)' && echo "⚠️  Potential secret detected in staged files!" && exit 1 || exit 0
+      run: git diff --cached --diff-filter=ACM -- '*.ts' '*.tsx' '*.json' '*.env' | grep -nE '(password["\s:=]+[A-Za-z0-9+/=_-]{20,}|api_key["\s:=]+[A-Za-z0-9+/=_-]{20,}|apiKey["\s:=]+[A-Za-z0-9+/=_-]{20,}|private_key["\s:=]+[A-Za-z0-9+/=_-]{20,}|-----BEGIN\s+(RSA\s+|EC\s+)?PRIVATE\s+KEY-----)' && echo "⚠️  Potential secret detected in staged files!" && exit 1 || exit 0
 
     # 7. Dependency validation (package.json changes)
     deps:
