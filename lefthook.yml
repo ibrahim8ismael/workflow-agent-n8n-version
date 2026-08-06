@@ -13,7 +13,7 @@ pre-commit:
   commands:
     # 1. Format changed files with Biome
     formatter:
-      glob: "*.{ts,tsx,js,jsx,json,md}"
+      glob: "*.{ts,tsx,js,jsx,json}"
       run: npx biome format --write {staged_files}
       stage_fixed: true
 
