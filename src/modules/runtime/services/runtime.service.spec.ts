@@ -34,9 +34,13 @@ describe('RuntimeService', () => {
 
   const mockRunsService = {
     create: vi.fn(),
+    findById: vi.fn(),
     transitionStatus: vi.fn(),
+    savePlan: vi.fn(),
+    updateMetadata: vi.fn(),
     complete: vi.fn(),
     fail: vi.fn(),
+    cancel: vi.fn(),
     updateUsage: vi.fn(),
   } as unknown as RunsService;
 
@@ -124,9 +128,21 @@ describe('RuntimeService', () => {
     vi.mocked(mockRunsService.create).mockResolvedValue(
       run({ status: 'CREATED', result: null }) as never,
     );
+    vi.mocked(mockRunsService.findById).mockImplementation(
+      async () =>
+        run({
+          status: 'WAITING',
+          plan,
+          metadata: { userMessage: request.userMessage, organizationId: request.organizationId },
+          conversationId: request.conversationId,
+        }) as never,
+    );
     vi.mocked(mockRunsService.transitionStatus).mockResolvedValue(run() as never);
+    vi.mocked(mockRunsService.savePlan).mockResolvedValue(run() as never);
+    vi.mocked(mockRunsService.updateMetadata).mockResolvedValue(run() as never);
     vi.mocked(mockRunsService.complete).mockResolvedValue(run() as never);
     vi.mocked(mockRunsService.fail).mockResolvedValue(run({ status: 'FAILED' }) as never);
+    vi.mocked(mockRunsService.cancel).mockResolvedValue(run({ status: 'CANCELLED' }) as never);
     vi.mocked(mockRunsService.updateUsage).mockResolvedValue(run() as never);
     vi.mocked(mockAgentsService.findById).mockResolvedValue({
       id: 'agent-1',
@@ -193,6 +209,7 @@ describe('RuntimeService', () => {
 
     it('should create a run and transition through statuses', async () => {
       await service.execute(request);
+      await service.approve('run-1');
 
       expect(mockRunsService.create).toHaveBeenCalledWith({
         agentId: 'agent-1',
@@ -202,11 +219,13 @@ describe('RuntimeService', () => {
       });
       expect(mockRunsService.transitionStatus).toHaveBeenNthCalledWith(1, 'run-1', 'PREPARING');
       expect(mockRunsService.transitionStatus).toHaveBeenNthCalledWith(2, 'run-1', 'PLANNING');
-      expect(mockRunsService.transitionStatus).toHaveBeenNthCalledWith(3, 'run-1', 'EXECUTING');
+      expect(mockRunsService.transitionStatus).toHaveBeenNthCalledWith(3, 'run-1', 'WAITING');
+      expect(mockRunsService.transitionStatus).toHaveBeenNthCalledWith(4, 'run-1', 'EXECUTING');
     });
 
     it('should load skills, build context and generate text', async () => {
       await service.execute(request);
+      await service.approve('run-1');
 
       expect(mockAgentsService.findById).toHaveBeenCalledWith('agent-1', true);
       expect(mockSkillsService.findById).toHaveBeenCalledWith('skill-1');
@@ -231,6 +250,7 @@ describe('RuntimeService', () => {
       } as never);
 
       await service.execute(request);
+      await service.approve('run-1');
 
       expect(mockAiAdapter.generateText).toHaveBeenCalledWith(
         expect.objectContaining({ model: 'openai:gpt-4o-mini' }),
@@ -239,6 +259,7 @@ describe('RuntimeService', () => {
 
     it('should persist usage, messages and memory', async () => {
       await service.execute(request);
+      await service.approve('run-1');
 
       expect(mockRunsService.updateUsage).toHaveBeenCalledWith('run-1', {
         promptTokens: 10,
@@ -255,14 +276,12 @@ describe('RuntimeService', () => {
     });
 
     it('should complete the run and return the response with usage', async () => {
-      const result = await service.execute(request);
+      await service.execute(request);
+      const result = await service.approve('run-1');
 
       expect(mockRunsService.complete).toHaveBeenCalledWith('run-1', 'answer');
-      expect(result).toEqual({
-        runId: 'run-1',
-        response: 'answer',
-        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
-      });
+      expect(result.response).toBe('answer');
+      expect(result.status).toBe('COMPLETED');
     });
 
     it('should skip conversation persistence when no conversationId', async () => {
@@ -274,7 +293,8 @@ describe('RuntimeService', () => {
     it('should not fail the run when memory upsert fails', async () => {
       vi.mocked(mockMemoryService.upsert).mockRejectedValue(new Error('memory down'));
 
-      const result = await service.execute(request);
+      await service.execute(request);
+      const result = await service.approve('run-1');
 
       expect(result.response).toBe('answer');
       expect(mockRunsService.fail).not.toHaveBeenCalled();
@@ -295,11 +315,7 @@ describe('RuntimeService', () => {
         'run-1',
         'Invalid plan: Plan must have a goal',
       );
-      expect(result).toEqual({
-        runId: 'run-1',
-        response: 'Invalid plan: Plan must have a goal',
-        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-      });
+      expect(result.response).toBe('Invalid plan: Plan must have a goal');
     });
 
     it('should ask for missing inputs instead of executing', async () => {
@@ -314,10 +330,8 @@ describe('RuntimeService', () => {
       const result = await service.execute(request);
 
       expect(mockRunsService.transitionStatus).not.toHaveBeenCalledWith('run-1', 'EXECUTING');
-      expect(mockRunsService.complete).toHaveBeenCalledWith(
-        'run-1',
-        'I need more information:\n- Please provide a date range',
-      );
+      expect(mockRunsService.transitionStatus).toHaveBeenCalledWith('run-1', 'WAITING');
+      expect(mockRunsService.complete).not.toHaveBeenCalled();
       expect(result.response).toContain('I need more information');
     });
 
@@ -339,7 +353,8 @@ describe('RuntimeService', () => {
       vi.mocked(mockPlannerService.createPlan).mockResolvedValue(plan as never);
       vi.mocked(mockAiAdapter.generateText).mockRejectedValue(new Error('provider down'));
 
-      const result = await service.execute(request);
+      await service.execute(request);
+      const result = await service.approve('run-1');
 
       expect(mockRunsService.fail).toHaveBeenCalledWith('run-1', 'provider down');
       expect(result.response).toContain('provider down');
@@ -352,6 +367,7 @@ describe('RuntimeService', () => {
       ] as never);
 
       await service.execute(request);
+      await service.approve('run-1');
 
       expect(mockSkillsService.findById).not.toHaveBeenCalled();
     });
@@ -361,10 +377,21 @@ describe('RuntimeService', () => {
       vi.mocked(mockSkillsService.findById).mockRejectedValue(new NotFoundException('no'));
 
       await service.execute(request);
+      await service.approve('run-1');
 
       expect(mockSkillsService.findById).toHaveBeenCalledWith('skill-1');
       expect(mockRunsService.fail).not.toHaveBeenCalled();
       expect(mockAiAdapter.generateText).toHaveBeenCalled();
+    });
+
+    it('should reject a waiting plan without executing it', async () => {
+      await service.execute(request);
+
+      const result = await service.reject('run-1', 'Needs correction');
+
+      expect(mockRunsService.cancel).toHaveBeenCalledWith('run-1');
+      expect(result.status).toBe('CANCELLED');
+      expect(mockAiAdapter.generateText).not.toHaveBeenCalled();
     });
   });
 

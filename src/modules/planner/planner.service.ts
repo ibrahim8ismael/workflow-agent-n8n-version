@@ -98,7 +98,9 @@ Create an execution plan to fulfill this request using the available Skills.`;
     const errors: string[] = [];
 
     if (!plan.goal) errors.push('Plan must have a goal');
-    if (!plan.steps || plan.steps.length === 0) errors.push('Plan must have at least one step');
+    if ((!plan.steps || plan.steps.length === 0) && plan.missingInputs.length === 0) {
+      errors.push('Plan must have at least one step');
+    }
 
     for (const step of plan.steps) {
       if (!step.skillId) errors.push(`Step ${step.order}: missing skillId`);

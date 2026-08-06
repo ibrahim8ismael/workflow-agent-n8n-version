@@ -11,6 +11,8 @@ export class RunsService {
     return this.runsRepository.create({
       agent: { connect: { id: dto.agentId } },
       ...(dto.conversationId ? { conversation: { connect: { id: dto.conversationId } } } : {}),
+      userId: dto.userId,
+      organizationId: dto.organizationId,
       metadata: dto.metadata as never,
       status: 'CREATED',
     } as never);
@@ -76,11 +78,21 @@ export class RunsService {
     } as never);
   }
 
+  async savePlan(id: string, plan: Record<string, unknown>): Promise<Run> {
+    await this.findById(id);
+    return this.runsRepository.update(id, { plan: plan as never });
+  }
+
+  async updateMetadata(id: string, metadata: Record<string, unknown>): Promise<Run> {
+    await this.findById(id);
+    return this.runsRepository.update(id, { metadata: metadata as never });
+  }
+
   private validateTransition(current: string, next: string): void {
     const validTransitions: Record<string, string[]> = {
       CREATED: ['PREPARING', 'CANCELLED'],
       PREPARING: ['PLANNING', 'FAILED', 'CANCELLED'],
-      PLANNING: ['EXECUTING', 'FAILED', 'CANCELLED'],
+      PLANNING: ['WAITING', 'FAILED', 'CANCELLED'],
       EXECUTING: ['WAITING', 'GENERATING', 'FAILED', 'CANCELLED'],
       WAITING: ['EXECUTING', 'TIMEOUT', 'FAILED', 'CANCELLED'],
       GENERATING: ['PERSISTING', 'FAILED', 'CANCELLED'],
