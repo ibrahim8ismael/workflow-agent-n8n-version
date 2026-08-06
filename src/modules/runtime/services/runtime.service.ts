@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { ToolSet } from 'ai';
 import { jsonSchema, tool } from 'ai';
-import { AIAdapterService } from '../../../infrastructure/ai-adapter/ai-adapter.service';
+import { LLMRuntimeService } from '../../../infrastructure/llm-runtime/llm-runtime.service';
 import { AgentsService } from '../../agents/services/agents.service';
 import { ConversationsService } from '../../conversations/services/conversations.service';
 import { KnowledgeService } from '../../knowledge/services/knowledge.service';
@@ -57,7 +57,7 @@ export class RuntimeService {
     private readonly runsService: RunsService,
     private readonly agentsService: AgentsService,
     private readonly plannerService: PlannerService,
-    private readonly aiAdapter: AIAdapterService,
+    private readonly llmRuntime: LLMRuntimeService,
     private readonly contextBuilder: ContextBuilderService,
     private readonly conversationsService: ConversationsService,
     private readonly memoryService: MemoryService,
@@ -269,13 +269,11 @@ export class RuntimeService {
       });
 
       const skillsById = new Map(availableSkills.map((skill) => [skill.skillId, skill]));
-      const model = agent.model || 'gpt-4o';
-
       const tools: ToolSet = Object.fromEntries(
         plan.steps.map((step) => {
           const skill = skillsById.get(step.skillId);
           const executor: (args: Record<string, unknown>) => Promise<unknown> = (args) =>
-            this.executeSkill(step, skill, args, model, request);
+            this.executeSkill(step, skill, args, request);
           return [
             step.skillName,
             tool({
@@ -292,8 +290,8 @@ export class RuntimeService {
         }),
       );
 
-      const result = await this.aiAdapter.generateText({
-        model,
+      const result = await this.llmRuntime.generateText({
+        mode: 'medium',
         systemPrompt: context.system,
         messages: context.messages.map((m) => ({
           role: m.role as 'system' | 'user' | 'assistant',
@@ -305,6 +303,9 @@ export class RuntimeService {
       });
 
       await this.runsService.updateUsage(runId, result.usage);
+      await this.runsService.updateMetadata(runId, {
+        execution: result.execution,
+      });
 
       if (request.conversationId) {
         await this.conversationsService.addMessage(request.conversationId, {
@@ -353,9 +354,10 @@ export class RuntimeService {
     step: PlanStep,
     skill: SkillContext | undefined,
     args: Record<string, unknown>,
-    model: string,
-    request: ExecuteRequest,
+    requestOrLegacyModel: ExecuteRequest | string,
+    legacyRequest?: ExecuteRequest,
   ): Promise<unknown> {
+    const request = legacyRequest ?? (requestOrLegacyModel as ExecuteRequest);
     if (!skill) {
       throw new Error(`Skill "${step.skillName}" is not available for this agent`);
     }
@@ -405,7 +407,7 @@ export class RuntimeService {
       }
 
       default: {
-        return withTimeout(this.runAiSkill(skill, step, args, query, model, request));
+        return withTimeout(this.runAiSkill(skill, step, args, query, request));
       }
     }
   }
@@ -415,7 +417,6 @@ export class RuntimeService {
     step: PlanStep,
     args: Record<string, unknown>,
     query: string,
-    model: string,
     request: ExecuteRequest,
   ): Promise<string> {
     let knowledgeContext = '';
@@ -432,8 +433,8 @@ export class RuntimeService {
           : '\n\n(No relevant knowledge found.)';
     }
 
-    const result = await this.aiAdapter.generateText({
-      model,
+    const result = await this.llmRuntime.generateText({
+      mode: 'medium',
       systemPrompt: `${
         skill.instructions ?? `You are the "${skill.name}" skill.`
       }${knowledgeContext}`,

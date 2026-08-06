@@ -84,8 +84,18 @@ export class RunsService {
   }
 
   async updateMetadata(id: string, metadata: Record<string, unknown>): Promise<Run> {
-    await this.findById(id);
-    return this.runsRepository.update(id, { metadata: metadata as never });
+    const run = await this.findById(id);
+    const currentMetadata = (run.metadata as Record<string, unknown> | null) ?? {};
+    const execution = metadata.execution as
+      | { estimatedCost?: number; durationMs?: number }
+      | undefined;
+    return this.runsRepository.update(id, {
+      metadata: { ...currentMetadata, ...metadata } as never,
+      ...(typeof execution?.estimatedCost === 'number'
+        ? { estimatedCost: execution.estimatedCost }
+        : {}),
+      ...(typeof execution?.durationMs === 'number' ? { durationMs: execution.durationMs } : {}),
+    });
   }
 
   private validateTransition(current: string, next: string): void {

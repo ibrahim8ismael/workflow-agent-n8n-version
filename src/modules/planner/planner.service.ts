@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
-import { AIAdapterService } from '../../infrastructure/ai-adapter/ai-adapter.service';
+import { LLMRuntimeService } from '../../infrastructure/llm-runtime/llm-runtime.service';
 import { Plan, PlannerInput } from './interfaces/plan.interface';
 
 const planSchema = z.object({
@@ -29,14 +29,14 @@ const planSchema = z.object({
 
 @Injectable()
 export class PlannerService {
-  constructor(private readonly aiAdapter: AIAdapterService) {}
+  constructor(private readonly llmRuntime: LLMRuntimeService) {}
 
   async createPlan(input: PlannerInput): Promise<Plan> {
     const systemPrompt = this.buildSystemPrompt(input);
     const userPrompt = this.buildUserPrompt(input);
 
-    const result = await this.aiAdapter.generateObject({
-      model: 'gpt-4o',
+    const result = await this.llmRuntime.generateObject({
+      mode: 'high',
       systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
       schema: planSchema,

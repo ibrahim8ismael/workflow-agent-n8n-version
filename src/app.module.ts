@@ -7,6 +7,7 @@ import { AIAdapterModule } from './infrastructure/ai-adapter/ai-adapter.module';
 import { CacheModule } from './infrastructure/cache/cache.module';
 import { EmailModule } from './infrastructure/email/email.module';
 import { HttpModule } from './infrastructure/http/http.module';
+import { LLMRuntimeModule } from './infrastructure/llm-runtime/llm-runtime.module';
 import { MonitoringModule } from './infrastructure/monitoring/monitoring.module';
 import { QueueModule } from './infrastructure/queue/queue.module';
 import { RealtimeModule } from './infrastructure/realtime/realtime.module';
@@ -52,6 +53,7 @@ import { SharedModule } from './shared/shared.module';
     PlannerModule,
     RunsModule,
     AIAdapterModule,
+    LLMRuntimeModule,
     ConversationsModule,
     KnowledgeModule,
     MemoryModule,

@@ -2,6 +2,7 @@ import { NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AIAdapterService } from '../../../infrastructure/ai-adapter/ai-adapter.service';
+import { LLMRuntimeService } from '../../../infrastructure/llm-runtime/llm-runtime.service';
 import { AgentsService } from '../../agents/services/agents.service';
 import { ConversationsService } from '../../conversations/services/conversations.service';
 import { KnowledgeService } from '../../knowledge/services/knowledge.service';
@@ -188,7 +189,7 @@ describe('RuntimeService', () => {
       mockRunsService,
       mockAgentsService,
       mockPlannerService,
-      mockAiAdapter,
+      mockAiAdapter as unknown as LLMRuntimeService,
       mockContextBuilder,
       mockConversationsService,
       mockMemoryService,
@@ -234,7 +235,7 @@ describe('RuntimeService', () => {
       );
       expect(mockAiAdapter.generateText).toHaveBeenCalledWith(
         expect.objectContaining({
-          model: 'gpt-4o',
+          mode: 'medium',
           temperature: 0.7,
           maxTokens: 2000,
           sdkTools: expect.any(Object),
@@ -242,7 +243,7 @@ describe('RuntimeService', () => {
       );
     });
 
-    it('should use the agent model when configured', async () => {
+    it('should use execution mode instead of the agent model', async () => {
       vi.mocked(mockAgentsService.findById).mockResolvedValue({
         id: 'agent-1',
         instructions: 'Be an AI employee.',
@@ -253,7 +254,7 @@ describe('RuntimeService', () => {
       await service.approve('run-1');
 
       expect(mockAiAdapter.generateText).toHaveBeenCalledWith(
-        expect.objectContaining({ model: 'openai:gpt-4o-mini' }),
+        expect.objectContaining({ mode: 'medium' }),
       );
     });
 
@@ -456,7 +457,7 @@ describe('RuntimeService', () => {
 
       expect(mockAiAdapter.generateText).toHaveBeenCalledWith(
         expect.objectContaining({
-          model: 'gpt-4o',
+          mode: 'medium',
           systemPrompt: 'Search and summarize.',
           temperature: 0.3,
           maxTokens: 1500,
