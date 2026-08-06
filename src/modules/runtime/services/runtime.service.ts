@@ -2,16 +2,17 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { ToolSet } from 'ai';
 import { jsonSchema, tool } from 'ai';
-import { AIAdapterService } from '../../../infrastructure/ai-adapter/ai-adapter.service';
+import { LLMRuntimeService } from '../../../infrastructure/llm-runtime/llm-runtime.service';
 import { AgentsService } from '../../agents/services/agents.service';
 import { ConversationsService } from '../../conversations/services/conversations.service';
 import { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import { MemoryService } from '../../memory/services/memory.service';
-import { type PlanStep } from '../../planner/interfaces/plan.interface';
+import { type Plan, type PlanStep } from '../../planner/interfaces/plan.interface';
 import { PlannerService } from '../../planner/planner.service';
 import { RunsService } from '../../runs/runs.service';
 import { SKILL_EXECUTION_MODE } from '../../skills/constants/skill.constants';
 import { SkillsService } from '../../skills/services/skills.service';
+import { generateWorkflow, type WorkflowDefinition } from '../types/workflow.types';
 import { ContextBuilderService } from './context-builder.service';
 
 export interface ExecuteRequest {
@@ -25,6 +26,9 @@ export interface ExecuteRequest {
 export interface ExecuteResponse {
   runId: string;
   response: string;
+  status?: string;
+  plan?: unknown;
+  workflow?: WorkflowDefinition;
   usage: {
     promptTokens: number;
     completionTokens: number;
@@ -53,7 +57,7 @@ export class RuntimeService {
     private readonly runsService: RunsService,
     private readonly agentsService: AgentsService,
     private readonly plannerService: PlannerService,
-    private readonly aiAdapter: AIAdapterService,
+    private readonly llmRuntime: LLMRuntimeService,
     private readonly contextBuilder: ContextBuilderService,
     private readonly conversationsService: ConversationsService,
     private readonly memoryService: MemoryService,
@@ -126,12 +130,129 @@ export class RuntimeService {
         return this.failRun(run.id, `Invalid plan: ${validation.errors.join(', ')}`);
       }
 
+      await this.runsService.savePlan(run.id, plan as unknown as Record<string, unknown>);
+      await this.runsService.updateMetadata(run.id, {
+        userMessage: request.userMessage,
+        userId: request.userId,
+        organizationId: request.organizationId,
+        approvalStatus: 'PENDING',
+      });
+
       if (plan.missingInputs && plan.missingInputs.length > 0) {
         const missingMsg = plan.missingInputs.map((m) => `- ${m.description}`).join('\n');
-        return this.completeRun(run.id, `I need more information:\n${missingMsg}`);
+        return this.waitingRun(run.id, `I need more information:\n${missingMsg}`, plan);
       }
 
-      await this.runsService.transitionStatus(run.id, 'EXECUTING');
+      return this.waitingRun(run.id, 'The execution plan is ready for your approval.', plan);
+    } catch (error) {
+      return this.handleFailure(run.id, error);
+    }
+  }
+
+  async approve(runId: string): Promise<ExecuteResponse> {
+    const run = await this.runsService.findById(runId);
+    if (run.status !== 'WAITING') {
+      return this.failRun(runId, `Run cannot be approved from status ${run.status}`);
+    }
+
+    const plan = run.plan as unknown as Plan | null;
+    if (!plan) return this.failRun(runId, 'Run has no execution plan');
+    if (plan.missingInputs?.length > 0) {
+      return {
+        runId,
+        status: 'WAITING',
+        response: `I need more information:\n${plan.missingInputs.map((input) => `- ${input.description}`).join('\n')}`,
+        plan,
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
+
+    const workflow = generateWorkflow(plan);
+    const currentMetadata = (run.metadata as Record<string, unknown> | null) ?? {};
+    await this.runsService.updateMetadata(runId, {
+      ...currentMetadata,
+      approvalStatus: 'APPROVED',
+      workflow,
+    });
+    await this.runsService.transitionStatus(runId, 'EXECUTING');
+
+    const metadata = currentMetadata;
+    return this.executeApproved(
+      runId,
+      plan,
+      {
+        userMessage: String(metadata.userMessage ?? ''),
+        agentId: run.agentId,
+        conversationId: run.conversationId ?? undefined,
+        userId: typeof metadata.userId === 'string' ? metadata.userId : undefined,
+        organizationId:
+          typeof metadata.organizationId === 'string' ? metadata.organizationId : undefined,
+      },
+      workflow,
+    );
+  }
+
+  async reject(runId: string, reason?: string): Promise<ExecuteResponse> {
+    const run = await this.runsService.findById(runId);
+    if (run.status !== 'WAITING') {
+      return this.failRun(runId, `Run cannot be rejected from status ${run.status}`);
+    }
+    const metadata = (run.metadata as Record<string, unknown> | null) ?? {};
+    await this.runsService.updateMetadata(runId, {
+      ...metadata,
+      approvalStatus: 'REJECTED',
+      rejectionReason: reason ?? 'Plan rejected by user',
+    });
+    await this.runsService.cancel(runId);
+    return {
+      runId,
+      status: 'CANCELLED',
+      response: reason ?? 'Execution plan rejected.',
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    };
+  }
+
+  private async executeApproved(
+    runId: string,
+    plan: Plan,
+    request: ExecuteRequest,
+    workflow: WorkflowDefinition,
+  ): Promise<ExecuteResponse> {
+    try {
+      const agent = await this.agentsService.findById(request.agentId, true);
+      const agentSkills = await this.agentsService.getSkills(request.agentId);
+      const availableSkills = (
+        await Promise.all(
+          agentSkills
+            .filter((s) => s.enabled)
+            .map(async (s) => {
+              try {
+                const skill = await this.skillsService.findById(s.skillId);
+                return {
+                  id: s.id,
+                  skillId: s.skillId,
+                  name: skill.name,
+                  slug: skill.slug,
+                  description: skill.description ?? undefined,
+                  executionMode: skill.executionMode,
+                  instructions: skill.instructions ?? undefined,
+                  timeout: skill.timeout ?? undefined,
+                  inputSchema: (skill.inputSchema as Record<string, unknown> | null) ?? undefined,
+                  retryPolicy: (skill.retryPolicy as Record<string, unknown> | null) ?? undefined,
+                };
+              } catch {
+                return null;
+              }
+            }),
+        )
+      ).filter(Boolean) as SkillContext[];
+
+      const conversationHistory = request.conversationId
+        ? (await this.conversationsService.getMessages(request.conversationId)).map((m) => ({
+            role: m.role,
+            content: m.content,
+          }))
+        : [];
 
       const context = await this.contextBuilder.build({
         systemPrompt: 'You are a helpful AI employee.',
@@ -148,13 +269,11 @@ export class RuntimeService {
       });
 
       const skillsById = new Map(availableSkills.map((skill) => [skill.skillId, skill]));
-      const model = agent.model || 'gpt-4o';
-
       const tools: ToolSet = Object.fromEntries(
         plan.steps.map((step) => {
           const skill = skillsById.get(step.skillId);
           const executor: (args: Record<string, unknown>) => Promise<unknown> = (args) =>
-            this.executeSkill(step, skill, args, model, request);
+            this.executeSkill(step, skill, args, request);
           return [
             step.skillName,
             tool({
@@ -171,8 +290,8 @@ export class RuntimeService {
         }),
       );
 
-      const result = await this.aiAdapter.generateText({
-        model,
+      const result = await this.llmRuntime.generateText({
+        mode: 'medium',
         systemPrompt: context.system,
         messages: context.messages.map((m) => ({
           role: m.role as 'system' | 'user' | 'assistant',
@@ -183,7 +302,10 @@ export class RuntimeService {
         maxTokens: 2000,
       });
 
-      await this.runsService.updateUsage(run.id, result.usage);
+      await this.runsService.updateUsage(runId, result.usage);
+      await this.runsService.updateMetadata(runId, {
+        execution: result.execution,
+      });
 
       if (request.conversationId) {
         await this.conversationsService.addMessage(request.conversationId, {
@@ -207,29 +329,35 @@ export class RuntimeService {
         // Memory storage is best-effort
       }
 
-      return this.completeRun(run.id, result.content);
+      return this.completeRun(runId, result.content, workflow);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(
-        `Run ${run.id} failed: ${message}`,
-        error instanceof Error ? error.stack : undefined,
-      );
-      await this.runsService.fail(run.id, message);
-      return {
-        runId: run.id,
-        response: `An error occurred: ${message}`,
-        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-      };
+      return this.handleFailure(runId, error);
     }
+  }
+
+  private async handleFailure(runId: string, error: unknown): Promise<ExecuteResponse> {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    this.logger.error(
+      `Run ${runId} failed: ${message}`,
+      error instanceof Error ? error.stack : undefined,
+    );
+    await this.runsService.fail(runId, message);
+    return {
+      runId,
+      status: 'FAILED',
+      response: `An error occurred: ${message}`,
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    };
   }
 
   private async executeSkill(
     step: PlanStep,
     skill: SkillContext | undefined,
     args: Record<string, unknown>,
-    model: string,
-    request: ExecuteRequest,
+    requestOrLegacyModel: ExecuteRequest | string,
+    legacyRequest?: ExecuteRequest,
   ): Promise<unknown> {
+    const request = legacyRequest ?? (requestOrLegacyModel as ExecuteRequest);
     if (!skill) {
       throw new Error(`Skill "${step.skillName}" is not available for this agent`);
     }
@@ -279,7 +407,7 @@ export class RuntimeService {
       }
 
       default: {
-        return withTimeout(this.runAiSkill(skill, step, args, query, model, request));
+        return withTimeout(this.runAiSkill(skill, step, args, query, request));
       }
     }
   }
@@ -289,7 +417,6 @@ export class RuntimeService {
     step: PlanStep,
     args: Record<string, unknown>,
     query: string,
-    model: string,
     request: ExecuteRequest,
   ): Promise<string> {
     let knowledgeContext = '';
@@ -306,8 +433,8 @@ export class RuntimeService {
           : '\n\n(No relevant knowledge found.)';
     }
 
-    const result = await this.aiAdapter.generateText({
-      model,
+    const result = await this.llmRuntime.generateText({
+      mode: 'medium',
       systemPrompt: `${
         skill.instructions ?? `You are the "${skill.name}" skill.`
       }${knowledgeContext}`,
@@ -394,11 +521,28 @@ export class RuntimeService {
     return Number.isFinite(parsed) ? parsed : fallback;
   }
 
-  private async completeRun(runId: string, response: string): Promise<ExecuteResponse> {
+  private async waitingRun(runId: string, response: string, plan: Plan): Promise<ExecuteResponse> {
+    await this.runsService.transitionStatus(runId, 'WAITING');
+    return {
+      runId,
+      status: 'WAITING',
+      response,
+      plan,
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    };
+  }
+
+  private async completeRun(
+    runId: string,
+    response: string,
+    workflow?: WorkflowDefinition,
+  ): Promise<ExecuteResponse> {
     const run = await this.runsService.complete(runId, response);
     return {
       runId: run.id,
+      status: 'COMPLETED',
       response,
+      workflow,
       usage: {
         promptTokens: run.promptTokens,
         completionTokens: run.completionTokens,
@@ -411,6 +555,7 @@ export class RuntimeService {
     await this.runsService.fail(runId, error);
     return {
       runId,
+      status: 'FAILED',
       response: error,
       usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
     };

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../../database/database.module';
+import { LLMRuntimeModule } from '../../infrastructure/llm-runtime/llm-runtime.module';
 import { AgentsModule } from '../agents/agents.module';
 import { ConversationsModule } from '../conversations/conversations.module';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
@@ -15,6 +16,7 @@ import { RuntimeService } from './services/runtime.service';
 @Module({
   imports: [
     DatabaseModule,
+    LLMRuntimeModule,
     AgentsModule,
     PlannerModule,
     RunsModule,

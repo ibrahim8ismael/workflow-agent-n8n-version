@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AIAdapterService } from '../../infrastructure/ai-adapter/ai-adapter.service';
+import { LLMRuntimeService } from '../../infrastructure/llm-runtime/llm-runtime.service';
 import { Plan } from './interfaces/plan.interface';
 import { PlannerService } from './planner.service';
 
@@ -51,7 +52,7 @@ describe('PlannerService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    service = new PlannerService(mockAiAdapter);
+    service = new PlannerService(mockAiAdapter as unknown as LLMRuntimeService);
   });
 
   describe('createPlan', () => {
@@ -82,7 +83,7 @@ describe('PlannerService', () => {
 
       expect(mockAiAdapter.generateObject).toHaveBeenCalledWith(
         expect.objectContaining({
-          model: 'gpt-4o',
+          mode: 'high',
           temperature: 0.2,
           maxTokens: 2000,
           schema: expect.any(Object),

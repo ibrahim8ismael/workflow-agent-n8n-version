@@ -83,6 +83,10 @@ export class MockDatabaseService {
       deletedAt: null,
       ...args.data,
     } as Record<string, unknown>;
+    if (args.data.agent && typeof args.data.agent === 'object') {
+      const connection = (args.data.agent as { connect?: { id?: string } }).connect;
+      if (connection?.id) record.agentId = connection.id;
+    }
     col.set(id as string, record);
 
     if (args.select) {

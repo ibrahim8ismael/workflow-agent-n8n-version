@@ -125,7 +125,15 @@ describe('Runtime (e2e)', () => {
       expect(res.status).toBe(202);
 
       expect(res.body.runId).toBeDefined();
-      expect(res.body.response).toContain('test responder');
+      expect(res.body.status).toBe('WAITING');
+      expect(res.body.response).toContain('approval');
+
+      const approval = await http
+        .post(`/api/v1/runs/${res.body.runId}/approve`)
+        .send({})
+        .expect(202);
+      expect(approval.body.status).toBe('COMPLETED');
+      expect(approval.body.response).toContain('test responder');
 
       const runRes = await http.get(`/api/v1/runs/${res.body.runId}`).expect(200);
       expect(runRes.body.status).toBe('COMPLETED');
