@@ -12,6 +12,7 @@ import { PlannerService } from '../../planner/planner.service';
 import { RunsService } from '../../runs/runs.service';
 import { SKILL_EXECUTION_MODE } from '../../skills/constants/skill.constants';
 import { SkillsService } from '../../skills/services/skills.service';
+import { SkillEmployeeRuntimeService } from '../skill/skill-employee-runtime.service';
 import { ContextBuilderService } from './context-builder.service';
 import { ExecuteRequest, RuntimeService } from './runtime.service';
 
@@ -123,6 +124,7 @@ describe('RuntimeService', () => {
     name: 'Search Knowledge',
     slug: 'search-knowledge',
     description: 'Searches the knowledge base',
+    status: 'ACTIVE',
     executionMode: SKILL_EXECUTION_MODE.AI_ONLY,
     instructions: 'Search and summarize.',
     timeout: 60_000,
@@ -200,6 +202,13 @@ describe('RuntimeService', () => {
       mockSkillsService,
       mockKnowledgeService,
       mockConfigService,
+      new SkillEmployeeRuntimeService(
+        mockKnowledgeService,
+        mockMemoryService,
+        mockAiAdapter as unknown as LLMRuntimeService,
+        mockConfigService,
+      ),
+      { get: vi.fn().mockResolvedValue(null), set: vi.fn() } as never,
     );
   });
 

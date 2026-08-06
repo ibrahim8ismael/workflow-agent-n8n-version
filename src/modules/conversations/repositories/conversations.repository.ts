@@ -50,12 +50,14 @@ export class ConversationsRepository {
     conversationId: string,
     options?: { skip?: number; take?: number },
   ): Promise<Message[]> {
-    return this.db.message.findMany({
+    const messages = await this.db.message.findMany({
       where: { conversationId, deletedAt: null },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: 'desc' },
       skip: options?.skip,
       take: options?.take,
     });
+
+    return messages.reverse();
   }
 
   async countByAgent(agentId: string): Promise<number> {

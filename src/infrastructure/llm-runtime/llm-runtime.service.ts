@@ -63,6 +63,7 @@ export class LLMRuntimeService implements ILLMRuntime {
         };
       },
       params.maxRetries,
+      startedAt,
     );
 
     return result;
@@ -91,6 +92,7 @@ export class LLMRuntimeService implements ILLMRuntime {
         };
       },
       params.maxRetries,
+      startedAt,
     );
   }
 
@@ -137,9 +139,10 @@ export class LLMRuntimeService implements ILLMRuntime {
     mode: ExecutionMode,
     execute: (candidate: ModelCandidate) => Promise<T>,
     maxRetries?: number,
+    startedAt = Date.now(),
   ): Promise<T> {
     const candidates = this.resolveCandidates(mode);
-    const retries = maxRetries ?? this.config.get<number>('LLM_MAX_RETRIES', 2);
+    const retries = maxRetries ?? this.config.get<number>('LLM_MAX_RETRIES', 1);
     let lastError: unknown;
     let attempts = 0;
 
@@ -151,13 +154,16 @@ export class LLMRuntimeService implements ILLMRuntime {
           if (result && typeof result === 'object' && 'execution' in result) {
             const execution = (result as { execution: LLMExecutionMetadata }).execution;
             execution.retries = attempts - 1;
-            execution.durationMs = Date.now() - execution.durationMs;
+            execution.durationMs = Date.now() - startedAt;
           }
           return result;
         } catch (error) {
           lastError = error;
           if (!this.isRetryable(error)) throw error;
-          if (retry < retries) continue;
+          if (retry < retries) {
+            await this.delay(this.retryDelay(retry));
+            continue;
+          }
           this.logger.warn(`LLM provider failed: ${candidate.provider}:${candidate.model}`);
         }
       }
@@ -201,7 +207,7 @@ export class LLMRuntimeService implements ILLMRuntime {
   private executionMetadata(
     mode: ExecutionMode,
     candidate: ModelCandidate,
-    startedAt: number,
+    _startedAt: number,
     retries: number,
     usage: { promptTokens: number; completionTokens: number; totalTokens?: number },
   ): LLMExecutionMetadata {
@@ -210,7 +216,7 @@ export class LLMRuntimeService implements ILLMRuntime {
       mode,
       provider: candidate.provider,
       model: candidate.model,
-      durationMs: startedAt,
+      durationMs: 0,
       retries,
       estimatedCost: Number(
         (
@@ -250,5 +256,13 @@ export class LLMRuntimeService implements ILLMRuntime {
         message,
       )
     );
+  }
+
+  private retryDelay(retry: number): number {
+    return [250, 500, 1000][retry] ?? 1000;
+  }
+
+  private async delay(milliseconds: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, milliseconds));
   }
 }

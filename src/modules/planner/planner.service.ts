@@ -73,6 +73,7 @@ export class PlannerService {
         },
       ],
       schema: planSchema,
+      timeoutMs: 30_000,
       temperature: 0.2,
       maxTokens: 2000,
     });

@@ -15,6 +15,7 @@ const request = (_supertest as any).default ?? _supertest;
 const fakeAdapter = {
   generateObject: async () => ({
     object: {
+      intent: 'task_execution',
       goal: 'Answer the user',
       reasoning: 'The user needs a direct answer.',
       steps: [
@@ -40,7 +41,14 @@ const fakeAdapter = {
     finishReason: 'stop',
     usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
   }),
-  generateStream: async function* () {},
+  generateStream: async function* () {
+    yield { type: 'text', content: 'Hello from stream!' };
+    yield {
+      type: 'finish',
+      finishReason: 'stop',
+      usage: { promptTokens: 4, completionTokens: 4, totalTokens: 8 },
+    };
+  },
 };
 
 describe('Runtime (e2e)', () => {
@@ -121,7 +129,7 @@ describe('Runtime (e2e)', () => {
 
       const res = await http
         .post('/api/v1/runs')
-        .send({ userMessage: 'Say hello', agentId: 'agent-1' });
+        .send({ userMessage: 'Say hello', agentId: 'agent-1', mode: 'execution' });
       expect(res.status).toBe(202);
 
       expect(res.body.runId).toBeDefined();
@@ -151,6 +159,19 @@ describe('Runtime (e2e)', () => {
 
       const runRes = await http.get(`/api/v1/runs/${res.body.runId}`).expect(200);
       expect(runRes.body.status).toBe('FAILED');
+    });
+
+    it('should stream conversation tokens over SSE', async () => {
+      const res = await http
+        .post('/api/v1/runs/stream')
+        .send({ userMessage: 'Say hello', agentId: 'agent-1', mode: 'conversation' })
+        .expect(200);
+
+      expect(res.headers['content-type']).toContain('text/event-stream');
+      expect(res.text).toContain('event: run.started');
+      expect(res.text).toContain('event: token');
+      expect(res.text).toContain('Hello from stream!');
+      expect(res.text).toContain('event: run.completed');
     });
   });
 
