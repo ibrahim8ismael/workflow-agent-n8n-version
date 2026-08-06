@@ -1,9 +1,20 @@
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 import { LLMRuntimeService } from '../../infrastructure/llm-runtime/llm-runtime.service';
+import {
+  buildPlannerSystemPrompt,
+  buildPlannerUserPrompt,
+} from '../../infrastructure/prompts/system-prompts';
 import { Plan, PlannerInput } from './interfaces/plan.interface';
 
 const planSchema = z.object({
+  intent: z.enum([
+    'brainstorming',
+    'employee_design',
+    'task_execution',
+    'clarification',
+    'general_question',
+  ]),
   goal: z.string(),
   reasoning: z.string(),
   steps: z.array(
@@ -25,6 +36,9 @@ const planSchema = z.object({
   successCriteria: z.array(z.string()),
   estimatedComplexity: z.enum(['simple', 'medium', 'complex']),
   requiresApproval: z.boolean(),
+  approvalReasons: z.array(z.string()),
+  unavailableCapabilities: z.array(z.string()),
+  confidence: z.number().min(0).max(1),
 });
 
 @Injectable()
@@ -32,13 +46,32 @@ export class PlannerService {
   constructor(private readonly llmRuntime: LLMRuntimeService) {}
 
   async createPlan(input: PlannerInput): Promise<Plan> {
-    const systemPrompt = this.buildSystemPrompt(input);
-    const userPrompt = this.buildUserPrompt(input);
+    const availableSkills = input.availableSkills
+      .map(
+        (s) =>
+          `- ${s.name} (${s.skillId}): ${s.description ?? 'No description'} [Mode: ${s.executionMode}]`,
+      )
+      .join('\n');
+    const memory = input.memory?.map((m) => `- ${m.key}: ${m.content}`).join('\n');
+    const knowledge = input.knowledge?.join('\n');
 
     const result = await this.llmRuntime.generateObject({
-      mode: 'high',
-      systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }],
+      mode: input.effort ?? 'high',
+      systemPrompt: buildPlannerSystemPrompt({
+        availableSkills,
+        memory,
+        agentInstructions: input.agentInstructions,
+      }),
+      messages: [
+        {
+          role: 'user',
+          content: buildPlannerUserPrompt({
+            userMessage: input.userMessage,
+            knowledge,
+            conversationHistory: input.conversationHistory,
+          }),
+        },
+      ],
       schema: planSchema,
       temperature: 0.2,
       maxTokens: 2000,
@@ -50,48 +83,6 @@ export class PlannerService {
       agentId: input.agentId,
       conversationId: input.conversationId,
     };
-  }
-
-  private buildSystemPrompt(input: PlannerInput): string {
-    const skillDescriptions = input.availableSkills
-      .map(
-        (s) =>
-          `- ${s.name} (${s.skillId}): ${s.description ?? 'No description'} [Mode: ${s.executionMode}]`,
-      )
-      .join('\n');
-
-    const memoryContext =
-      input.memory && input.memory.length > 0
-        ? `\nRelevant Memory:\n${input.memory.map((m) => `- ${m.key}: ${m.content}`).join('\n')}`
-        : '';
-
-    return `You are an AI Planner. Your role is to understand user requests and create execution plans.
-
-Available Skills:
-${skillDescriptions}
-${memoryContext}
-
-${input.agentInstructions ? `Agent Instructions:\n${input.agentInstructions}\n` : ''}
-
-Rules:
-1. Always choose the most relevant Skills for the request.
-2. If required information is missing, add it to missingInputs.
-3. Skills should be ordered logically (prerequisites first).
-4. If the request cannot be fulfilled, set missingInputs explaining why.
-5. Never invent Skills that don't exist in the available list.
-6. Keep plans as simple as possible.`;
-  }
-
-  private buildUserPrompt(input: PlannerInput): string {
-    const knowledgeContext =
-      input.knowledge && input.knowledge.length > 0
-        ? `\nRelevant Knowledge:\n${input.knowledge.join('\n')}\n`
-        : '';
-
-    return `${knowledgeContext}
-User Request: ${input.userMessage}
-
-Create an execution plan to fulfill this request using the available Skills.`;
   }
 
   async validatePlan(plan: Plan): Promise<{ valid: boolean; errors: string[] }> {

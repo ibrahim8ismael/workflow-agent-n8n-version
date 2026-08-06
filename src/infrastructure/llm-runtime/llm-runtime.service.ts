@@ -46,7 +46,7 @@ export class LLMRuntimeService implements ILLMRuntime {
       params.mode,
       async (candidate) => {
         const adapterParams: AdapterGenerateParams = {
-          model: candidate.model,
+          model: this.modelString(candidate),
           systemPrompt: params.systemPrompt,
           messages: params.messages,
           sdkTools: params.sdkTools,
@@ -74,7 +74,7 @@ export class LLMRuntimeService implements ILLMRuntime {
       params.mode,
       async (candidate) => {
         const adapterParams: AdapterGenerateObjectParams = {
-          model: candidate.model,
+          model: this.modelString(candidate),
           systemPrompt: params.systemPrompt,
           messages: params.messages,
           schema: params.schema,
@@ -103,7 +103,7 @@ export class LLMRuntimeService implements ILLMRuntime {
       totalTokens: 0,
     });
     const stream = this.aiAdapter.generateStream({
-      model: candidate.model,
+      model: this.modelString(candidate),
       systemPrompt: params.systemPrompt,
       messages: params.messages,
       sdkTools: params.sdkTools,
@@ -191,6 +191,11 @@ export class LLMRuntimeService implements ILLMRuntime {
     }
 
     return candidates;
+  }
+
+  private modelString(candidate: ModelCandidate): string {
+    const prefix = `${candidate.provider}:`;
+    return candidate.model.startsWith(prefix) ? candidate.model : `${prefix}${candidate.model}`;
   }
 
   private executionMetadata(

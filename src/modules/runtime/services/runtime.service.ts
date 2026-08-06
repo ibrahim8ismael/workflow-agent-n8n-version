@@ -2,7 +2,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { ToolSet } from 'ai';
 import { jsonSchema, tool } from 'ai';
+import type { ExecutionMode } from '../../../infrastructure/llm-runtime/interfaces/llm-runtime.interface';
 import { LLMRuntimeService } from '../../../infrastructure/llm-runtime/llm-runtime.service';
+import {
+  buildConversationSystemPrompt,
+  buildRuntimeSystemPrompt,
+  buildSkillSystemPrompt,
+} from '../../../infrastructure/prompts/system-prompts';
 import { AgentsService } from '../../agents/services/agents.service';
 import { ConversationsService } from '../../conversations/services/conversations.service';
 import { KnowledgeService } from '../../knowledge/services/knowledge.service';
@@ -14,11 +20,11 @@ import { SKILL_EXECUTION_MODE } from '../../skills/constants/skill.constants';
 import { SkillsService } from '../../skills/services/skills.service';
 import { generateWorkflow, type WorkflowDefinition } from '../types/workflow.types';
 import { ContextBuilderService } from './context-builder.service';
-
 export interface ExecuteRequest {
   userMessage: string;
   agentId: string;
   conversationId?: string;
+  effort?: ExecutionMode;
   userId?: string;
   organizationId?: string;
 }
@@ -123,7 +129,18 @@ export class RuntimeService {
         organizationId: request.organizationId,
         availableSkills,
         conversationHistory,
+        effort: request.effort ?? 'medium',
       });
+
+      if (plan.intent !== 'task_execution') {
+        await this.runsService.savePlan(run.id, plan as unknown as Record<string, unknown>);
+        return this.respondConversationally(
+          run.id,
+          request,
+          agent.instructions,
+          conversationHistory,
+        );
+      }
 
       const validation = await this.plannerService.validatePlan(plan);
       if (!validation.valid) {
@@ -139,14 +156,84 @@ export class RuntimeService {
       });
 
       if (plan.missingInputs && plan.missingInputs.length > 0) {
-        const missingMsg = plan.missingInputs.map((m) => `- ${m.description}`).join('\n');
-        return this.waitingRun(run.id, `I need more information:\n${missingMsg}`, plan);
+        return this.waitingRun(run.id, this.formatClarification(plan.missingInputs), plan);
       }
 
       return this.waitingRun(run.id, 'The execution plan is ready for your approval.', plan);
     } catch (error) {
       return this.handleFailure(run.id, error);
     }
+  }
+
+  private formatClarification(missingInputs: Array<{ description: string }>): string {
+    const questions = missingInputs
+      .map(({ description }) => description.trim())
+      .filter(Boolean)
+      .filter((description) => !/\b(no|empty|available) skills?\b|skill list/i.test(description));
+
+    const usefulQuestions =
+      questions.length > 0
+        ? questions
+        : [
+            'What should this employee do day to day?',
+            'Which tools or channels should it use, such as Gmail, Outlook, WhatsApp, or Slack?',
+            'Who should receive its messages or updates?',
+          ];
+
+    return [
+      'I can help you design that employee. A few details will help me get it right:',
+      '',
+      ...usefulQuestions.map((question) => `- ${question}`),
+      '',
+      'You can answer in your own words, and we can refine the setup together.',
+    ].join('\n');
+  }
+
+  private async respondConversationally(
+    runId: string,
+    request: ExecuteRequest,
+    agentInstructions: string | null | undefined,
+    conversationHistory: Array<{ role: string; content: string }>,
+  ): Promise<ExecuteResponse> {
+    const context = await this.contextBuilder.build({
+      systemPrompt: buildConversationSystemPrompt({
+        agentInstructions: agentInstructions ?? undefined,
+      }),
+      agentId: request.agentId,
+      conversationId: request.conversationId,
+      organizationId: request.organizationId,
+      userMessage: request.userMessage,
+      conversationHistory,
+    });
+    const result = await this.llmRuntime.generateText({
+      mode: request.effort ?? 'medium',
+      systemPrompt: context.system,
+      messages: context.messages.map((message) => ({
+        role: message.role as 'system' | 'user' | 'assistant',
+        content: message.content,
+      })),
+      temperature: 0.7,
+      maxTokens: 1200,
+    });
+
+    await this.runsService.updateUsage(runId, result.usage);
+    await this.runsService.updateMetadata(runId, {
+      intent: 'conversation',
+      execution: result.execution,
+    });
+
+    if (request.conversationId) {
+      await this.conversationsService.addMessage(request.conversationId, {
+        role: 'user',
+        content: request.userMessage,
+      });
+      await this.conversationsService.addMessage(request.conversationId, {
+        role: 'assistant',
+        content: result.content,
+      });
+    }
+
+    return this.completeRun(runId, result.content);
   }
 
   async approve(runId: string): Promise<ExecuteResponse> {
@@ -255,17 +342,18 @@ export class RuntimeService {
         : [];
 
       const context = await this.contextBuilder.build({
-        systemPrompt: 'You are a helpful AI employee.',
-        agentInstructions: agent.instructions ?? undefined,
+        systemPrompt: buildRuntimeSystemPrompt({
+          agentInstructions: agent.instructions ?? undefined,
+          plan:
+            plan.steps.length > 0
+              ? `Goal: ${plan.goal}\n\nSteps:\n${plan.steps.map((s) => `${s.order}. ${s.skillName}`).join('\n')}`
+              : undefined,
+        }),
         agentId: request.agentId,
         conversationId: request.conversationId,
         organizationId: request.organizationId,
         userMessage: request.userMessage,
         conversationHistory,
-        skillInstructions:
-          plan.steps.length > 0
-            ? `I have the following plan:\n${plan.goal}\n\nSteps:\n${plan.steps.map((s) => `${s.order}. ${s.skillName}`).join('\n')}`
-            : undefined,
       });
 
       const skillsById = new Map(availableSkills.map((skill) => [skill.skillId, skill]));
@@ -435,9 +523,11 @@ export class RuntimeService {
 
     const result = await this.llmRuntime.generateText({
       mode: 'medium',
-      systemPrompt: `${
-        skill.instructions ?? `You are the "${skill.name}" skill.`
-      }${knowledgeContext}`,
+      systemPrompt: buildSkillSystemPrompt({
+        name: skill.name,
+        instructions: skill.instructions,
+        knowledge: knowledgeContext.trim() || undefined,
+      }),
       messages: [
         {
           role: 'user',

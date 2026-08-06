@@ -2,7 +2,7 @@ import type { Schema } from '@ai-sdk/provider-utils';
 import { asSchema } from '@ai-sdk/provider-utils';
 import { Injectable } from '@nestjs/common';
 import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolCallPart } from 'ai';
-import { generateObject, generateText, streamText } from 'ai';
+import { generateObject, generateText, NoObjectGeneratedError, streamText } from 'ai';
 import { z } from 'zod';
 import type {
   AdapterGenerateObjectParams,
@@ -100,19 +100,51 @@ export class AIAdapterService implements IAIAdapter {
   }
 
   async generateObject(params: AdapterGenerateObjectParams): Promise<AdapterGenerateObjectResult> {
-    const result = await generateObject({
-      model: this.createModel(params.model),
-      system: params.systemPrompt,
-      messages: this.toCoreMessages(params.messages),
-      schema: this.toSdkSchema(params.schema),
-      temperature: params.temperature,
-      maxOutputTokens: params.maxTokens,
-    });
+    const model = this.createModel(params.model);
+    const messages = this.toCoreMessages(params.messages);
 
-    return {
-      object: result.object,
-      finishReason: result.finishReason,
-      usage: this.toUsage(result.usage),
-    };
+    try {
+      const result = await generateObject({
+        model,
+        system: params.systemPrompt,
+        messages,
+        schema: this.toSdkSchema(params.schema),
+        temperature: params.temperature,
+        maxOutputTokens: params.maxTokens,
+      });
+
+      return {
+        object: result.object,
+        finishReason: result.finishReason,
+        usage: this.toUsage(result.usage),
+      };
+    } catch (error) {
+      if (!NoObjectGeneratedError.isInstance(error)) throw error;
+
+      const fallback = await generateText({
+        model,
+        system: `${params.systemPrompt}\n\nReturn exactly one valid JSON object matching the requested schema. Do not use markdown fences or explanatory text.`,
+        messages,
+        temperature: params.temperature,
+        maxOutputTokens: params.maxTokens,
+      });
+      const parsed = this.parseJsonObject(fallback.text);
+      const validated = params.schema.safeParse(parsed);
+      if (!validated.success) throw error;
+
+      return {
+        object: validated.data,
+        finishReason: fallback.finishReason,
+        usage: this.toUsage(fallback.usage),
+      };
+    }
+  }
+
+  private parseJsonObject(text: string): unknown {
+    const withoutFences = text
+      .trim()
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/, '');
+    return JSON.parse(withoutFences);
   }
 }

@@ -37,7 +37,7 @@ describe('LLMRuntimeService', () => {
     const result = await service.generateText({ mode: 'low', messages: [] });
 
     expect(adapter.generateText).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'gpt-4o-mini' }),
+      expect.objectContaining({ model: 'openai:gpt-4o-mini' }),
     );
     expect(result.execution).toMatchObject({
       mode: 'low',
@@ -71,7 +71,7 @@ describe('LLMRuntimeService', () => {
 
     expect(adapter.generateText).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ model: 'claude-3-haiku' }),
+      expect.objectContaining({ model: 'anthropic:claude-3-haiku' }),
     );
     expect(result.execution.provider).toBe('anthropic');
     expect(result.execution.retries).toBe(1);
@@ -95,7 +95,7 @@ describe('LLMRuntimeService', () => {
 
     expect(result.object).toEqual({ answer: true });
     expect(adapter.generateObject).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'gpt-4o' }),
+      expect.objectContaining({ model: 'openai:gpt-4o' }),
     );
   });
 
