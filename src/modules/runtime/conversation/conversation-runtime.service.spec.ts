@@ -23,6 +23,7 @@ describe('ConversationRuntimeService', () => {
     const conversationsService = {
       getMessages: vi.fn().mockResolvedValue([]),
       addMessage: vi.fn().mockResolvedValue(undefined),
+      titleFromFirstMessage: vi.fn().mockResolvedValue(undefined),
     };
     const contextBuilder = {
       build: vi.fn().mockResolvedValue({
@@ -89,7 +90,11 @@ describe('ConversationRuntimeService', () => {
     const service = new ConversationRuntimeService(
       runsService as never,
       { findById: vi.fn().mockResolvedValue({ instructions: 'Be helpful.' }) } as never,
-      { getMessages: vi.fn().mockResolvedValue([]), addMessage: vi.fn() } as never,
+      {
+        getMessages: vi.fn().mockResolvedValue([]),
+        addMessage: vi.fn(),
+        titleFromFirstMessage: vi.fn(),
+      } as never,
       {
         build: vi.fn().mockResolvedValue({
           system: 'system',

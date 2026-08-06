@@ -316,8 +316,11 @@ temporary session
   -> durable agent creation
 ```
 
-This requires frontend coordination and a decision between Redis-only session
-state and a durable blueprint table.
+The current implementation keeps the reviewable blueprint in the design run
+metadata and exposes an explicit confirmation endpoint. Confirmation creates a
+`DRAFT` agent and stores its approved employee profile as `AGENT` memory. A
+dedicated durable blueprint table can still be introduced later if drafts need
+independent lifecycle management from runs.
 
 ## Tests
 

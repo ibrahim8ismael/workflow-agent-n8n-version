@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { Conversation, Message } from '@prisma/client';
 import { ConversationsService } from '../services/conversations.service';
 
@@ -61,6 +61,11 @@ export class ConversationsController {
       skip: skip ? Number(skip) : undefined,
       take: take ? Number(take) : undefined,
     });
+  }
+
+  @Patch(':id')
+  async update(@Param('id') id: string, @Body() body: { title?: string }): Promise<Conversation> {
+    return this.conversationsService.updateTitle(id, body.title ?? '');
   }
 
   @Post(':id/resolve')

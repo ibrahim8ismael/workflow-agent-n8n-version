@@ -87,6 +87,10 @@ export class MockDatabaseService {
       const connection = (args.data.agent as { connect?: { id?: string } }).connect;
       if (connection?.id) record.agentId = connection.id;
     }
+    if (args.data.conversation && typeof args.data.conversation === 'object') {
+      const connection = (args.data.conversation as { connect?: { id?: string } }).connect;
+      if (connection?.id) record.conversationId = connection.id;
+    }
     col.set(id as string, record);
 
     if (args.select) {
@@ -286,6 +290,9 @@ export class MockDatabaseService {
   }
   get conversationMessage() {
     return this.modelProxy('conversationMessage');
+  }
+  get message() {
+    return this.modelProxy('message');
   }
   get knowledgeDocument() {
     return this.modelProxy('knowledgeDocument');

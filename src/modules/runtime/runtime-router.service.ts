@@ -39,6 +39,10 @@ export class RuntimeRouterService {
     return this.conversationRuntime.stream(request);
   }
 
+  confirmEmployeeDesign(runId: string): Promise<ExecuteResponse> {
+    return this.employeeDesignRuntime.confirm(runId);
+  }
+
   private async withMode(
     result: Promise<ExecuteResponse>,
     mode: RuntimeMode,

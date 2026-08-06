@@ -118,6 +118,7 @@ Issues a new access token for the selected active context. No re-login needed.
 | Method | Path | Auth | Notes |
 | --- | --- | --- | --- |
 | `POST` | `/runs` | optional | Execute an agent. Returns 202 with `{ runId, response, usage }` (see below) |
+| `POST` | `/runs/:id/confirm` | optional | Confirm a ready employee design and create a `DRAFT` agent |
 | `GET` | `/runs/:id` | optional | Poll run status/result (`Run` entity: status, result, token usage) |
 
 ```json
@@ -126,6 +127,11 @@ Issues a new access token for the selected active context. No re-login needed.
 ```
 
 `POST /runs` runs synchronously in the request; if the run fails, the response body still returns with the error message and the run is marked `FAILED`. Poll `GET /runs/:id` for the persisted state.
+
+Employee design runs are review-only. They return a blueprint with `description`,
+`instructions`, and a readiness state. Call `/runs/:id/confirm` only after the
+business owner approves a blueprint. Confirmation creates the employee as
+`DRAFT`; it does not publish or activate it.
 
 ### Agents
 
@@ -147,7 +153,7 @@ Execution modes: `KNOWLEDGE_RETRIEVAL`, `MEMORY_RETRIEVAL`, `N8N_WORKFLOW`, `AI_
 
 ### Conversations
 
-`GET/POST /conversations`, `GET/PATCH/DELETE /conversations/:id`, `GET /conversations/:id/messages` — chat history; messages are persisted during a run when a `conversationId` is passed.
+`GET/POST /conversations`, `GET/PATCH/DELETE /conversations/:id`, `GET /conversations/:id/messages` — chat history. A run without a `conversationId` creates a `New chat` conversation automatically and returns its `conversationId`. Use that ID in `/new/:conversationId` and send it with every later run.
 
 ### Channels / Integrations / Notifications
 

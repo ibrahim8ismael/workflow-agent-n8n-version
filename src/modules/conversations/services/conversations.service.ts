@@ -14,13 +14,32 @@ export class ConversationsService {
     metadata?: Record<string, unknown>;
   }): Promise<Conversation> {
     return this.conversationsRepository.create({
-      title: dto.title,
+      title: dto.title?.trim() || 'New chat',
       agent: { connect: { id: dto.agentId } },
       ...(dto.userId ? { user: { connect: { id: dto.userId } } } : {}),
       ...(dto.organizationId ? { organization: { connect: { id: dto.organizationId } } } : {}),
       metadata: dto.metadata as never,
       status: 'ACTIVE',
     } as never);
+  }
+
+  async updateTitle(id: string, title: string): Promise<Conversation> {
+    await this.findById(id);
+    const normalizedTitle = title.trim();
+    if (!normalizedTitle) throw new Error('Conversation title cannot be empty');
+    return this.conversationsRepository.update(id, { title: normalizedTitle });
+  }
+
+  async titleFromFirstMessage(id: string, message: string): Promise<Conversation> {
+    const conversation = await this.findById(id);
+    if (conversation.title && conversation.title !== 'New chat') return conversation;
+
+    const normalizedMessage = message.replace(/\s+/g, ' ').trim();
+    const title =
+      normalizedMessage.length > 60
+        ? `${normalizedMessage.slice(0, 57).trimEnd()}...`
+        : normalizedMessage;
+    return title ? this.conversationsRepository.update(id, { title }) : conversation;
   }
 
   async findById(id: string): Promise<Conversation> {
@@ -56,12 +75,14 @@ export class ConversationsService {
     message: { role: string; content: string; metadata?: Record<string, unknown> },
   ): Promise<Message> {
     await this.findById(conversationId);
-    return this.conversationsRepository.addMessage({
+    const createdMessage = await this.conversationsRepository.addMessage({
       conversation: { connect: { id: conversationId } },
       role: message.role,
       content: message.content,
       metadata: message.metadata as never,
     } as never);
+    await this.conversationsRepository.update(conversationId, { updatedAt: new Date() });
+    return createdMessage;
   }
 
   async getMessages(

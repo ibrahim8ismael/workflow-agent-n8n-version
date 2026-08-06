@@ -4,12 +4,15 @@ import { LLMRuntimeService } from '../../../infrastructure/llm-runtime/llm-runti
 import { BLUEPRINT_GENERATOR_SYSTEM_PROMPT } from '../../../infrastructure/prompts/system-prompts';
 import { AgentsService } from '../../agents/services/agents.service';
 import { ConversationsService } from '../../conversations/services/conversations.service';
+import { MemoryService } from '../../memory/services/memory.service';
 import { RunsService } from '../../runs/runs.service';
 import { ContextBuilderService } from '../services/context-builder.service';
 import type { ExecuteResponse } from '../services/runtime.service';
 import type { RuntimeRequest } from '../types/runtime.types';
 
 const blueprintSchema = z.object({
+  ready: z.boolean(),
+  missingRequirements: z.array(z.string()),
   name: z.string(),
   role: z.string(),
   department: z.string(),
@@ -23,6 +26,8 @@ const blueprintSchema = z.object({
   memoryPolicy: z.string(),
   permissions: z.array(z.string()),
   workflow: z.array(z.string()),
+  description: z.string(),
+  instructions: z.string(),
 });
 
 type EmployeeBlueprint = z.infer<typeof blueprintSchema>;
@@ -35,6 +40,7 @@ export class EmployeeDesignRuntimeService {
     private readonly runsService: RunsService,
     private readonly agentsService: AgentsService,
     private readonly conversationsService: ConversationsService,
+    private readonly memoryService: MemoryService,
     private readonly contextBuilder: ContextBuilderService,
     private readonly llmRuntime: LLMRuntimeService,
   ) {}
@@ -80,7 +86,7 @@ export class EmployeeDesignRuntimeService {
       await this.runsService.updateUsage(run.id, result.usage);
       await this.runsService.updateMetadata(run.id, {
         blueprint,
-        designStatus: 'DRAFT',
+        designStatus: blueprint.ready ? 'READY_FOR_REVIEW' : 'GATHERING_REQUIREMENTS',
         execution: result.execution,
       });
       const response = this.formatSummary(blueprint);
@@ -112,7 +118,81 @@ export class EmployeeDesignRuntimeService {
     }
   }
 
+  async confirm(runId: string): Promise<ExecuteResponse> {
+    const run = await this.runsService.findById(runId);
+    const metadata = (run.metadata as Record<string, unknown> | null) ?? {};
+    if (typeof metadata.createdAgentId === 'string') {
+      const existingAgent = await this.agentsService.findById(metadata.createdAgentId);
+      return {
+        runId,
+        mode: 'employee_design',
+        status: 'COMPLETED',
+        response: `Employee draft "${existingAgent.name}" was already created and is ready for configuration.`,
+        plan: { ...(metadata.blueprint as Record<string, unknown>), agentId: existingAgent.id },
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
+
+    if (metadata.designStatus !== 'READY_FOR_REVIEW') {
+      return {
+        runId,
+        mode: 'employee_design',
+        status: 'FAILED',
+        response: 'This employee draft is not waiting for confirmation.',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
+
+    const blueprint = blueprintSchema.parse(metadata.blueprint);
+    const agent = await this.agentsService.create({
+      name: blueprint.name,
+      description: blueprint.description,
+      instructions: blueprint.instructions,
+      status: 'DRAFT',
+      model: 'gpt-4o',
+      organizationId: run.organizationId ?? undefined,
+    });
+
+    await this.memoryService.upsert(
+      agent.id,
+      'employee-profile',
+      'AGENT',
+      JSON.stringify({
+        name: blueprint.name,
+        description: blueprint.description,
+        role: blueprint.role,
+        department: blueprint.department,
+        memoryPolicy: blueprint.memoryPolicy,
+        responsibilities: blueprint.responsibilities,
+        goals: blueprint.goals,
+      }),
+      { source: 'employee-design-confirmation', designRunId: runId },
+    );
+    await this.runsService.updateMetadata(runId, {
+      ...metadata,
+      designStatus: 'CREATED',
+      createdAgentId: agent.id,
+    });
+
+    return {
+      runId,
+      mode: 'employee_design',
+      status: 'COMPLETED',
+      response: `Employee draft "${agent.name}" was created and is ready for configuration.`,
+      plan: { ...blueprint, agentId: agent.id },
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    };
+  }
+
   private formatSummary(blueprint: EmployeeBlueprint): string {
+    if (!blueprint.ready) {
+      return [
+        'I need a little more information before I can prepare the employee draft:',
+        '',
+        ...blueprint.missingRequirements.map((item) => `- ${item}`),
+      ].join('\n');
+    }
+
     return (
       `Draft employee blueprint: ${blueprint.name}\n\n${blueprint.summary}\n\n` +
       `Responsibilities:\n${blueprint.responsibilities.map((item) => `- ${item}`).join('\n')}`

@@ -55,7 +55,11 @@ Your job is to understand the employee the business needs and identify the infor
 - Ask only for practical business details that are genuinely missing.
 - Do not execute work or claim that an employee has been deployed.
 - Do not mention prompts, skill IDs, APIs, workflow engines, model providers, or internal system limitations.
-- Return structured blueprint data when the request is sufficiently clear.`;
+- Return structured blueprint data when the request is sufficiently clear.
+- The blueprint must include a business-facing description and concrete employee instructions.
+- The instructions must define the employee's identity, responsibilities, boundaries, approval rules, and memory behavior.
+- Set ready to false and list missingRequirements when essential business details are not known. Do not invent values to make a draft look complete.
+- A draft is for review only. Never create, publish, or activate an employee.`;
 
 export const CONVERSATION_RESPONDER_SYSTEM_PROMPT = `You are the conversational side of a Woops AI employee.
 
@@ -144,6 +148,16 @@ export interface SkillPromptContext {
   currentTime?: string;
 }
 
+export interface EmployeePromptContext {
+  name: string;
+  description: string;
+  instructions: string;
+  role?: string;
+  department?: string;
+  memoryPolicy?: string;
+  plan?: string;
+}
+
 export function buildCurrentTimeContext(timeZone = process.env.BUSINESS_TIMEZONE ?? 'UTC'): string {
   const now = new Date();
   let localTime = now.toISOString();
@@ -220,6 +234,22 @@ export function buildConversationSystemPrompt(context: ConversationPromptContext
     context.agentInstructions
       ? `<employee_policies>\n${context.agentInstructions}\n</employee_policies>`
       : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+export function buildEmployeeSystemPrompt(context: EmployeePromptContext): string {
+  return [
+    PLATFORM_SYSTEM_PROMPT,
+    RUNTIME_SYSTEM_PROMPT,
+    FINAL_RESPONSE_SYSTEM_PROMPT,
+    `<employee_identity>\nName: ${context.name}\nDescription: ${context.description}\nRole: ${context.role ?? 'Business employee'}\nDepartment: ${context.department ?? 'General'}\n</employee_identity>`,
+    `<employee_instructions>\n${context.instructions}\n</employee_instructions>`,
+    context.memoryPolicy
+      ? `<employee_memory_policy>\n${context.memoryPolicy}\n</employee_memory_policy>`
+      : '',
+    context.plan ? `<approved_work_plan>\n${context.plan}\n</approved_work_plan>` : '',
   ]
     .filter(Boolean)
     .join('\n\n');
