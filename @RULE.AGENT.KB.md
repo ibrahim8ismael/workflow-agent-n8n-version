@@ -4,6 +4,9 @@
 > Status: Draft
 > Owner: Woops Architecture Team
 
+> Implementation reference: [[@RULE.AGENT.KB.ARCHITECTURE]]
+> API reference: [[docs/knowledge-base]]
+
 ---
 
 # 1. Overview
@@ -675,3 +678,19 @@ Knowledge management belongs to administrators.
 13. The Agent should adapt its behavior according to the organization's Knowledge Base.
 14. Approved Knowledge always has priority over AI assumptions.
 15. A well-maintained Knowledge Base produces reliable AI Employees.
+
+---
+
+# 28. Current Backend Implementation
+
+The current Woops backend implements the Knowledge Base as a Markdown-only document system.
+
+- Upload: `POST /api/v1/knowledge/upload` accepts `.md` files through multipart form-data.
+- Direct ingestion: `POST /api/v1/knowledge/ingest` accepts Markdown text with `contentType: markdown`.
+- Edit: `PATCH /api/v1/knowledge/:id` replaces the full Markdown document when `content` is provided and reindexes its chunks.
+- Delete: `DELETE /api/v1/knowledge/:id` soft-deletes the document and its chunks.
+- Limit: all ingestion and edit paths enforce a 5 MB UTF-8 byte limit.
+- Chunking: content is split into 1,000-character chunks with 200-character overlap.
+- Retrieval: current search is organization-scoped, case-insensitive text containment.
+
+The implementation stores extracted Markdown text and chunk metadata in PostgreSQL. It does not currently store the uploaded binary file, generate embeddings, or provide approval workflows. See [[@RULE.AGENT.KB.ARCHITECTURE]] for the implemented architecture and current gaps.
