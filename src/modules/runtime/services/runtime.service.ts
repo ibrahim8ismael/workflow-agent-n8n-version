@@ -7,17 +7,20 @@ import { LLMRuntimeService } from '../../../infrastructure/llm-runtime/llm-runti
 import {
   buildConversationSystemPrompt,
   buildRuntimeSystemPrompt,
-  buildSkillSystemPrompt,
 } from '../../../infrastructure/prompts/system-prompts';
 import { AgentsService } from '../../agents/services/agents.service';
 import { ConversationsService } from '../../conversations/services/conversations.service';
 import { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import { MemoryService } from '../../memory/services/memory.service';
-import { type Plan, type PlanStep } from '../../planner/interfaces/plan.interface';
+import { type Plan } from '../../planner/interfaces/plan.interface';
 import { PlannerService } from '../../planner/planner.service';
 import { RunsService } from '../../runs/runs.service';
-import { SKILL_EXECUTION_MODE } from '../../skills/constants/skill.constants';
 import { SkillsService } from '../../skills/services/skills.service';
+import { RuntimeCacheService } from '../shared/runtime-cache.service';
+import {
+  SkillEmployeeRuntimeService,
+  type SkillManifest,
+} from '../skill/skill-employee-runtime.service';
 import { generateWorkflow, type WorkflowDefinition } from '../types/workflow.types';
 import { ContextBuilderService } from './context-builder.service';
 export interface ExecuteRequest {
@@ -32,6 +35,7 @@ export interface ExecuteRequest {
 export interface ExecuteResponse {
   runId: string;
   response: string;
+  mode?: string;
   status?: string;
   plan?: unknown;
   workflow?: WorkflowDefinition;
@@ -42,18 +46,7 @@ export interface ExecuteResponse {
   };
 }
 
-interface SkillContext {
-  id: string;
-  skillId: string;
-  name: string;
-  slug: string;
-  description?: string;
-  executionMode: string;
-  instructions?: string;
-  timeout?: number;
-  retryPolicy?: Record<string, unknown>;
-  inputSchema?: Record<string, unknown>;
-}
+type SkillContext = SkillManifest;
 
 @Injectable()
 export class RuntimeService {
@@ -68,8 +61,10 @@ export class RuntimeService {
     private readonly conversationsService: ConversationsService,
     private readonly memoryService: MemoryService,
     private readonly skillsService: SkillsService,
-    private readonly knowledgeService: KnowledgeService,
-    private readonly configService: ConfigService,
+    readonly _knowledgeService: KnowledgeService,
+    readonly _configService: ConfigService,
+    private readonly skillRuntime: SkillEmployeeRuntimeService,
+    private readonly runtimeCache: RuntimeCacheService,
   ) {}
 
   async execute(request: ExecuteRequest): Promise<ExecuteResponse> {
@@ -83,18 +78,18 @@ export class RuntimeService {
     try {
       await this.runsService.transitionStatus(run.id, 'PREPARING');
 
-      const agent = await this.agentsService.findById(request.agentId, true);
+      const agent = await this.loadAgent(request.agentId, true);
 
       await this.runsService.transitionStatus(run.id, 'PLANNING');
 
-      const agentSkills = await this.agentsService.getSkills(request.agentId);
+      const agentSkills = await this.loadAgentSkills(request.agentId);
       const availableSkills = (
         await Promise.all(
           agentSkills
             .filter((s) => s.enabled)
             .map(async (s) => {
               try {
-                const skill = await this.skillsService.findById(s.skillId);
+                const skill = await this.loadSkill(s.skillId);
                 return {
                   id: s.id,
                   skillId: s.skillId,
@@ -102,9 +97,11 @@ export class RuntimeService {
                   slug: skill.slug,
                   description: skill.description ?? undefined,
                   executionMode: skill.executionMode,
+                  status: skill.status,
                   instructions: skill.instructions ?? undefined,
                   timeout: skill.timeout ?? undefined,
                   inputSchema: (skill.inputSchema as Record<string, unknown> | null) ?? undefined,
+                  outputSchema: (skill.outputSchema as Record<string, unknown> | null) ?? undefined,
                   retryPolicy: (skill.retryPolicy as Record<string, unknown> | null) ?? undefined,
                 };
               } catch {
@@ -306,15 +303,15 @@ export class RuntimeService {
     workflow: WorkflowDefinition,
   ): Promise<ExecuteResponse> {
     try {
-      const agent = await this.agentsService.findById(request.agentId, true);
-      const agentSkills = await this.agentsService.getSkills(request.agentId);
+      const agent = await this.loadAgent(request.agentId, true);
+      const agentSkills = await this.loadAgentSkills(request.agentId);
       const availableSkills = (
         await Promise.all(
           agentSkills
             .filter((s) => s.enabled)
             .map(async (s) => {
               try {
-                const skill = await this.skillsService.findById(s.skillId);
+                const skill = await this.loadSkill(s.skillId);
                 return {
                   id: s.id,
                   skillId: s.skillId,
@@ -322,9 +319,11 @@ export class RuntimeService {
                   slug: skill.slug,
                   description: skill.description ?? undefined,
                   executionMode: skill.executionMode,
+                  status: skill.status,
                   instructions: skill.instructions ?? undefined,
                   timeout: skill.timeout ?? undefined,
                   inputSchema: (skill.inputSchema as Record<string, unknown> | null) ?? undefined,
+                  outputSchema: (skill.outputSchema as Record<string, unknown> | null) ?? undefined,
                   retryPolicy: (skill.retryPolicy as Record<string, unknown> | null) ?? undefined,
                 };
               } catch {
@@ -438,177 +437,43 @@ export class RuntimeService {
     };
   }
 
-  private async executeSkill(
-    step: PlanStep,
+  private async loadAgent(agentId: string, includeSkills = false) {
+    const key = `agent:${includeSkills ? 'full' : 'profile'}:${agentId}`;
+    const cached = await this.runtimeCache.get<Awaited<ReturnType<AgentsService['findById']>>>(key);
+    if (cached) return cached;
+    const agent = await this.agentsService.findById(agentId, includeSkills);
+    void this.runtimeCache.set(key, agent, 60);
+    return agent;
+  }
+
+  private async loadAgentSkills(agentId: string) {
+    const key = `agent-skills:${agentId}`;
+    const cached =
+      await this.runtimeCache.get<Awaited<ReturnType<AgentsService['getSkills']>>>(key);
+    if (cached) return cached;
+    const skills = await this.agentsService.getSkills(agentId);
+    void this.runtimeCache.set(key, skills, 60);
+    return skills;
+  }
+
+  private async loadSkill(skillId: string) {
+    const key = `skill:${skillId}`;
+    const cached = await this.runtimeCache.get<Awaited<ReturnType<SkillsService['findById']>>>(key);
+    if (cached) return cached;
+    const skill = await this.skillsService.findById(skillId);
+    void this.runtimeCache.set(key, skill, 300);
+    return skill;
+  }
+
+  private executeSkill(
+    step: import('../../planner/interfaces/plan.interface').PlanStep,
     skill: SkillContext | undefined,
     args: Record<string, unknown>,
     requestOrLegacyModel: ExecuteRequest | string,
     legacyRequest?: ExecuteRequest,
   ): Promise<unknown> {
     const request = legacyRequest ?? (requestOrLegacyModel as ExecuteRequest);
-    if (!skill) {
-      throw new Error(`Skill "${step.skillName}" is not available for this agent`);
-    }
-
-    const timeoutMs = skill.timeout ?? 60_000;
-    const withTimeout = <T>(promise: Promise<T>): Promise<T> =>
-      Promise.race([
-        promise,
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error(`Skill "${skill.name}" timed out after ${timeoutMs}ms`)),
-            timeoutMs,
-          ),
-        ),
-      ]);
-
-    const query = this.resolveQuery(args, step, request);
-
-    switch (skill.executionMode) {
-      case SKILL_EXECUTION_MODE.KNOWLEDGE_RETRIEVAL: {
-        return withTimeout(
-          this.knowledgeService.search({
-            organizationId: request.organizationId,
-            query,
-            limit: this.toNumber(args.limit, 5),
-            offset: 0,
-          }),
-        );
-      }
-
-      case SKILL_EXECUTION_MODE.MEMORY_RETRIEVAL: {
-        return withTimeout(
-          this.memoryService.searchByAgent(request.agentId, query, {
-            limit: this.toNumber(args.limit, 10),
-          }),
-        );
-      }
-
-      case SKILL_EXECUTION_MODE.N8N_WORKFLOW: {
-        return withTimeout(this.runN8nWorkflow(skill, args, request));
-      }
-
-      case SKILL_EXECUTION_MODE.HUMAN_APPROVAL: {
-        throw new Error(
-          `Skill "${skill.name}" requires human approval and cannot run autonomously`,
-        );
-      }
-
-      default: {
-        return withTimeout(this.runAiSkill(skill, step, args, query, request));
-      }
-    }
-  }
-
-  private async runAiSkill(
-    skill: SkillContext,
-    step: PlanStep,
-    args: Record<string, unknown>,
-    query: string,
-    request: ExecuteRequest,
-  ): Promise<string> {
-    let knowledgeContext = '';
-    if (skill.executionMode === SKILL_EXECUTION_MODE.HYBRID) {
-      const chunks = await this.knowledgeService.search({
-        organizationId: request.organizationId,
-        query,
-        limit: 3,
-        offset: 0,
-      });
-      knowledgeContext =
-        chunks.length > 0
-          ? `\n\nRelevant knowledge:\n${chunks.map((chunk) => chunk.content).join('\n---\n')}`
-          : '\n\n(No relevant knowledge found.)';
-    }
-
-    const result = await this.llmRuntime.generateText({
-      mode: 'medium',
-      systemPrompt: buildSkillSystemPrompt({
-        name: skill.name,
-        instructions: skill.instructions,
-        knowledge: knowledgeContext.trim() || undefined,
-      }),
-      messages: [
-        {
-          role: 'user',
-          content: `Skill input:\n${this.serialize(args)}\n\nPlan input:\n${this.serialize(step.input)}`,
-        },
-      ],
-      temperature: 0.3,
-      maxTokens: 1500,
-    });
-
-    return result.content;
-  }
-
-  private async runN8nWorkflow(
-    skill: SkillContext,
-    args: Record<string, unknown>,
-    request: ExecuteRequest,
-  ): Promise<unknown> {
-    const webhookBase = this.configService.get<string>('N8N_WEBHOOK_URL');
-    if (!webhookBase) {
-      throw new Error('N8N_WEBHOOK_URL is not configured');
-    }
-
-    const url = `${webhookBase.replace(/\/+$/, '')}/${skill.slug}`;
-    const retryPolicy = (skill.retryPolicy ?? {}) as { maxAttempts?: number };
-    const maxAttempts = Math.max(1, this.toNumber(retryPolicy.maxAttempts, 1));
-    let lastError: unknown;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ...args,
-            userId: request.userId,
-            organizationId: request.organizationId,
-          }),
-          signal: AbortSignal.timeout(30_000),
-        });
-
-        if (response.ok) {
-          const contentType = response.headers.get('content-type') ?? '';
-          return contentType.includes('application/json') ? response.json() : response.text();
-        }
-
-        lastError = new Error(`n8n workflow returned HTTP ${response.status}`);
-        if (response.status < 500) break;
-      } catch (error) {
-        lastError = error;
-      }
-
-      this.logger.warn(`n8n workflow "${skill.slug}" attempt ${attempt}/${maxAttempts} failed`);
-    }
-
-    throw lastError instanceof Error ? lastError : new Error('n8n workflow failed');
-  }
-
-  private resolveQuery(
-    args: Record<string, unknown>,
-    step: PlanStep,
-    request: ExecuteRequest,
-  ): string {
-    const candidate = args.query ?? args.text ?? args.prompt ?? step.input.query ?? step.input.text;
-    if (typeof candidate === 'string' && candidate.trim().length > 0) {
-      return candidate;
-    }
-    return request.userMessage;
-  }
-
-  private serialize(value: unknown): string {
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return String(value);
-    }
-  }
-
-  private toNumber(value: unknown, fallback: number): number {
-    const parsed = typeof value === 'number' ? value : Number(value);
-    return Number.isFinite(parsed) ? parsed : fallback;
+    return this.skillRuntime.execute(step, skill, args, request);
   }
 
   private async waitingRun(runId: string, response: string, plan: Plan): Promise<ExecuteResponse> {

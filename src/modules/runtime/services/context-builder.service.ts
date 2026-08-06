@@ -50,33 +50,33 @@ export class ContextBuilderService {
     let knowledgeCount = 0;
 
     if (input.agentId) {
-      try {
-        const memories = await this.memoryService.findByAgent(input.agentId, { take: 5 });
-        if (memories.length > 0) {
-          const memoryContext = memories.map((m) => `[Memory: ${m.key}] ${m.content}`).join('\n');
-          messages.push({ role: 'system', content: `Relevant memories:\n${memoryContext}` });
-          memoryCount = memories.length;
-        }
-      } catch {
-        // Memory retrieval is best-effort
+      const [memories, knowledge] = await Promise.all([
+        this.withTimeout(this.memoryService.findByAgent(input.agentId, { take: 5 }), 500).catch(
+          () => [],
+        ),
+        input.organizationId
+          ? this.withTimeout(
+              this.knowledgeService.search({
+                query: input.userMessage,
+                organizationId: input.organizationId,
+                limit: 3,
+                offset: 0,
+              }),
+              800,
+            ).catch(() => [])
+          : Promise.resolve([]),
+      ]);
+
+      if (memories.length > 0) {
+        const memoryContext = memories.map((m) => `[Memory: ${m.key}] ${m.content}`).join('\n');
+        messages.push({ role: 'system', content: `Relevant memories:\n${memoryContext}` });
+        memoryCount = memories.length;
       }
 
-      if (input.organizationId) {
-        try {
-          const knowledge = await this.knowledgeService.search({
-            query: input.userMessage,
-            organizationId: input.organizationId,
-            limit: 3,
-            offset: 0,
-          });
-          if (knowledge.length > 0) {
-            const knowledgeContext = knowledge.map((k) => `[Knowledge] ${k.content}`).join('\n');
-            messages.push({ role: 'system', content: `Relevant knowledge:\n${knowledgeContext}` });
-            knowledgeCount = knowledge.length;
-          }
-        } catch {
-          // Knowledge retrieval is best-effort
-        }
+      if (knowledge.length > 0) {
+        const knowledgeContext = knowledge.map((k) => `[Knowledge] ${k.content}`).join('\n');
+        messages.push({ role: 'system', content: `Relevant knowledge:\n${knowledgeContext}` });
+        knowledgeCount = knowledge.length;
       }
     }
 
@@ -97,5 +97,15 @@ export class ContextBuilderService {
 
   private estimateTokens(text: string): number {
     return Math.ceil(text.length / 4);
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`Context dependency timed out after ${timeoutMs}ms`)),
+        timeoutMs,
+      );
+      promise.then(resolve, reject).finally(() => clearTimeout(timer));
+    });
   }
 }
