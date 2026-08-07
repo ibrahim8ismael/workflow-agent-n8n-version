@@ -1,7 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { z } from 'zod';
 import { LLMRuntimeService } from '../../../infrastructure/llm-runtime/llm-runtime.service';
-import { BLUEPRINT_GENERATOR_SYSTEM_PROMPT } from '../../../infrastructure/prompts/system-prompts';
+import {
+  BLUEPRINT_GENERATOR_SYSTEM_PROMPT,
+  JAAFAR_IDENTITY_SYSTEM_PROMPT,
+} from '../../../infrastructure/prompts/system-prompts';
 import { AgentsService } from '../../agents/services/agents.service';
 import { ConversationsService } from '../../conversations/services/conversations.service';
 import { MemoryService } from '../../memory/services/memory.service';
@@ -63,7 +66,7 @@ export class EmployeeDesignRuntimeService {
           )
         : [];
       const context = await this.contextBuilder.build({
-        systemPrompt: `${BLUEPRINT_GENERATOR_SYSTEM_PROMPT}\n\nEmployee policies:\n${agent.instructions ?? ''}`,
+        systemPrompt: `${JAAFAR_IDENTITY_SYSTEM_PROMPT}\n\n${BLUEPRINT_GENERATOR_SYSTEM_PROMPT}\n\nEmployee policies:\n${agent.instructions ?? ''}`,
         agentId: request.agentId,
         conversationId: request.conversationId,
         organizationId: request.organizationId,
