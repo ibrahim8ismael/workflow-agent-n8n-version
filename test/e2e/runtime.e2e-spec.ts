@@ -133,6 +133,7 @@ describe('Runtime (e2e)', () => {
       expect(res.status).toBe(202);
 
       expect(res.body.runId).toBeDefined();
+      expect(res.body.conversationId).toBeDefined();
       expect(res.body.status).toBe('WAITING');
       expect(res.body.response).toContain('approval');
 
@@ -147,6 +148,19 @@ describe('Runtime (e2e)', () => {
       expect(runRes.body.status).toBe('COMPLETED');
       expect(runRes.body.result).toContain('test responder');
       expect(runRes.body.promptTokens).toBe(10);
+
+      const conversationRes = await http
+        .get(`/api/v1/conversations/${res.body.conversationId}`)
+        .expect(200);
+      expect(conversationRes.body.id).toBe(res.body.conversationId);
+      expect(conversationRes.body.title).toBe('Say hello');
+
+      const messagesRes = await http
+        .get(`/api/v1/conversations/${res.body.conversationId}/messages`)
+        .expect(200);
+      expect(messagesRes.body).toHaveLength(2);
+      expect(messagesRes.body[0].role).toBe('user');
+      expect(messagesRes.body[1].role).toBe('assistant');
     });
 
     it('should mark the run FAILED for an unknown agent', async () => {

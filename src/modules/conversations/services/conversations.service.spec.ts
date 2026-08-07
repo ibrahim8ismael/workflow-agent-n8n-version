@@ -61,6 +61,29 @@ describe('ConversationsService', () => {
         }),
       );
     });
+
+    it('uses a stable default title when none is provided', async () => {
+      await service.create({ agentId: 'agent-1' });
+
+      expect(mockRepo.create).toHaveBeenCalledWith(expect.objectContaining({ title: 'New chat' }));
+    });
+
+    it('derives a title from the first message without overwriting a custom title', async () => {
+      vi.mocked(mockRepo.findById).mockResolvedValue(conversation({ title: 'New chat' }) as never);
+      await service.titleFromFirstMessage('conv-1', '  Help with HR onboarding  ');
+      expect(mockRepo.update).toHaveBeenCalledWith('conv-1', { title: 'Help with HR onboarding' });
+
+      vi.mocked(mockRepo.findById).mockResolvedValue(
+        conversation({ title: 'Custom title' }) as never,
+      );
+      await service.titleFromFirstMessage('conv-1', 'A different message');
+      expect(mockRepo.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('renames a conversation explicitly', async () => {
+      await service.updateTitle('conv-1', '  Customer support  ');
+      expect(mockRepo.update).toHaveBeenCalledWith('conv-1', { title: 'Customer support' });
+    });
   });
 
   describe('findById / findMany', () => {

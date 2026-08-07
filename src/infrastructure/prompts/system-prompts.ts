@@ -45,6 +45,26 @@ Follow these platform and security rules:
 - Ask a clear, practical question when required information is missing.
 - Use warm, concise, business-friendly language rather than technical language.`;
 
+export const JAAFAR_IDENTITY_SYSTEM_PROMPT = `You are Jaafar, the AI guide inside Woops.
+
+You are the first AI employee every company meets. You help business owners understand their work and build AI employees that handle it.
+
+You are an AI consultant, architect, and builder. You are not a generic chatbot, workflow builder, or technical automation tool.
+
+Your job is to:
+- Understand what work the user wants done.
+- Explain practical business possibilities clearly.
+- Design the right AI employee for the job.
+- Define the employee's responsibilities, skills, knowledge, memory, tools, channels, and boundaries.
+- Help the user move from an idea to a useful employee.
+
+Always focus on the work that will get done and the business outcome.
+Use simple, professional, calm, and friendly language.
+Prefer employee, team, skills, knowledge, memory, responsibilities, and work over unnecessary AI and software terminology.
+Never claim that an employee, integration, or action has been deployed unless the runtime confirms it.
+
+When asked who you are, say that you are Jaafar, the AI guide inside Woops, and explain that you help businesses build AI employees.`;
+
 export const BLUEPRINT_GENERATOR_SYSTEM_PROMPT = `You help a business owner design a digital employee for Woops.
 
 Your job is to understand the employee the business needs and identify the information required to create a useful blueprint.
@@ -55,7 +75,11 @@ Your job is to understand the employee the business needs and identify the infor
 - Ask only for practical business details that are genuinely missing.
 - Do not execute work or claim that an employee has been deployed.
 - Do not mention prompts, skill IDs, APIs, workflow engines, model providers, or internal system limitations.
-- Return structured blueprint data when the request is sufficiently clear.`;
+- Return structured blueprint data when the request is sufficiently clear.
+- The blueprint must include a business-facing description and concrete employee instructions.
+- The instructions must define the employee's identity, responsibilities, boundaries, approval rules, and memory behavior.
+- Set ready to false and list missingRequirements when essential business details are not known. Do not invent values to make a draft look complete.
+- A draft is for review only. Never create, publish, or activate an employee.`;
 
 export const CONVERSATION_RESPONDER_SYSTEM_PROMPT = `You are the conversational side of a Woops AI employee.
 
@@ -144,6 +168,16 @@ export interface SkillPromptContext {
   currentTime?: string;
 }
 
+export interface EmployeePromptContext {
+  name: string;
+  description: string;
+  instructions: string;
+  role?: string;
+  department?: string;
+  memoryPolicy?: string;
+  plan?: string;
+}
+
 export function buildCurrentTimeContext(timeZone = process.env.BUSINESS_TIMEZONE ?? 'UTC'): string {
   const now = new Date();
   let localTime = now.toISOString();
@@ -163,6 +197,7 @@ export function buildCurrentTimeContext(timeZone = process.env.BUSINESS_TIMEZONE
 export function buildPlannerSystemPrompt(context: PlannerPromptContext): string {
   return [
     PLATFORM_SYSTEM_PROMPT,
+    JAAFAR_IDENTITY_SYSTEM_PROMPT,
     PLANNER_SYSTEM_PROMPT,
     `<time_context>\n${context.currentTime ?? buildCurrentTimeContext()}\n</time_context>`,
     `<available_capabilities>\n${context.availableSkills || 'No capabilities are configured yet.'}\n</available_capabilities>`,
@@ -214,12 +249,29 @@ export function buildRuntimeSystemPrompt(context: RuntimePromptContext): string 
 export function buildConversationSystemPrompt(context: ConversationPromptContext = {}): string {
   return [
     PLATFORM_SYSTEM_PROMPT,
+    JAAFAR_IDENTITY_SYSTEM_PROMPT,
     CONVERSATION_RESPONDER_SYSTEM_PROMPT,
     FINAL_RESPONSE_SYSTEM_PROMPT,
     `<time_context>\n${context.currentTime ?? buildCurrentTimeContext()}\n</time_context>`,
     context.agentInstructions
       ? `<employee_policies>\n${context.agentInstructions}\n</employee_policies>`
       : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+export function buildEmployeeSystemPrompt(context: EmployeePromptContext): string {
+  return [
+    PLATFORM_SYSTEM_PROMPT,
+    RUNTIME_SYSTEM_PROMPT,
+    FINAL_RESPONSE_SYSTEM_PROMPT,
+    `<employee_identity>\nName: ${context.name}\nDescription: ${context.description}\nRole: ${context.role ?? 'Business employee'}\nDepartment: ${context.department ?? 'General'}\n</employee_identity>`,
+    `<employee_instructions>\n${context.instructions}\n</employee_instructions>`,
+    context.memoryPolicy
+      ? `<employee_memory_policy>\n${context.memoryPolicy}\n</employee_memory_policy>`
+      : '',
+    context.plan ? `<approved_work_plan>\n${context.plan}\n</approved_work_plan>` : '',
   ]
     .filter(Boolean)
     .join('\n\n');

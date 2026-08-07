@@ -6,7 +6,7 @@ import type { ExecutionMode } from '../../../infrastructure/llm-runtime/interfac
 import { LLMRuntimeService } from '../../../infrastructure/llm-runtime/llm-runtime.service';
 import {
   buildConversationSystemPrompt,
-  buildRuntimeSystemPrompt,
+  buildEmployeeSystemPrompt,
 } from '../../../infrastructure/prompts/system-prompts';
 import { AgentsService } from '../../agents/services/agents.service';
 import { ConversationsService } from '../../conversations/services/conversations.service';
@@ -34,6 +34,7 @@ export interface ExecuteRequest {
 
 export interface ExecuteResponse {
   runId: string;
+  conversationId?: string;
   response: string;
   mode?: string;
   status?: string;
@@ -224,13 +225,17 @@ export class RuntimeService {
         role: 'user',
         content: request.userMessage,
       });
+      await this.conversationsService.titleFromFirstMessage?.(
+        request.conversationId,
+        request.userMessage,
+      );
       await this.conversationsService.addMessage(request.conversationId, {
         role: 'assistant',
         content: result.content,
       });
     }
 
-    return this.completeRun(runId, result.content);
+    return this.completeRun(runId, result.content, undefined, request.conversationId);
   }
 
   async approve(runId: string): Promise<ExecuteResponse> {
@@ -341,8 +346,11 @@ export class RuntimeService {
         : [];
 
       const context = await this.contextBuilder.build({
-        systemPrompt: buildRuntimeSystemPrompt({
-          agentInstructions: agent.instructions ?? undefined,
+        systemPrompt: buildEmployeeSystemPrompt({
+          name: agent.name,
+          description: agent.description ?? `${agent.name} business employee`,
+          instructions:
+            agent.instructions ?? 'Follow the approved work plan and employee policies.',
           plan:
             plan.steps.length > 0
               ? `Goal: ${plan.goal}\n\nSteps:\n${plan.steps.map((s) => `${s.order}. ${s.skillName}`).join('\n')}`
@@ -399,6 +407,10 @@ export class RuntimeService {
           role: 'user',
           content: request.userMessage,
         });
+        await this.conversationsService.titleFromFirstMessage?.(
+          request.conversationId,
+          request.userMessage,
+        );
         await this.conversationsService.addMessage(request.conversationId, {
           role: 'assistant',
           content: result.content,
@@ -416,7 +428,7 @@ export class RuntimeService {
         // Memory storage is best-effort
       }
 
-      return this.completeRun(runId, result.content, workflow);
+      return this.completeRun(runId, result.content, workflow, request.conversationId);
     } catch (error) {
       return this.handleFailure(runId, error);
     }
@@ -491,10 +503,12 @@ export class RuntimeService {
     runId: string,
     response: string,
     workflow?: WorkflowDefinition,
+    conversationId?: string,
   ): Promise<ExecuteResponse> {
     const run = await this.runsService.complete(runId, response);
     return {
       runId: run.id,
+      conversationId,
       status: 'COMPLETED',
       response,
       workflow,

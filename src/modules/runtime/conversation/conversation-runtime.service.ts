@@ -10,9 +10,15 @@ import { RuntimeCacheService } from '../shared/runtime-cache.service';
 import type { RuntimeRequest } from '../types/runtime.types';
 
 export type ConversationStreamEvent =
-  | { type: 'run.started'; runId: string; mode: RuntimeRequest['mode'] }
+  | { type: 'run.started'; runId: string; mode: RuntimeRequest['mode']; conversationId?: string }
   | { type: 'token'; runId: string; content: string }
-  | { type: 'run.completed'; runId: string; response: string; usage: ExecuteResponse['usage'] }
+  | {
+      type: 'run.completed';
+      runId: string;
+      conversationId?: string;
+      response: string;
+      usage: ExecuteResponse['usage'];
+    }
   | { type: 'run.failed'; runId: string; code: string; message: string };
 
 @Injectable()
@@ -83,6 +89,10 @@ export class ConversationRuntimeService {
           role: 'user',
           content: request.userMessage,
         });
+        await this.conversationsService.titleFromFirstMessage(
+          request.conversationId,
+          request.userMessage,
+        );
         await this.conversationsService.addMessage(request.conversationId, {
           role: 'assistant',
           content: result.content,
@@ -92,6 +102,7 @@ export class ConversationRuntimeService {
       const completed = await this.runsService.complete(run.id, result.content);
       return {
         runId: completed.id,
+        conversationId: request.conversationId,
         mode: request.mode,
         status: 'COMPLETED',
         response: result.content,
@@ -124,7 +135,12 @@ export class ConversationRuntimeService {
       metadata: { runtimeMode: request.mode, transport: 'sse' },
     });
 
-    yield { type: 'run.started', runId: run.id, mode: request.mode };
+    yield {
+      type: 'run.started',
+      runId: run.id,
+      mode: request.mode,
+      conversationId: request.conversationId,
+    };
 
     try {
       await this.runsService.transitionStatus(run.id, 'PREPARING');
@@ -176,6 +192,7 @@ export class ConversationRuntimeService {
       yield {
         type: 'run.completed',
         runId: completed.id,
+        conversationId: request.conversationId,
         response,
         usage,
       };
@@ -206,20 +223,27 @@ export class ConversationRuntimeService {
         this.runsService.updateUsage(runId, usage),
         this.runsService.updateMetadata(runId, { intent: 'conversation', transport: 'sse' }),
         request.conversationId
-          ? Promise.all([
-              this.conversationsService.addMessage(request.conversationId, {
-                role: 'user',
-                content: request.userMessage,
-              }),
-              this.conversationsService.addMessage(request.conversationId, {
-                role: 'assistant',
-                content: response,
-              }),
-            ])
+          ? this.persistMessagesAndTitle(request.conversationId, request.userMessage, response)
           : Promise.resolve(),
       ]);
     } catch (_error) {
       this.logger.warn(`Non-critical conversation persistence failed for run ${runId}`);
     }
+  }
+
+  private async persistMessagesAndTitle(
+    conversationId: string,
+    userMessage: string,
+    response: string,
+  ): Promise<void> {
+    await this.conversationsService.addMessage(conversationId, {
+      role: 'user',
+      content: userMessage,
+    });
+    await this.conversationsService.titleFromFirstMessage(conversationId, userMessage);
+    await this.conversationsService.addMessage(conversationId, {
+      role: 'assistant',
+      content: response,
+    });
   }
 }

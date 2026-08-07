@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Res } from '@nestjs/common';
 import { Run } from '@prisma/client';
 import type { Response } from 'express';
+import { ConversationsService } from '../conversations/services/conversations.service';
 import { RunsService } from '../runs/runs.service';
 import { type ExecuteRunDto, executeRunSchema } from './dto/execute-run.dto';
 import { RuntimeRouterService } from './runtime-router.service';
@@ -13,14 +14,16 @@ export class RuntimeController {
     private readonly runtimeService: RuntimeService,
     private readonly runtimeRouter: RuntimeRouterService,
     private readonly runsService: RunsService,
+    private readonly conversationsService: ConversationsService,
   ) {}
 
   @Post()
   @HttpCode(HttpStatus.ACCEPTED)
   async execute(@Body() dto: ExecuteRunDto) {
     const parsed = executeRunSchema.parse(dto);
-    if (!parsed.mode) parsed.mode = RuntimeMode.CONVERSATION;
-    return this.runtimeRouter.run(parsed);
+    const request = await this.ensureConversation(parsed);
+    const result = await this.runtimeRouter.run(request);
+    return { ...result, conversationId: request.conversationId };
   }
 
   @Post('stream')
@@ -32,6 +35,7 @@ export class RuntimeController {
       });
       return;
     }
+    const request = await this.ensureConversation(parsed);
 
     response.status(HttpStatus.OK);
     response.setHeader('Content-Type', 'text/event-stream');
@@ -40,7 +44,7 @@ export class RuntimeController {
     response.flushHeaders();
 
     try {
-      for await (const event of this.runtimeRouter.stream(parsed)) {
+      for await (const event of this.runtimeRouter.stream(request)) {
         response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
       }
     } finally {
@@ -60,8 +64,26 @@ export class RuntimeController {
     return this.runtimeService.reject(id, body?.reason);
   }
 
+  @Post(':id/confirm')
+  @HttpCode(HttpStatus.ACCEPTED)
+  async confirm(@Param('id') id: string) {
+    return this.runtimeRouter.confirmEmployeeDesign(id);
+  }
+
   @Get(':id')
   async findById(@Param('id') id: string): Promise<Run> {
     return this.runsService.findById(id);
+  }
+
+  private async ensureConversation(request: ExecuteRunDto): Promise<ExecuteRunDto> {
+    if (request.conversationId) return request;
+
+    const conversation = await this.conversationsService.create({
+      agentId: request.agentId,
+      title: 'New chat',
+      userId: request.userId,
+      organizationId: request.organizationId,
+    });
+    return { ...request, conversationId: conversation.id };
   }
 }
