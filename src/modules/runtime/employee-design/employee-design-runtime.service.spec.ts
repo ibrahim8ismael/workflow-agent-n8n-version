@@ -116,6 +116,10 @@ describe('EmployeeDesignRuntimeService', () => {
       expect.objectContaining({ source: 'employee-design-confirmation' }),
     );
     expect(result.plan).toMatchObject({ agentId: 'employee-1' });
+    expect(runsService.updateMetadata).toHaveBeenCalledWith(
+      'design-run-1',
+      expect.objectContaining({ approvalStatus: 'APPROVED' }),
+    );
   });
 
   it('does not mark an incomplete design as ready for confirmation', async () => {

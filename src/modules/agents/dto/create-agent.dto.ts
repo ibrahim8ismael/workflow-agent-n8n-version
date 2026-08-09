@@ -7,6 +7,7 @@ export const createAgentSchema = z.object({
   personality: z.string().optional(),
   model: z.string().default('gpt-4o'),
   status: z.enum(['DRAFT', 'PUBLISHED', 'ACTIVE', 'PAUSED', 'ARCHIVED', 'ERROR']).default('DRAFT'),
+  userId: z.string().optional(),
   organizationId: z.string().optional(),
 });
 

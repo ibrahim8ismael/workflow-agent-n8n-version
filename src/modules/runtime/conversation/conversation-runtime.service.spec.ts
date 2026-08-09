@@ -18,7 +18,11 @@ describe('ConversationRuntimeService', () => {
       fail: vi.fn(),
     };
     const agentsService = {
-      findById: vi.fn().mockResolvedValue({ instructions: 'Be helpful.' }),
+      findById: vi.fn().mockResolvedValue({
+        instructions: 'Be helpful.',
+        organizationId: 'org-agent',
+        userId: 'user-agent',
+      }),
     };
     const conversationsService = {
       getMessages: vi.fn().mockResolvedValue([]),
@@ -58,7 +62,13 @@ describe('ConversationRuntimeService', () => {
     expect(result.response).toBe('Hi');
     expect(llmRuntime.generateText).toHaveBeenCalledTimes(1);
     expect(llmRuntime.generateObject).not.toHaveBeenCalled();
-    expect(agentsService.findById).toHaveBeenCalledWith('agent-1');
+    expect(agentsService.findById).toHaveBeenCalledWith('agent-1', false, {
+      organizationId: undefined,
+      userId: undefined,
+    });
+    expect(contextBuilder.build).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: 'org-agent', userId: 'user-agent' }),
+    );
     expect(conversationsService.getMessages).toHaveBeenCalledWith('conversation-1', { take: 20 });
     expect(conversationsService.addMessage).toHaveBeenCalledTimes(2);
   });

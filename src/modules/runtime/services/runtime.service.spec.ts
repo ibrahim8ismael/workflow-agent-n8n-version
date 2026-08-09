@@ -243,6 +243,15 @@ describe('RuntimeService', () => {
       expect(mockMemoryService.upsert).not.toHaveBeenCalled();
     });
 
+    it('does not retrieve knowledge for the MVP planner path', async () => {
+      await service.execute(request);
+
+      expect(mockKnowledgeService.search).not.toHaveBeenCalled();
+      expect(mockPlannerService.createPlan).toHaveBeenCalledWith(
+        expect.not.objectContaining({ knowledge: expect.anything() }),
+      );
+    });
+
     it('should create a run and transition through statuses', async () => {
       await service.execute(request);
       await service.approve('run-1');
@@ -263,7 +272,10 @@ describe('RuntimeService', () => {
       await service.execute(request);
       await service.approve('run-1');
 
-      expect(mockAgentsService.findById).toHaveBeenCalledWith('agent-1', true);
+      expect(mockAgentsService.findById).toHaveBeenCalledWith('agent-1', true, {
+        organizationId: 'org-1',
+        userId: undefined,
+      });
       expect(mockSkillsService.findById).toHaveBeenCalledWith('skill-1');
       expect(mockContextBuilder.build).toHaveBeenCalledWith(
         expect.objectContaining({ agentId: 'agent-1', userMessage: 'Summarize Q2 revenue' }),
@@ -450,6 +462,7 @@ describe('RuntimeService', () => {
 
       expect(mockKnowledgeService.search).toHaveBeenCalledWith({
         organizationId: 'org-1',
+        userId: 'user-1',
         query: 'revenue',
         limit: 3,
         offset: 0,

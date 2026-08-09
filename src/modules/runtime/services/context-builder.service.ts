@@ -7,6 +7,7 @@ export interface ContextBuilderInput {
   agentInstructions?: string;
   agentId: string;
   conversationId?: string;
+  userId?: string;
   organizationId?: string;
   userMessage: string;
   skillInstructions?: string;
@@ -27,7 +28,7 @@ export interface BuiltContext {
 export class ContextBuilderService {
   constructor(
     private readonly memoryService: MemoryService,
-    private readonly knowledgeService: KnowledgeService,
+    _knowledgeService: KnowledgeService,
   ) {}
 
   async build(input: ContextBuilderInput): Promise<BuiltContext> {
@@ -47,36 +48,18 @@ export class ContextBuilderService {
     }
 
     let memoryCount = 0;
-    let knowledgeCount = 0;
+    const knowledgeCount = 0;
 
     if (input.agentId) {
-      const [memories, knowledge] = await Promise.all([
-        this.withTimeout(this.memoryService.findByAgent(input.agentId, { take: 5 }), 500).catch(
-          () => [],
-        ),
-        input.organizationId
-          ? this.withTimeout(
-              this.knowledgeService.search({
-                query: input.userMessage,
-                organizationId: input.organizationId,
-                limit: 3,
-                offset: 0,
-              }),
-              800,
-            ).catch(() => [])
-          : Promise.resolve([]),
-      ]);
+      const memories = await this.withTimeout(
+        this.memoryService.findByAgent(input.agentId, { take: 5 }),
+        500,
+      ).catch(() => []);
 
       if (memories.length > 0) {
         const memoryContext = memories.map((m) => `[Memory: ${m.key}] ${m.content}`).join('\n');
         messages.push({ role: 'system', content: `Relevant memories:\n${memoryContext}` });
         memoryCount = memories.length;
-      }
-
-      if (knowledge.length > 0) {
-        const knowledgeContext = knowledge.map((k) => `[Knowledge] ${k.content}`).join('\n');
-        messages.push({ role: 'system', content: `Relevant knowledge:\n${knowledgeContext}` });
-        knowledgeCount = knowledge.length;
       }
     }
 

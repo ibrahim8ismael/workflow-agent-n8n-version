@@ -8,6 +8,9 @@ related: [[@RULE.AGENT.KB.ARCHITECTURE]], [[@RULE.AGENT.KB]]
 
 # Knowledge Base API
 
+> MVP status: KB persistence and service code are retained for the next phase, but the
+> `/api/v1/knowledge` HTTP routes and automatic runtime retrieval are disabled in the MVP.
+
 The Knowledge module stores organization-specific business information for agent retrieval. The current implementation accepts Markdown documents only.
 
 All routes are under `/api/v1/knowledge`.

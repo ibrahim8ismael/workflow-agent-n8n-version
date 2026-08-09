@@ -17,24 +17,35 @@ export class AgentsService {
       personality: dto.personality,
       model: dto.model,
       status: (dto.status ?? 'DRAFT') as never,
+      ...(dto.userId ? { user: { connect: { id: dto.userId } } } : {}),
       ...(dto.organizationId ? { organization: { connect: { id: dto.organizationId } } } : {}),
     } as never);
   }
 
-  async findById(id: string, includeSkills?: boolean): Promise<Agent> {
-    const agent = await this.agentsRepository.findById(id, includeSkills);
+  async findById(
+    id: string,
+    includeSkills?: boolean,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Agent> {
+    const agent = await this.agentsRepository.findById(id, includeSkills, scope);
     if (!agent) throw new NotFoundException(`Agent with id "${id}" not found`);
     return agent;
   }
 
   async findMany(params?: {
+    userId?: string;
     organizationId?: string;
     status?: string;
     skip?: number;
     take?: number;
   }): Promise<Agent[]> {
     const where: Record<string, unknown> = {};
-    if (params?.organizationId) where.organizationId = params.organizationId;
+    if (params?.userId || params?.organizationId) {
+      where.OR = [
+        ...(params.userId ? [{ userId: params.userId }] : []),
+        ...(params.organizationId ? [{ organizationId: params.organizationId }] : []),
+      ];
+    }
     if (params?.status) where.status = params.status;
 
     return this.agentsRepository.findMany({

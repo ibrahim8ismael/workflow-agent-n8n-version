@@ -10,8 +10,17 @@ export class KnowledgeRepository {
     return this.db.knowledgeDocument.create({ data });
   }
 
-  async findDocumentById(id: string): Promise<KnowledgeDocument | null> {
-    return this.db.knowledgeDocument.findFirst({ where: { id, deletedAt: null } });
+  async findDocumentById(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<KnowledgeDocument | null> {
+    return this.db.knowledgeDocument.findFirst({
+      where: {
+        id,
+        ...this.scopeWhere(scope),
+        deletedAt: null,
+      },
+    });
   }
 
   async findDocuments(params?: {
@@ -53,9 +62,16 @@ export class KnowledgeRepository {
     return result.count;
   }
 
-  async findChunksByDocumentId(documentId: string): Promise<KnowledgeDocumentChunk[]> {
+  async findChunksByDocumentId(
+    documentId: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<KnowledgeDocumentChunk[]> {
     return this.db.knowledgeDocumentChunk.findMany({
-      where: { knowledgeDocumentId: documentId, deletedAt: null },
+      where: {
+        knowledgeDocumentId: documentId,
+        ...(scope ? { knowledgeDocument: { ...this.scopeWhere(scope), deletedAt: null } } : {}),
+        deletedAt: null,
+      },
       orderBy: { chunkIndex: 'asc' },
     });
   }
@@ -69,13 +85,13 @@ export class KnowledgeRepository {
   }
 
   async searchChunks(
-    organizationId: string,
+    scope: { userId?: string; organizationId?: string },
     query: string,
     options?: { category?: string; limit?: number; offset?: number },
   ): Promise<KnowledgeDocumentChunk[]> {
     const where: Prisma.KnowledgeDocumentChunkWhereInput = {
       content: { contains: query, mode: 'insensitive' },
-      knowledgeDocument: { organizationId, deletedAt: null },
+      knowledgeDocument: { ...this.scopeWhere(scope), deletedAt: null },
       deletedAt: null,
     };
 
@@ -95,5 +111,17 @@ export class KnowledgeRepository {
 
   async countDocuments(where?: Prisma.KnowledgeDocumentWhereInput): Promise<number> {
     return this.db.knowledgeDocument.count({ where: { ...where, deletedAt: null } });
+  }
+
+  private scopeWhere(scope?: {
+    userId?: string;
+    organizationId?: string;
+  }): Prisma.KnowledgeDocumentWhereInput {
+    const scopes: Prisma.KnowledgeDocumentWhereInput[] = [];
+    if (scope?.userId) scopes.push({ userId: scope.userId });
+    if (scope?.organizationId) scopes.push({ organizationId: scope.organizationId });
+    if (scopes.length === 0) return { id: '__no_access__' };
+    if (scopes.length === 1) return scopes[0];
+    return { OR: scopes };
   }
 }

@@ -23,23 +23,36 @@ export class KnowledgeService {
       contentType: dto.contentType,
       content: dto.content,
       metadata: Object.keys(metadata).length > 0 ? (metadata as never) : undefined,
+      ...(dto.userId ? { user: { connect: { id: dto.userId } } } : {}),
       ...(dto.organizationId ? { organization: { connect: { id: dto.organizationId } } } : {}),
     } as never);
   }
 
-  async findDocumentById(id: string): Promise<KnowledgeDocument> {
-    const doc = await this.knowledgeRepository.findDocumentById(id);
+  async findDocumentById(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<KnowledgeDocument> {
+    const doc = await this.knowledgeRepository.findDocumentById(id, scope);
     if (!doc) throw new NotFoundException(`Knowledge document with id "${id}" not found`);
     return doc;
   }
 
   async findDocuments(params?: {
+    userId?: string;
     organizationId?: string;
     skip?: number;
     take?: number;
   }): Promise<KnowledgeDocument[]> {
     return this.knowledgeRepository.findDocuments({
-      where: params?.organizationId ? { organizationId: params.organizationId } : undefined,
+      where:
+        params?.userId || params?.organizationId
+          ? {
+              OR: [
+                ...(params.userId ? [{ userId: params.userId }] : []),
+                ...(params.organizationId ? [{ organizationId: params.organizationId }] : []),
+              ],
+            }
+          : undefined,
       orderBy: { createdAt: 'desc' },
       skip: params?.skip,
       take: params?.take,
@@ -47,16 +60,25 @@ export class KnowledgeService {
   }
 
   async search(dto: SearchKnowledgeDto): Promise<KnowledgeDocumentChunk[]> {
-    return this.knowledgeRepository.searchChunks(dto.organizationId ?? '', dto.query, {
-      category: dto.category,
-      limit: dto.limit,
-      offset: dto.offset,
-    });
+    return this.knowledgeRepository.searchChunks(
+      { userId: dto.userId, organizationId: dto.organizationId },
+      dto.query,
+      {
+        category: dto.category,
+        limit: dto.limit,
+        offset: dto.offset,
+      },
+    );
   }
 
-  async getDocumentChunks(documentId: string): Promise<KnowledgeDocumentChunk[]> {
-    await this.findDocumentById(documentId);
-    return this.knowledgeRepository.findChunksByDocumentId(documentId);
+  async getDocumentChunks(
+    documentId: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<KnowledgeDocumentChunk[]> {
+    await this.findDocumentById(documentId, scope);
+    return scope
+      ? this.knowledgeRepository.findChunksByDocumentId(documentId, scope)
+      : this.knowledgeRepository.findChunksByDocumentId(documentId);
   }
 
   async ingestDocument(
@@ -87,8 +109,9 @@ export class KnowledgeService {
   async updateDocument(
     id: string,
     dto: Partial<CreateKnowledgeDocumentDto>,
+    scope?: { userId?: string; organizationId?: string },
   ): Promise<KnowledgeDocument> {
-    const existing = await this.findDocumentById(id);
+    const existing = await this.findDocumentById(id, scope);
     if (dto.contentType) this.assertMarkdown(dto.contentType);
     if (dto.content !== undefined) {
       if (!dto.content.trim()) {
@@ -129,8 +152,11 @@ export class KnowledgeService {
     return updated;
   }
 
-  async softDeleteDocument(id: string): Promise<KnowledgeDocument> {
-    await this.findDocumentById(id);
+  async softDeleteDocument(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<KnowledgeDocument> {
+    await this.findDocumentById(id, scope);
     await this.knowledgeRepository.deleteChunksByDocumentId(id);
     return this.knowledgeRepository.softDeleteDocument(id);
   }

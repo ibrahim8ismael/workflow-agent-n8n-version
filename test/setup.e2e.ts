@@ -43,7 +43,13 @@ export class MockDatabaseService {
   ) {
     const col = this.collection(model);
     const entry = Array.from(col.values()).find((item: any) =>
-      Object.entries(args.where).every(([k, v]) => (item as any)[k] === v),
+      Object.entries(args.where).every(([k, v]) =>
+        k === 'OR'
+          ? (v as Array<Record<string, unknown>>).some((condition) =>
+              Object.entries(condition).every(([field, value]) => (item as any)[field] === value),
+            )
+          : (item as any)[k] === v,
+      ),
     );
     return Promise.resolve(entry ?? null);
   }

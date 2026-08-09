@@ -19,7 +19,7 @@ POST /api/v1/runs (userMessage, agentId) → Run created → PREPARING → PLANN
   → Planner (AI structured output) → validate plan
   → EXECUTING → AI SDK tool loop over plan steps
      → skills dispatch by execution mode:
-        KNOWLEDGE_RETRIEVAL  → pgvector search
+        KNOWLEDGE_RETRIEVAL  → reserved for the post-MVP KB phase
         MEMORY_RETRIEVAL     → agent memory search
         N8N_WORKFLOW         → POST ${N8N_WEBHOOK_URL}/${skill.slug} (retries)
         AI_ONLY / HYBRID     → nested AI call with skill instructions (± retrieved context)

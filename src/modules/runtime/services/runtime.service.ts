@@ -79,7 +79,10 @@ export class RuntimeService {
     try {
       await this.runsService.transitionStatus(run.id, 'PREPARING');
 
-      const agent = await this.loadAgent(request.agentId, true);
+      const agent = await this.loadAgent(request.agentId, true, {
+        userId: request.userId,
+        organizationId: request.organizationId,
+      });
 
       await this.runsService.transitionStatus(run.id, 'PLANNING');
 
@@ -124,7 +127,7 @@ export class RuntimeService {
         agentId: request.agentId,
         agentInstructions: agent.instructions ?? undefined,
         conversationId: request.conversationId,
-        organizationId: request.organizationId,
+        organizationId: request.organizationId ?? agent.organizationId ?? undefined,
         availableSkills,
         conversationHistory,
         effort: request.effort ?? 'medium',
@@ -308,7 +311,10 @@ export class RuntimeService {
     workflow: WorkflowDefinition,
   ): Promise<ExecuteResponse> {
     try {
-      const agent = await this.loadAgent(request.agentId, true);
+      const agent = await this.loadAgent(request.agentId, true, {
+        userId: request.userId,
+        organizationId: request.organizationId,
+      });
       const agentSkills = await this.loadAgentSkills(request.agentId);
       const availableSkills = (
         await Promise.all(
@@ -449,11 +455,15 @@ export class RuntimeService {
     };
   }
 
-  private async loadAgent(agentId: string, includeSkills = false) {
-    const key = `agent:${includeSkills ? 'full' : 'profile'}:${agentId}`;
+  private async loadAgent(
+    agentId: string,
+    includeSkills = false,
+    scope?: { userId?: string; organizationId?: string },
+  ) {
+    const key = `agent:${includeSkills ? 'full' : 'profile'}:${agentId}:${scope?.userId ?? ''}:${scope?.organizationId ?? ''}`;
     const cached = await this.runtimeCache.get<Awaited<ReturnType<AgentsService['findById']>>>(key);
     if (cached) return cached;
-    const agent = await this.agentsService.findById(agentId, includeSkills);
+    const agent = await this.agentsService.findById(agentId, includeSkills, scope);
     void this.runtimeCache.set(key, agent, 60);
     return agent;
   }

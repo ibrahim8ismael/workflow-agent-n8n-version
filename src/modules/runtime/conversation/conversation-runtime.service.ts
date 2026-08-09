@@ -46,11 +46,16 @@ export class ConversationRuntimeService {
     try {
       await this.runsService.transitionStatus(run.id, 'PREPARING');
       const [agent, messages] = await Promise.all([
-        this.loadAgent(request.agentId),
+        this.loadAgent(request.agentId, {
+          userId: request.userId,
+          organizationId: request.organizationId,
+        }),
         request.conversationId
           ? this.conversationsService.getMessages(request.conversationId, { take: 20 })
           : Promise.resolve([]),
       ]);
+      const organizationId = request.organizationId ?? agent.organizationId ?? undefined;
+      const userId = request.userId ?? agent.userId ?? undefined;
       const conversationHistory = messages.map((message) => ({
         role: message.role,
         content: message.content,
@@ -62,7 +67,8 @@ export class ConversationRuntimeService {
         }),
         agentId: request.agentId,
         conversationId: request.conversationId,
-        organizationId: request.organizationId,
+        userId,
+        organizationId,
         userMessage: request.userMessage,
         conversationHistory,
       });
@@ -145,18 +151,24 @@ export class ConversationRuntimeService {
     try {
       await this.runsService.transitionStatus(run.id, 'PREPARING');
       const [agent, messages] = await Promise.all([
-        this.loadAgent(request.agentId),
+        this.loadAgent(request.agentId, {
+          userId: request.userId,
+          organizationId: request.organizationId,
+        }),
         request.conversationId
           ? this.conversationsService.getMessages(request.conversationId, { take: 20 })
           : Promise.resolve([]),
       ]);
+      const organizationId = request.organizationId ?? agent.organizationId ?? undefined;
+      const userId = request.userId ?? agent.userId ?? undefined;
       const context = await this.contextBuilder.build({
         systemPrompt: buildConversationSystemPrompt({
           agentInstructions: agent.instructions ?? undefined,
         }),
         agentId: request.agentId,
         conversationId: request.conversationId,
-        organizationId: request.organizationId,
+        userId,
+        organizationId,
         userMessage: request.userMessage,
         conversationHistory: messages.map((message) => ({
           role: message.role,
@@ -203,11 +215,11 @@ export class ConversationRuntimeService {
     }
   }
 
-  private async loadAgent(agentId: string) {
-    const key = `agent:profile:${agentId}`;
+  private async loadAgent(agentId: string, scope?: { userId?: string; organizationId?: string }) {
+    const key = `agent:profile:${agentId}:${scope?.userId ?? ''}:${scope?.organizationId ?? ''}`;
     const cached = await this.runtimeCache.get<Awaited<ReturnType<AgentsService['findById']>>>(key);
     if (cached) return cached;
-    const agent = await this.agentsService.findById(agentId);
+    const agent = await this.agentsService.findById(agentId, false, scope);
     void this.runtimeCache.set(key, agent, 60);
     return agent;
   }

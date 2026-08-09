@@ -10,9 +10,26 @@ export class AgentsRepository {
     return this.db.agent.create({ data });
   }
 
-  async findById(id: string, includeSkills?: boolean): Promise<Agent | null> {
+  async findById(
+    id: string,
+    includeSkills?: boolean,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Agent | null> {
     return this.db.agent.findFirst({
-      where: { id, deletedAt: null },
+      where: {
+        id,
+        ...(scope
+          ? {
+              OR: [
+                ...(scope.userId ? [{ userId: scope.userId }] : []),
+                ...(scope.organizationId ? [{ organizationId: scope.organizationId }] : []),
+                // Unowned agents are platform agents, such as Jaafar.
+                { userId: null, organizationId: null },
+              ],
+            }
+          : {}),
+        deletedAt: null,
+      },
       include: includeSkills ? { skills: { where: { deletedAt: null } } } : undefined,
     });
   }

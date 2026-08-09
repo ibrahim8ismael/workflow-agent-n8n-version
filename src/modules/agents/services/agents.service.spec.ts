@@ -73,13 +73,13 @@ describe('AgentsService', () => {
       const result = await service.findById('agent-1');
 
       expect(result.id).toBe('agent-1');
-      expect(mockRepo.findById).toHaveBeenCalledWith('agent-1', undefined);
+      expect(mockRepo.findById).toHaveBeenCalledWith('agent-1', undefined, undefined);
     });
 
     it('should pass includeSkills through', async () => {
       await service.findById('agent-1', true);
 
-      expect(mockRepo.findById).toHaveBeenCalledWith('agent-1', true);
+      expect(mockRepo.findById).toHaveBeenCalledWith('agent-1', true, undefined);
     });
 
     it('should throw when the agent does not exist', async () => {
@@ -94,7 +94,7 @@ describe('AgentsService', () => {
       await service.findMany({ organizationId: 'org-1', status: 'PUBLISHED', skip: 2, take: 10 });
 
       expect(mockRepo.findMany).toHaveBeenCalledWith({
-        where: { organizationId: 'org-1', status: 'PUBLISHED' },
+        where: { OR: [{ organizationId: 'org-1' }], status: 'PUBLISHED' },
         orderBy: { createdAt: 'desc' },
         skip: 2,
         take: 10,

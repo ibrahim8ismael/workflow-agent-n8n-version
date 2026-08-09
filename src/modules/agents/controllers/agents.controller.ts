@@ -1,28 +1,48 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { Agent } from '@prisma/client';
+import { CurrentUser } from '../../../common/decorators/current-user.decorator';
+import { TenantAccessGuard } from '../../../common/guards/tenant-access.guard';
+import { JwtAuthGuard } from '../../auth/guards/auth.guard';
 import { type CreateAgentDto, createAgentSchema } from '../dto/create-agent.dto';
 import { type UpdateAgentDto, updateAgentSchema } from '../dto/update-agent.dto';
 import { AgentsService } from '../services/agents.service';
 
 @Controller('agents')
+@UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class AgentsController {
   constructor(private readonly agentsService: AgentsService) {}
 
   @Post()
-  async create(@Body() dto: CreateAgentDto): Promise<Agent> {
+  async create(@Body() dto: CreateAgentDto, @CurrentUser() user: AgentUser): Promise<Agent> {
     const parsed = createAgentSchema.parse(dto);
-    return this.agentsService.create(parsed);
+    return this.agentsService.create({
+      ...parsed,
+      userId: user.id,
+      organizationId: user.activeContext === 'organization' ? user.organizationId : undefined,
+    });
   }
 
   @Get()
   async findMany(
-    @Query('organizationId') organizationId?: string,
+    @Query('organizationId') _organizationId?: string,
     @Query('status') status?: string,
     @Query('skip') skip?: string,
     @Query('take') take?: string,
+    @CurrentUser() user?: AgentUser,
   ): Promise<Agent[]> {
     return this.agentsService.findMany({
-      organizationId,
+      userId: user?.id,
+      organizationId: user?.activeContext === 'organization' ? user.organizationId : undefined,
       status,
       skip: skip ? Number(skip) : undefined,
       take: take ? Number(take) : undefined,
@@ -30,8 +50,11 @@ export class AgentsController {
   }
 
   @Get(':id')
-  async findById(@Param('id') id: string): Promise<Agent> {
-    return this.agentsService.findById(id, true);
+  async findById(@Param('id') id: string, @CurrentUser() user: AgentUser): Promise<Agent> {
+    return this.agentsService.findById(id, true, {
+      userId: user.id,
+      organizationId: user.activeContext === 'organization' ? user.organizationId : undefined,
+    });
   }
 
   @Patch(':id')
@@ -70,3 +93,5 @@ export class AgentsController {
     return this.agentsService.getSkills(id);
   }
 }
+
+type AgentUser = { id: string; activeContext?: string; organizationId?: string };
