@@ -23,7 +23,15 @@ describe('KnowledgeController', () => {
         buffer: Buffer.from('# Pricing\nPremium costs $20.'),
       } as Express.Multer.File;
 
-      await controller.upload(file, { organizationId: 'org-1' });
+      await controller.upload(
+        file,
+        { organizationId: 'org-1' },
+        {
+          id: 'user-1',
+          activeContext: 'organization',
+          organizationId: 'org-1',
+        },
+      );
 
       expect(mockService.ingestDocument).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -37,7 +45,9 @@ describe('KnowledgeController', () => {
     });
 
     it('requires a file', async () => {
-      await expect(controller.upload(undefined as never, {})).rejects.toThrow(BadRequestException);
+      await expect(controller.upload(undefined as never, {}, { id: 'user-1' })).rejects.toThrow(
+        BadRequestException,
+      );
     });
   });
 

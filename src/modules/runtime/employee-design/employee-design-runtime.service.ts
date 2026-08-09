@@ -54,12 +54,13 @@ export class EmployeeDesignRuntimeService {
       conversationId: request.conversationId,
       userId: request.userId,
       organizationId: request.organizationId,
-      metadata: { runtimeMode: request.mode, designStatus: 'DRAFT' },
+      metadata: { runtimeMode: request.mode, designStatus: 'DRAFT', approvalStatus: 'PENDING' },
     });
 
     try {
       await this.runsService.transitionStatus(run.id, 'PREPARING');
       const agent = await this.agentsService.findById(request.agentId);
+      const organizationId = request.organizationId ?? agent.organizationId ?? undefined;
       const history = request.conversationId
         ? (await this.conversationsService.getMessages(request.conversationId, { take: 20 })).map(
             (message) => ({ role: message.role, content: message.content }),
@@ -69,7 +70,7 @@ export class EmployeeDesignRuntimeService {
         systemPrompt: `${JAAFAR_IDENTITY_SYSTEM_PROMPT}\n\n${BLUEPRINT_GENERATOR_SYSTEM_PROMPT}\n\nEmployee policies:\n${agent.instructions ?? ''}`,
         agentId: request.agentId,
         conversationId: request.conversationId,
-        organizationId: request.organizationId,
+        organizationId,
         userMessage: request.userMessage,
         conversationHistory: history,
       });
@@ -90,6 +91,7 @@ export class EmployeeDesignRuntimeService {
       await this.runsService.updateMetadata(run.id, {
         blueprint,
         designStatus: blueprint.ready ? 'READY_FOR_REVIEW' : 'GATHERING_REQUIREMENTS',
+        approvalStatus: blueprint.ready ? 'PENDING' : 'NOT_READY',
         execution: result.execution,
       });
       const response = this.formatSummary(blueprint);
@@ -136,7 +138,7 @@ export class EmployeeDesignRuntimeService {
       };
     }
 
-    if (metadata.designStatus !== 'READY_FOR_REVIEW') {
+    if (metadata.designStatus !== 'READY_FOR_REVIEW' || metadata.approvalStatus === 'REJECTED') {
       return {
         runId,
         mode: 'employee_design',
@@ -147,6 +149,14 @@ export class EmployeeDesignRuntimeService {
     }
 
     const blueprint = blueprintSchema.parse(metadata.blueprint);
+    const approvedMetadata = {
+      ...metadata,
+      approvalStatus: 'APPROVED',
+      approvedAt: metadata.approvedAt ?? new Date().toISOString(),
+    };
+    if (metadata.approvalStatus !== 'APPROVED') {
+      await this.runsService.updateMetadata(runId, approvedMetadata);
+    }
     const agent = await this.agentsService.create({
       name: blueprint.name,
       description: blueprint.description,
@@ -172,7 +182,7 @@ export class EmployeeDesignRuntimeService {
       { source: 'employee-design-confirmation', designRunId: runId },
     );
     await this.runsService.updateMetadata(runId, {
-      ...metadata,
+      ...approvedMetadata,
       designStatus: 'CREATED',
       createdAgentId: agent.id,
     });

@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const searchKnowledgeSchema = z.object({
   query: z.string().min(1),
+  userId: z.string().optional(),
   organizationId: z.string().optional(),
   category: z.string().optional(),
   limit: z.number().int().positive().max(50).default(10),

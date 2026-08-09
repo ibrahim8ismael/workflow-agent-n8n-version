@@ -6,6 +6,7 @@ import {
   buildPlannerSystemPrompt,
   buildRuntimeSystemPrompt,
   buildSkillSystemPrompt,
+  JAAFAR_IDENTITY_SYSTEM_PROMPT,
 } from './system-prompts';
 
 describe('protected system prompts', () => {
@@ -84,5 +85,11 @@ describe('protected system prompts', () => {
     expect(context).toContain('Current UTC time:');
     expect(context).toContain('Business timezone: UTC');
     expect(context).toContain('Business local time:');
+  });
+
+  it('defines Jaafar in both English and Arabic', () => {
+    expect(JAAFAR_IDENTITY_SYSTEM_PROMPT).toContain('You are Jaafar, the AI guide inside Woops');
+    expect(JAAFAR_IDENTITY_SYSTEM_PROMPT).toContain('Arabic name is جعفر');
+    expect(JAAFAR_IDENTITY_SYSTEM_PROMPT).toContain("Match the user's language");
   });
 });

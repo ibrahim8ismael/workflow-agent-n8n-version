@@ -99,6 +99,7 @@ export class SkillEmployeeRuntimeService {
     switch (skill.executionMode) {
       case SKILL_EXECUTION_MODE.KNOWLEDGE_RETRIEVAL:
         return this.knowledgeService.search({
+          userId: request.userId,
           organizationId: request.organizationId,
           query,
           limit: this.toNumber(args.limit, 5),
@@ -136,6 +137,7 @@ export class SkillEmployeeRuntimeService {
     let knowledgeContext = '';
     if (skill.executionMode === SKILL_EXECUTION_MODE.HYBRID) {
       const chunks = await this.knowledgeService.search({
+        userId: request.userId,
         organizationId: request.organizationId,
         query,
         limit: 3,

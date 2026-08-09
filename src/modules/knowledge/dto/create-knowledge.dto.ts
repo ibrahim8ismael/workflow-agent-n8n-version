@@ -6,6 +6,7 @@ export const createKnowledgeDocumentSchema = z.object({
   contentType: z.literal('markdown').default('markdown'),
   content: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),
+  userId: z.string().optional(),
   organizationId: z.string().optional(),
   category: z.string().optional(),
 });

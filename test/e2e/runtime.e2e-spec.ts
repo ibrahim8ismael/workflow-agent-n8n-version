@@ -7,6 +7,7 @@ import { DatabaseService } from '../../src/database/database.service';
 import { AIAdapterService } from '../../src/infrastructure/ai-adapter/ai-adapter.service';
 import { RedisService } from '../../src/infrastructure/cache/redis.service';
 import { NotificationService } from '../../src/infrastructure/email/notification.service';
+import { JwtAuthGuard } from '../../src/modules/auth/guards/auth.guard';
 import { AuthService } from '../../src/modules/auth/services/auth.service';
 import { MockDatabaseService, MockRedisService, mockNotificationService } from '../setup.e2e';
 
@@ -66,6 +67,18 @@ describe('Runtime (e2e)', () => {
       .useValue(new MockRedisService())
       .overrideProvider(NotificationService)
       .useValue(mockNotificationService)
+      .overrideGuard(JwtAuthGuard)
+      .useValue({
+        canActivate: (context: {
+          switchToHttp: () => { getRequest: () => Record<string, unknown> };
+        }) => {
+          context.switchToHttp().getRequest().user = {
+            id: 'test-user-id',
+            activeContext: 'individual',
+          };
+          return true;
+        },
+      })
       .overrideProvider(AuthService)
       .useValue({} as never)
       .overrideProvider(AIAdapterService)
@@ -95,6 +108,7 @@ describe('Runtime (e2e)', () => {
     it('should execute a run end-to-end and complete it', async () => {
       const agent = {
         id: 'agent-1',
+        userId: 'test-user-id',
         name: 'Test Agent',
         slug: 'test-agent',
         model: 'gpt-4o',

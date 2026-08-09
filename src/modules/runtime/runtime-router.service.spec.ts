@@ -1,10 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConversationRuntimeService } from './conversation/conversation-runtime.service';
+import { EmployeeDesignRuntimeService } from './employee-design/employee-design-runtime.service';
 import { RuntimeRouterService } from './runtime-router.service';
 import { RuntimeService } from './services/runtime.service';
 import { RuntimeMode } from './types/runtime.types';
-import { EmployeeDesignRuntimeService } from './employee-design/employee-design-runtime.service';
 
 describe('RuntimeRouterService', () => {
   const conversationRuntime = { run: vi.fn() } as unknown as ConversationRuntimeService;

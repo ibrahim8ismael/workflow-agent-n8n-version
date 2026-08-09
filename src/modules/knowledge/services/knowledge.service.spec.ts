@@ -60,6 +60,19 @@ describe('KnowledgeService', () => {
         }),
       );
     });
+
+    it('should connect a document to a personal user when provided', async () => {
+      await service.createDocument({
+        title: 'Personal notes',
+        content: 'x',
+        userId: 'user-1',
+        contentType: 'markdown',
+      });
+
+      expect(mockRepo.createDocument).toHaveBeenCalledWith(
+        expect.objectContaining({ user: { connect: { id: 'user-1' } } }),
+      );
+    });
   });
 
   describe('findDocumentById / findDocuments', () => {
@@ -79,7 +92,7 @@ describe('KnowledgeService', () => {
       await service.findDocuments({ organizationId: 'org-1', skip: 1, take: 5 });
 
       expect(mockRepo.findDocuments).toHaveBeenCalledWith({
-        where: { organizationId: 'org-1' },
+        where: { OR: [{ organizationId: 'org-1' }] },
         orderBy: { createdAt: 'desc' },
         skip: 1,
         take: 5,
@@ -102,11 +115,15 @@ describe('KnowledgeService', () => {
     it('should delegate the search to the repository', async () => {
       await service.search({ organizationId: 'org-1', query: 'revenue', limit: 5, offset: 0 });
 
-      expect(mockRepo.searchChunks).toHaveBeenCalledWith('org-1', 'revenue', {
-        category: undefined,
-        limit: 5,
-        offset: 0,
-      });
+      expect(mockRepo.searchChunks).toHaveBeenCalledWith(
+        { userId: undefined, organizationId: 'org-1' },
+        'revenue',
+        {
+          category: undefined,
+          limit: 5,
+          offset: 0,
+        },
+      );
     });
   });
 
@@ -116,6 +133,15 @@ describe('KnowledgeService', () => {
 
       expect(mockRepo.findChunksByDocumentId).toHaveBeenCalledWith('doc-1');
       expect(result).toEqual([{ id: 'chunk-1' }]);
+    });
+
+    it('should scope chunks to the organization when provided', async () => {
+      await service.getDocumentChunks('doc-1', { organizationId: 'org-1' });
+
+      expect(mockRepo.findDocumentById).toHaveBeenCalledWith('doc-1', { organizationId: 'org-1' });
+      expect(mockRepo.findChunksByDocumentId).toHaveBeenCalledWith('doc-1', {
+        organizationId: 'org-1',
+      });
     });
 
     it('should throw when the document is missing', async () => {
