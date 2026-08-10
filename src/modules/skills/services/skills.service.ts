@@ -14,7 +14,10 @@ export class SkillsService {
     if (existing) {
       throw new ConflictException(`Skill with slug "${dto.slug}" already exists`);
     }
-    return this.skillsRepository.create(dto as Record<string, unknown> as never);
+    return this.skillsRepository.create({
+      ...dto,
+      status: SKILL_STATUS.DRAFT,
+    } as Record<string, unknown> as never);
   }
 
   async findById(id: string): Promise<Skill> {

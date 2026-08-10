@@ -30,6 +30,14 @@ export class ConversationsService {
     return this.conversationsRepository.update(id, { title: normalizedTitle });
   }
 
+  async updateMetadata(id: string, metadata: Record<string, unknown>): Promise<Conversation> {
+    const conversation = await this.findById(id);
+    const currentMetadata = (conversation.metadata as Record<string, unknown> | null) ?? {};
+    return this.conversationsRepository.update(id, {
+      metadata: { ...currentMetadata, ...metadata } as never,
+    });
+  }
+
   async titleFromFirstMessage(id: string, message: string): Promise<Conversation> {
     const conversation = await this.findById(id);
     if (conversation.title && conversation.title !== 'New chat') return conversation;

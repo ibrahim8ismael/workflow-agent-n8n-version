@@ -16,7 +16,8 @@ export class AgentsService {
       instructions: dto.instructions,
       personality: dto.personality,
       model: dto.model,
-      status: (dto.status ?? 'DRAFT') as never,
+      // Creation is always a draft transition; publication and activation are separate actions.
+      status: 'DRAFT' as never,
       ...(dto.userId ? { user: { connect: { id: dto.userId } } } : {}),
       ...(dto.organizationId ? { organization: { connect: { id: dto.organizationId } } } : {}),
     } as never);

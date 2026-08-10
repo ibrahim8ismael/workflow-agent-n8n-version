@@ -17,6 +17,7 @@ import { PlannerService } from '../../planner/planner.service';
 import { RunsService } from '../../runs/runs.service';
 import { SkillsService } from '../../skills/services/skills.service';
 import { RuntimeCacheService } from '../shared/runtime-cache.service';
+import { runtimeUserErrorMessage } from '../shared/runtime-user-message';
 import {
   SkillEmployeeRuntimeService,
   type SkillManifest,
@@ -450,7 +451,7 @@ export class RuntimeService {
     return {
       runId,
       status: 'FAILED',
-      response: `An error occurred: ${message}`,
+      response: runtimeUserErrorMessage(error),
       usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
     };
   }

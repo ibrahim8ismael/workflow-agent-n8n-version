@@ -1,5 +1,8 @@
 import { BadRequestException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { AgentsService } from '../agents/services/agents.service';
+import { ConversationsService } from '../conversations/services/conversations.service';
+import { PlannerService } from '../planner/planner.service';
 import { ConversationRuntimeService } from './conversation/conversation-runtime.service';
 import { EmployeeDesignRuntimeService } from './employee-design/employee-design-runtime.service';
 import { RuntimeRouterService } from './runtime-router.service';
@@ -10,10 +13,16 @@ describe('RuntimeRouterService', () => {
   const conversationRuntime = { run: vi.fn() } as unknown as ConversationRuntimeService;
   const employeeDesignRuntime = { run: vi.fn() } as unknown as EmployeeDesignRuntimeService;
   const executionRuntime = { execute: vi.fn() } as unknown as RuntimeService;
+  const plannerService = { createPlan: vi.fn() } as unknown as PlannerService;
+  const agentsService = { findById: vi.fn() } as unknown as AgentsService;
+  const conversationsService = { getMessages: vi.fn() } as unknown as ConversationsService;
   const router = new RuntimeRouterService(
     conversationRuntime,
     employeeDesignRuntime,
     executionRuntime,
+    plannerService,
+    agentsService,
+    conversationsService,
   );
   const request = {
     agentId: 'agent-1',
@@ -23,6 +32,9 @@ describe('RuntimeRouterService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(agentsService.findById).mockResolvedValue({ instructions: '' } as never);
+    vi.mocked(conversationsService.getMessages).mockResolvedValue([] as never);
+    vi.mocked(plannerService.createPlan).mockResolvedValue({ intent: 'general_question' } as never);
   });
 
   it('routes conversation requests without invoking execution', async () => {
@@ -54,8 +66,21 @@ describe('RuntimeRouterService', () => {
     expect(executionRuntime.execute).not.toHaveBeenCalled();
   });
 
-  it('rejects unknown runtime modes', () => {
-    expect(() => router.run({ ...request, mode: 'unknown' as RuntimeMode })).toThrow(
+  it('routes planner-detected employee design from default conversation mode', async () => {
+    vi.mocked(plannerService.createPlan).mockResolvedValue({ intent: 'employee_design' } as never);
+    vi.mocked(employeeDesignRuntime.run).mockResolvedValue({ runId: 'design-run-1' } as never);
+
+    await router.run(request);
+
+    expect(employeeDesignRuntime.run).toHaveBeenCalledWith({
+      ...request,
+      mode: RuntimeMode.EMPLOYEE_DESIGN,
+    });
+    expect(conversationRuntime.run).not.toHaveBeenCalled();
+  });
+
+  it('rejects unknown runtime modes', async () => {
+    await expect(router.run({ ...request, mode: 'unknown' as RuntimeMode })).rejects.toThrow(
       BadRequestException,
     );
   });
