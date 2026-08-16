@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { z } from 'zod';
 import { LLMRuntimeService } from '../../../infrastructure/llm-runtime/llm-runtime.service';
 import {
   BLUEPRINT_GENERATOR_SYSTEM_PROMPT,
@@ -14,29 +13,12 @@ import { ContextBuilderService } from '../services/context-builder.service';
 import type { ExecuteResponse } from '../services/runtime.service';
 import { runtimeUserErrorMessage } from '../shared/runtime-user-message';
 import type { RuntimeRequest } from '../types/runtime.types';
+import { blueprintSchema, type EmployeeBlueprint } from './employee-blueprint.schema';
 import { validateEmployeeBlueprint } from './employee-blueprint.validation';
+import { blueprintRevision } from './employee-blueprint-revision';
 
-const blueprintSchema = z.object({
-  ready: z.boolean(),
-  missingRequirements: z.array(z.string()),
-  name: z.string(),
-  role: z.string(),
-  department: z.string(),
-  summary: z.string(),
-  responsibilities: z.array(z.string()),
-  goals: z.array(z.string()),
-  knowledgeRequirements: z.array(z.string()),
-  requiredTools: z.array(z.string()),
-  requiredIntegrations: z.array(z.string()),
-  channels: z.array(z.string()),
-  memoryPolicy: z.string(),
-  permissions: z.array(z.string()),
-  workflow: z.array(z.string()),
-  description: z.string(),
-  instructions: z.string(),
-});
-
-type EmployeeBlueprint = z.infer<typeof blueprintSchema>;
+export type { EmployeeBlueprint } from './employee-blueprint.schema';
+export { blueprintSchema } from './employee-blueprint.schema';
 
 @Injectable()
 export class EmployeeDesignRuntimeService {
@@ -122,6 +104,8 @@ export class EmployeeDesignRuntimeService {
         );
       }
       const updatedBlueprint = { ...blueprint, ready, missingRequirements };
+      const revision = blueprintRevision(updatedBlueprint);
+      await this.runsService.updateMetadata(run.id, { blueprintRevision: revision });
       const response = this.formatSummary(updatedBlueprint);
       if (request.conversationId) {
         await this.conversationsService.addMessage(request.conversationId, {
@@ -133,6 +117,7 @@ export class EmployeeDesignRuntimeService {
             status: ready ? 'READY_FOR_REVIEW' : 'GATHERING_REQUIREMENTS',
             approvalStatus: ready ? 'READY' : 'NOT_READY',
             blueprint: updatedBlueprint,
+            blueprintRevision: revision,
             missingRequirements,
             sourceConversationId: request.conversationId,
             sourceDesignRunId: run.id,
@@ -146,7 +131,7 @@ export class EmployeeDesignRuntimeService {
         mode: request.mode,
         status: 'COMPLETED',
         response,
-        plan: updatedBlueprint,
+        plan: { ...updatedBlueprint, blueprintRevision: revision },
         usage: {
           promptTokens: completed.promptTokens,
           completionTokens: completed.completionTokens,
@@ -170,6 +155,7 @@ export class EmployeeDesignRuntimeService {
   async confirm(
     runId: string,
     scope?: { userId?: string; organizationId?: string },
+    options?: { blueprintRevision?: string },
   ): Promise<ExecuteResponse> {
     const run = await this.runsService.findById(runId);
     if (scope && run.userId && run.userId !== scope.userId) {
@@ -198,7 +184,11 @@ export class EmployeeDesignRuntimeService {
         mode: 'employee_design',
         status: 'COMPLETED',
         response: `Employee draft "${existingAgent.name}" was already created and is ready for configuration.`,
-        plan: { ...(metadata.blueprint as Record<string, unknown>), agentId: existingAgent.id },
+        plan: {
+          ...(metadata.blueprint as Record<string, unknown>),
+          agentId: existingAgent.id,
+          blueprintRevision: metadata.blueprintRevision,
+        },
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       };
     }
@@ -223,6 +213,20 @@ export class EmployeeDesignRuntimeService {
     }
 
     const blueprint = blueprintSchema.parse(metadata.blueprint);
+    const currentRevision =
+      typeof metadata.blueprintRevision === 'string'
+        ? metadata.blueprintRevision
+        : blueprintRevision(blueprint);
+    if (options?.blueprintRevision && options.blueprintRevision !== currentRevision) {
+      return {
+        runId,
+        mode: 'employee_design',
+        status: 'FAILED',
+        response:
+          'This employee plan has changed. Review the latest blueprint before confirming it.',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
     const validation = validateEmployeeBlueprint(blueprint);
     if (!validation.valid) {
       return {
@@ -244,7 +248,7 @@ export class EmployeeDesignRuntimeService {
           mode: 'employee_design',
           status: 'COMPLETED',
           response: `Employee draft "${existingAgent.name}" was already created and is ready for configuration.`,
-          plan: { ...blueprint, agentId: existingAgent.id },
+          plan: { ...blueprint, agentId: existingAgent.id, blueprintRevision: currentRevision },
           usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
         };
       }
@@ -270,6 +274,7 @@ export class EmployeeDesignRuntimeService {
         instructions: blueprint.instructions,
         status: 'DRAFT',
         model: 'gpt-4o',
+        userId: run.userId ?? undefined,
         organizationId: run.organizationId ?? undefined,
       });
     } catch (error) {
@@ -330,7 +335,7 @@ export class EmployeeDesignRuntimeService {
       mode: 'employee_design',
       status: 'COMPLETED',
       response: `Employee draft "${agent.name}" was created and is ready for configuration.`,
-      plan: { ...blueprint, agentId: agent.id },
+      plan: { ...blueprint, agentId: agent.id, blueprintRevision: currentRevision },
       usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
     };
   }

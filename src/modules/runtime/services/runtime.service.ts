@@ -2,7 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { ToolSet } from 'ai';
 import { jsonSchema, tool } from 'ai';
-import type { ExecutionMode } from '../../../infrastructure/llm-runtime/interfaces/llm-runtime.interface';
+import type {
+  ExecutionMode,
+  LLMExecutionMetadata,
+} from '../../../infrastructure/llm-runtime/interfaces/llm-runtime.interface';
 import { LLMRuntimeService } from '../../../infrastructure/llm-runtime/llm-runtime.service';
 import {
   buildConversationSystemPrompt,
@@ -25,6 +28,7 @@ import {
 import { generateWorkflow, type WorkflowDefinition } from '../types/workflow.types';
 import { ContextBuilderService } from './context-builder.service';
 export interface ExecuteRequest {
+  runId?: string;
   userMessage: string;
   agentId: string;
   conversationId?: string;
@@ -46,6 +50,7 @@ export interface ExecuteResponse {
     completionTokens: number;
     totalTokens: number;
   };
+  execution?: LLMExecutionMetadata;
 }
 
 type SkillContext = SkillManifest;
@@ -375,7 +380,7 @@ export class RuntimeService {
         plan.steps.map((step) => {
           const skill = skillsById.get(step.skillId);
           const executor: (args: Record<string, unknown>) => Promise<unknown> = (args) =>
-            this.executeSkill(step, skill, args, request);
+            this.executeSkill(step, skill, args, { ...request, runId });
           return [
             step.skillName,
             tool({

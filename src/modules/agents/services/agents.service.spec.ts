@@ -22,6 +22,7 @@ describe('AgentsService', () => {
     addSkill: vi.fn(),
     removeSkill: vi.fn(),
     getSkills: vi.fn(),
+    getAssignedSkills: vi.fn(),
   } as unknown as AgentsRepository;
 
   beforeEach(() => {
@@ -34,6 +35,7 @@ describe('AgentsService', () => {
     vi.mocked(mockRepo.addSkill).mockResolvedValue(undefined);
     vi.mocked(mockRepo.removeSkill).mockResolvedValue(undefined);
     vi.mocked(mockRepo.getSkills).mockResolvedValue([] as never);
+    vi.mocked(mockRepo.getAssignedSkills).mockResolvedValue([] as never);
     service = new AgentsService(mockRepo);
   });
 
@@ -162,6 +164,22 @@ describe('AgentsService', () => {
       await service.getSkills('agent-1');
 
       expect(mockRepo.getSkills).toHaveBeenCalledWith('agent-1');
+    });
+
+    it('should list assigned skills within the authenticated scope', async () => {
+      await service.getAssignedSkills('agent-1', {
+        userId: 'user-1',
+        organizationId: 'org-1',
+      });
+
+      expect(mockRepo.findById).toHaveBeenCalledWith('agent-1', false, {
+        userId: 'user-1',
+        organizationId: 'org-1',
+      });
+      expect(mockRepo.getAssignedSkills).toHaveBeenCalledWith('agent-1', {
+        userId: 'user-1',
+        organizationId: 'org-1',
+      });
     });
   });
 });

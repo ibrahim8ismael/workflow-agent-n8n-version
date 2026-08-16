@@ -7,6 +7,7 @@ export enum RuntimeMode {
 }
 
 export interface RuntimeRequest {
+  runId?: string;
   userMessage: string;
   agentId: string;
   conversationId?: string;

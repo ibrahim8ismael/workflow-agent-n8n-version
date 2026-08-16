@@ -56,6 +56,25 @@ export class ConversationsService {
     return conversation;
   }
 
+  async findByIdInScope(
+    id: string,
+    scope: { userId?: string; organizationId?: string },
+  ): Promise<Conversation> {
+    const conversation = await this.findById(id);
+    const personalAccess = Boolean(scope.userId && conversation.userId === scope.userId);
+    const organizationAccess = Boolean(
+      scope.organizationId && conversation.organizationId === scope.organizationId,
+    );
+    if (
+      (conversation.userId || conversation.organizationId) &&
+      !personalAccess &&
+      !organizationAccess
+    ) {
+      throw new NotFoundException(`Conversation with id "${id}" not found`);
+    }
+    return conversation;
+  }
+
   async findMany(params?: {
     agentId?: string;
     userId?: string;

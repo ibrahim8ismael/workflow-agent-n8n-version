@@ -3,6 +3,7 @@ import { Agent } from '@prisma/client';
 import { AGENT_STATUS } from '../constants/agent.constants';
 import { CreateAgentDto } from '../dto/create-agent.dto';
 import { UpdateAgentDto } from '../dto/update-agent.dto';
+import type { AssignedAgentSkill } from '../interfaces/agent.interface';
 import { AgentsRepository } from '../repositories/agents.repository';
 
 @Injectable()
@@ -94,6 +95,14 @@ export class AgentsService {
   async getSkills(agentId: string) {
     await this.findById(agentId);
     return this.agentsRepository.getSkills(agentId);
+  }
+
+  async getAssignedSkills(
+    agentId: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<AssignedAgentSkill[]> {
+    await this.findById(agentId, false, scope);
+    return this.agentsRepository.getAssignedSkills(agentId, scope);
   }
 }
 

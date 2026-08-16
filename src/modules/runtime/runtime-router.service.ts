@@ -6,6 +6,7 @@ import {
   ConversationRuntimeService,
   type ConversationStreamEvent,
 } from './conversation/conversation-runtime.service';
+import type { ConfirmEmployeeDesignDto } from './dto/confirm-employee-design.dto';
 import { EmployeeDesignRuntimeService } from './employee-design/employee-design-runtime.service';
 import type { ExecuteRequest, ExecuteResponse } from './services/runtime.service';
 import { RuntimeService } from './services/runtime.service';
@@ -75,8 +76,9 @@ export class RuntimeRouterService {
   confirmEmployeeDesign(
     runId: string,
     scope?: { userId?: string; organizationId?: string },
+    confirmation?: ConfirmEmployeeDesignDto,
   ): Promise<ExecuteResponse> {
-    return this.employeeDesignRuntime.confirm(runId, scope);
+    return this.employeeDesignRuntime.confirm(runId, scope, confirmation);
   }
 
   private async withMode(

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { LLMRuntimeService } from '../../../infrastructure/llm-runtime/llm-runtime.service';
 import { buildSkillSystemPrompt } from '../../../infrastructure/prompts/system-prompts';
@@ -6,7 +6,9 @@ import { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import { MemoryService } from '../../memory/services/memory.service';
 import type { PlanStep } from '../../planner/interfaces/plan.interface';
 import { SKILL_EXECUTION_MODE } from '../../skills/constants/skill.constants';
-import { SkillRuntimeError } from './skill-runtime.errors';
+import type { ToolDefinition } from '../interfaces/tool.interface';
+import { ToolExecutorService } from '../services/tool-executor.service';
+import { SkillRuntimeError, type SkillRuntimeErrorCode } from './skill-runtime.errors';
 
 export interface SkillManifest {
   id: string;
@@ -25,6 +27,7 @@ export interface SkillManifest {
 }
 
 export interface SkillRuntimeRequest {
+  runId?: string;
   agentId: string;
   userMessage: string;
   userId?: string;
@@ -40,6 +43,7 @@ export class SkillEmployeeRuntimeService {
     private readonly memoryService: MemoryService,
     private readonly llmRuntime: LLMRuntimeService,
     private readonly configService: ConfigService,
+    @Optional() private readonly toolExecutor?: ToolExecutorService,
   ) {}
 
   async execute(
@@ -49,6 +53,9 @@ export class SkillEmployeeRuntimeService {
     request: SkillRuntimeRequest,
   ): Promise<unknown> {
     this.validateManifest(skill, step);
+    if (this.toolExecutor && request.runId) {
+      return this.executeThroughToolBoundary(step, skill, args, request);
+    }
     this.validateInput(skill, args);
     this.logger.log({ event: 'skill.started', skillId: skill.skillId, skill: skill.slug });
 
@@ -70,6 +77,88 @@ export class SkillEmployeeRuntimeService {
         retryable: normalized.retryable,
       });
       throw normalized;
+    }
+  }
+
+  private async executeThroughToolBoundary(
+    step: PlanStep,
+    skill: SkillManifest,
+    args: Record<string, unknown>,
+    request: SkillRuntimeRequest,
+  ): Promise<unknown> {
+    const result = await this.toolExecutor?.execute(this.toToolDefinition(skill), {
+      runId: request.runId as string,
+      agentId: request.agentId,
+      userMessage: request.userMessage,
+      userId: request.userId,
+      organizationId: request.organizationId,
+      input: args as never,
+      logicalAction: `${step.order}:${skill.slug}`,
+    });
+    if (!result?.success) {
+      const error = result?.error;
+      throw new SkillRuntimeError(
+        this.skillErrorCode(error?.code),
+        error?.message ?? `Skill "${skill.name}" failed`,
+        error?.retryable ?? false,
+      );
+    }
+    return result.output;
+  }
+
+  private toToolDefinition(skill: SkillManifest): ToolDefinition {
+    const executionMode =
+      skill.executionMode === SKILL_EXECUTION_MODE.KNOWLEDGE_RETRIEVAL
+        ? 'knowledge'
+        : skill.executionMode === SKILL_EXECUTION_MODE.MEMORY_RETRIEVAL
+          ? 'memory'
+          : skill.executionMode === SKILL_EXECUTION_MODE.N8N_WORKFLOW
+            ? 'n8n'
+            : skill.executionMode === SKILL_EXECUTION_MODE.HUMAN_APPROVAL
+              ? 'approval'
+              : skill.executionMode === SKILL_EXECUTION_MODE.HYBRID
+                ? 'hybrid'
+                : 'ai';
+    const maxAttempts = this.toNumber(
+      (skill.retryPolicy as { maxAttempts?: unknown } | undefined)?.maxAttempts,
+      1,
+    );
+    return {
+      id: skill.slug,
+      name: skill.name,
+      slug: skill.slug,
+      description: skill.description ?? skill.name,
+      instructions: skill.instructions,
+      executionMode,
+      inputSchema: (skill.inputSchema ?? { type: 'object' }) as never,
+      outputSchema: (skill.outputSchema ?? { type: 'object' }) as never,
+      requiredPermissions: [],
+      requiredIntegrations: [],
+      requiresApproval: skill.executionMode === SKILL_EXECUTION_MODE.HUMAN_APPROVAL,
+      sideEffect: false,
+      timeoutMs: this.toNumber(skill.timeout, 60_000),
+      maxRetries: Math.max(0, maxAttempts - 1),
+      retryPolicy: { maxAttempts, retryableCodes: [] },
+      idempotent: false,
+      successCriteria: [],
+      permissionScope: 'user_or_organization',
+    };
+  }
+
+  private skillErrorCode(code?: string): SkillRuntimeErrorCode {
+    switch (code) {
+      case 'INVALID_TOOL_INPUT':
+        return 'INVALID_INPUT';
+      case 'INVALID_TOOL_OUTPUT':
+        return 'INVALID_OUTPUT';
+      case 'APPROVAL_REQUIRED':
+        return 'APPROVAL_REQUIRED';
+      case 'PERMISSION_DENIED':
+        return 'PERMISSION_DENIED';
+      case 'TOOL_TIMEOUT':
+        return 'EXECUTION_TIMEOUT';
+      default:
+        return 'EXECUTION_FAILED';
     }
   }
 
