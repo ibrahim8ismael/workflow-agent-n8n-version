@@ -27,6 +27,7 @@ function createService() {
     transitionStatus: vi.fn(),
     updateUsage: vi.fn(),
     updateMetadata: vi.fn(),
+    claimEmployeeCreation: vi.fn().mockResolvedValue(true),
     complete: vi.fn().mockResolvedValue({
       id: 'design-run-1',
       promptTokens: 10,
@@ -40,7 +41,13 @@ function createService() {
     findById: vi.fn().mockResolvedValue({ instructions: 'Design helper policy.' }),
     create: vi.fn().mockResolvedValue({ id: 'employee-1', name: 'HR Assistant' }),
   };
-  const conversationsService = { getMessages: vi.fn().mockResolvedValue([]) };
+  const conversationsService = {
+    findById: vi.fn().mockResolvedValue({ metadata: null }),
+    getMessages: vi.fn().mockResolvedValue([]),
+    addMessage: vi.fn(),
+    titleFromFirstMessage: vi.fn(),
+    updateMetadata: vi.fn(),
+  };
   const memoryService = { upsert: vi.fn().mockResolvedValue({}) };
   const contextBuilder = {
     build: vi
@@ -65,6 +72,7 @@ function createService() {
     ),
     runsService,
     agentsService,
+    conversationsService,
     memoryService,
     llmRuntime,
   };
@@ -146,6 +154,66 @@ describe('EmployeeDesignRuntimeService', () => {
       expect.objectContaining({ designStatus: 'GATHERING_REQUIREMENTS' }),
     );
     expect(runtime.runsService.updateMetadata).toHaveBeenCalled();
+  });
+
+  it('downgrades model readiness when the backend finds missing required fields', async () => {
+    const incompleteBlueprint = {
+      ...blueprint,
+      ready: true,
+      responsibilities: [],
+    };
+    const runtime = createService();
+    runtime.llmRuntime.generateObject.mockResolvedValue({
+      object: incompleteBlueprint,
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    });
+
+    const result = await runtime.service.run({
+      agentId: 'chat-agent',
+      userMessage: 'I need an HR employee',
+      mode: 'employee_design' as never,
+    });
+
+    expect(result.response).toContain('responsibilities');
+    expect(result.plan).toMatchObject({ ready: false });
+    expect(runtime.runsService.updateMetadata).toHaveBeenCalledWith(
+      'design-run-1',
+      expect.objectContaining({
+        designStatus: 'GATHERING_REQUIREMENTS',
+        approvalStatus: 'NOT_READY',
+      }),
+    );
+  });
+
+  it('persists both sides of a design turn and its structured session', async () => {
+    const runtime = createService();
+
+    await runtime.service.run({
+      agentId: 'chat-agent',
+      conversationId: 'conversation-1',
+      userMessage: 'I need an HR employee',
+      mode: 'employee_design' as never,
+    });
+
+    expect(runtime.conversationsService.addMessage).toHaveBeenNthCalledWith(1, 'conversation-1', {
+      role: 'user',
+      content: 'I need an HR employee',
+    });
+    expect(runtime.conversationsService.addMessage).toHaveBeenNthCalledWith(
+      2,
+      'conversation-1',
+      expect.objectContaining({ role: 'assistant' }),
+    );
+    expect(runtime.conversationsService.updateMetadata).toHaveBeenCalledWith(
+      'conversation-1',
+      expect.objectContaining({
+        employeeDesign: expect.objectContaining({ sourceConversationId: 'conversation-1' }),
+      }),
+    );
+    expect(runtime.runsService.updateMetadata).toHaveBeenCalledWith(
+      'design-run-1',
+      expect.objectContaining({ designStatus: 'READY_FOR_REVIEW' }),
+    );
   });
 
   it('does not create a second employee when confirmation is repeated', async () => {

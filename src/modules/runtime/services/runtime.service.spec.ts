@@ -395,7 +395,7 @@ describe('RuntimeService', () => {
         'run-1',
         'Agent with id "agent-1" not found',
       );
-      expect(result.response).toContain('An error occurred');
+      expect(result.response).toBe('The requested business record could not be found.');
     });
 
     it('should fail the run when the AI call throws', async () => {
@@ -406,7 +406,9 @@ describe('RuntimeService', () => {
       const result = await service.approve('run-1');
 
       expect(mockRunsService.fail).toHaveBeenCalledWith('run-1', 'provider down');
-      expect(result.response).toContain('provider down');
+      expect(result.response).toBe(
+        'I could not complete this action. No successful result was confirmed.',
+      );
     });
 
     it('should filter out disabled skills', async () => {

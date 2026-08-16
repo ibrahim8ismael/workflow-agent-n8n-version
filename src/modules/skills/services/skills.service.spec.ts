@@ -38,7 +38,7 @@ describe('SkillsService', () => {
     it('should create a skill when the slug is free', async () => {
       await service.create({ name: 'Search', slug: 'search', executionMode: 'AI_ONLY' });
 
-      expect(mockRepo.create).toHaveBeenCalled();
+      expect(mockRepo.create).toHaveBeenCalledWith(expect.objectContaining({ status: 'DRAFT' }));
     });
 
     it('should throw when the slug already exists', async () => {

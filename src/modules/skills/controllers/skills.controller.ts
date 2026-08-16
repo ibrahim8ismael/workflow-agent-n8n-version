@@ -1,22 +1,54 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { Skill } from '@prisma/client';
+import { CurrentUser } from '../../../common/decorators/current-user.decorator';
+import { TenantAccessGuard } from '../../../common/guards/tenant-access.guard';
+import { JwtAuthGuard } from '../../auth/guards/auth.guard';
 import { type CreateSkillDto, createSkillSchema } from '../dto/create-skill.dto';
 import { type UpdateSkillDto, updateSkillSchema } from '../dto/update-skill.dto';
 import { SkillsService } from '../services/skills.service';
 
 @Controller('skills')
+@UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class SkillsController {
   constructor(private readonly skillsService: SkillsService) {}
 
   @Post()
-  async create(@Body() dto: CreateSkillDto): Promise<Skill> {
+  async create(@Body() dto: CreateSkillDto, @CurrentUser() user: SkillUser): Promise<Skill> {
     const parsed = createSkillSchema.parse(dto);
-    return this.skillsService.create(parsed);
+    return this.skillsService.create({
+      ...parsed,
+      userId: user.id,
+      organizationId: user.activeContext === 'organization' ? user.organizationId : undefined,
+    });
   }
 
   @Get()
-  async findMany(@Query('skip') skip?: string, @Query('take') take?: string): Promise<Skill[]> {
+  async findMany(
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+    @CurrentUser() user?: SkillUser,
+  ): Promise<Skill[]> {
     return this.skillsService.findMany({
+      where: user
+        ? {
+            OR: [
+              { userId: user.id },
+              ...(user.activeContext === 'organization' && user.organizationId
+                ? [{ organizationId: user.organizationId }]
+                : []),
+            ],
+          }
+        : undefined,
       skip: skip ? Number(skip) : undefined,
       take: take ? Number(take) : undefined,
     });
@@ -48,3 +80,5 @@ export class SkillsController {
     return this.skillsService.archive(id);
   }
 }
+
+type SkillUser = { id: string; activeContext?: string; organizationId?: string };

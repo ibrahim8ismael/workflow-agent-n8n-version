@@ -51,7 +51,7 @@ describe('AgentsService', () => {
       );
     });
 
-    it('should respect an explicit status and connect an organization', async () => {
+    it('should ignore an explicit production status and connect an organization', async () => {
       await service.create({
         name: 'Copilot',
         status: 'PUBLISHED',
@@ -61,7 +61,7 @@ describe('AgentsService', () => {
 
       expect(mockRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          status: 'PUBLISHED',
+          status: 'DRAFT',
           organization: { connect: { id: 'org-1' } },
         }),
       );

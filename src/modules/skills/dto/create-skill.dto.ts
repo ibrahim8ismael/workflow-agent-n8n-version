@@ -22,6 +22,7 @@ export const createSkillSchema = z.object({
   retryPolicy: z.record(z.unknown()).optional(),
   successCriteria: z.record(z.unknown()).optional(),
   metadata: z.record(z.unknown()).optional(),
+  userId: z.string().optional(),
   organizationId: z.string().optional(),
 });
 

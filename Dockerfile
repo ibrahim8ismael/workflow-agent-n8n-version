@@ -17,6 +17,7 @@ COPY prisma.config.ts ./
 RUN npm ci --omit=dev && npx prisma generate
 
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/src/infrastructure/tools/tools.json ./dist/infrastructure/tools/tools.json
 
 RUN chown -R woops:woops /app
 USER woops

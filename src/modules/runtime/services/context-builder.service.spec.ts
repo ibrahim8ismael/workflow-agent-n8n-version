@@ -12,6 +12,7 @@ describe('ContextBuilderService', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(mockMemoryService.findByAgent).mockResolvedValue([]);
+    vi.mocked(mockKnowledgeService.search).mockResolvedValue([]);
     service = new ContextBuilderService(mockMemoryService, mockKnowledgeService);
   });
 
@@ -54,7 +55,11 @@ describe('ContextBuilderService', () => {
     expect(result.metadata.memoryCount).toBe(1);
   });
 
-  it('keeps knowledge retrieval disabled for the MVP', async () => {
+  it('retrieves organization-scoped approved knowledge before memory', async () => {
+    vi.mocked(mockKnowledgeService.search).mockResolvedValue([
+      { knowledgeDocumentId: 'doc-1', content: 'Revenue policy' },
+    ] as never);
+
     const result = await service.build({
       agentId: 'agent-1',
       userId: 'user-1',
@@ -62,8 +67,18 @@ describe('ContextBuilderService', () => {
       userMessage: 'Summarize revenue',
     });
 
-    expect(mockKnowledgeService.search).not.toHaveBeenCalled();
-    expect(result.metadata.knowledgeCount).toBe(0);
+    expect(mockKnowledgeService.search).toHaveBeenCalledWith({
+      userId: 'user-1',
+      organizationId: 'org-1',
+      query: 'Summarize revenue',
+      limit: 5,
+      offset: 0,
+    });
+    expect(result.messages).toContainEqual({
+      role: 'system',
+      content: expect.stringContaining('[Knowledge: doc-1] Revenue policy'),
+    });
+    expect(result.metadata.knowledgeCount).toBe(1);
   });
 
   it('degrades gracefully when memory retrieval fails', async () => {

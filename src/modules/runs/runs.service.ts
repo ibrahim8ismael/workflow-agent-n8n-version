@@ -98,6 +98,22 @@ export class RunsService {
     });
   }
 
+  async claimEmployeeCreation(id: string): Promise<boolean> {
+    const run = await this.findById(id);
+    const currentMetadata = (run.metadata as Record<string, unknown> | null) ?? {};
+    if (
+      currentMetadata.runtimeMode !== 'employee_design' ||
+      currentMetadata.designStatus !== 'READY_FOR_REVIEW'
+    ) {
+      return false;
+    }
+
+    return this.runsRepository.claimEmployeeCreation(id, run.version, {
+      ...currentMetadata,
+      approvalStatus: 'CREATING',
+    });
+  }
+
   private validateTransition(current: string, next: string): void {
     const validTransitions: Record<string, string[]> = {
       CREATED: ['PREPARING', 'CANCELLED'],

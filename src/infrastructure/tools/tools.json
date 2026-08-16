@@ -1,0 +1,302 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "knowledge_search",
+      "description": "Search approved business Knowledge available to the current user, organization, and employee. Use before answering organization-specific questions or planning actions that depend on company facts.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "A focused natural-language question about the business information needed."
+          },
+          "category": {
+            "type": "string",
+            "description": "Optional approved Knowledge category."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 5
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    "woops": {
+      "kind": "read",
+      "implemented": true,
+      "sideEffect": "none",
+      "approval": "not_required",
+      "scope": "user_or_organization",
+      "availableIn": ["conversation", "planning", "employee_design", "execution"]
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "memory_search",
+      "description": "Search confirmed Memory belonging to the current employee. Use for durable context and prior confirmed experience, never as a replacement for approved business Knowledge.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "A focused query for relevant employee Memory."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "default": 10
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    "woops": {
+      "kind": "read",
+      "implemented": true,
+      "sideEffect": "none",
+      "approval": "not_required",
+      "scope": "employee",
+      "availableIn": ["conversation", "planning", "employee_design", "execution"]
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "employee_get",
+      "description": "Read the current employee profile, ownership, organization scope, status, and configuration before proposing or applying a change.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string",
+            "description": "The employee identifier supplied by the authorized runtime context."
+          }
+        },
+        "required": ["employeeId"]
+      }
+    },
+    "woops": {
+      "kind": "read",
+      "implemented": true,
+      "sideEffect": "none",
+      "approval": "not_required",
+      "scope": "user_or_organization",
+      "availableIn": ["conversation", "planning", "employee_design", "execution"]
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "employee_skills_list",
+      "description": "List the skills assigned to an employee, including status and enabled state, so Jaafar can reuse capabilities and avoid duplicates.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string",
+            "description": "The employee identifier supplied by the authorized runtime context."
+          }
+        },
+        "required": ["employeeId"]
+      }
+    },
+    "woops": {
+      "kind": "read",
+      "implemented": true,
+      "sideEffect": "none",
+      "approval": "not_required",
+      "scope": "user_or_organization",
+      "availableIn": ["conversation", "planning", "employee_design", "execution"]
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "employee_blueprint_prepare",
+      "description": "Prepare a reviewable employee blueprint from the user's business requirements. This does not create, publish, or activate an employee.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "requirements": {
+            "type": "string",
+            "description": "The confirmed business requirements for the employee."
+          }
+        },
+        "required": ["requirements"]
+      }
+    },
+    "woops": {
+      "kind": "draft",
+      "implemented": true,
+      "sideEffect": "none",
+      "approval": "not_required",
+      "scope": "user_or_organization",
+      "availableIn": ["planning", "employee_design"]
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "employee_learning_outcome_prepare",
+      "description": "Convert an approved employee-design discussion into a structured learning outcome. Store the outcome, not the raw conversation transcript. This does not write Knowledge.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "designRunId": {
+            "type": "string",
+            "description": "The approved employee-design run identifier."
+          }
+        },
+        "required": ["designRunId"]
+      }
+    },
+    "woops": {
+      "kind": "draft",
+      "implemented": false,
+      "sideEffect": "none",
+      "approval": "not_required",
+      "scope": "user_or_organization",
+      "availableIn": ["employee_design"]
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "employee_create_draft",
+      "description": "Create an employee draft from an approved blueprint. This operation never publishes or activates an employee and requires an explicit approval record for the exact blueprint.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "designRunId": {
+            "type": "string",
+            "description": "The approved employee-design run identifier."
+          }
+        },
+        "required": ["designRunId"]
+      }
+    },
+    "woops": {
+      "kind": "mutate",
+      "implemented": true,
+      "sideEffect": "record_creation",
+      "approval": "required",
+      "scope": "user_or_organization",
+      "availableIn": ["employee_design"],
+      "idempotencyKey": "designRunId"
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "skill_proposal_prepare",
+      "description": "Prepare single-capability skill proposals from an approved employee learning outcome. Generated skills remain drafts and are not attached or executable.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string",
+            "description": "The employee that will review the proposed capabilities."
+          },
+          "learningOutcomeId": {
+            "type": "string",
+            "description": "The approved employee learning outcome identifier."
+          },
+          "requirement": {
+            "type": "string",
+            "description": "The specific business requirement to turn into one capability."
+          }
+        },
+        "required": ["employeeId", "learningOutcomeId", "requirement"]
+      }
+    },
+    "woops": {
+      "kind": "draft",
+      "implemented": false,
+      "sideEffect": "none",
+      "approval": "not_required",
+      "scope": "user_or_organization",
+      "availableIn": ["employee_design"]
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "integration_status",
+      "description": "Check whether an integration or communication channel is available. This tool never performs OAuth and never exposes credentials.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "integration": {
+            "type": "string",
+            "description": "The business integration or channel to check."
+          }
+        },
+        "required": ["integration"]
+      }
+    },
+    "woops": {
+      "kind": "read",
+      "implemented": false,
+      "sideEffect": "none",
+      "approval": "not_required",
+      "scope": "organization",
+      "availableIn": ["planning", "employee_design", "execution"]
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "employee_publish",
+      "description": "Publish an approved employee draft after readiness checks. Publishing makes the employee available for production use but does not activate it.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string",
+            "description": "The employee draft to publish."
+          }
+        },
+        "required": ["employeeId"]
+      }
+    },
+    "woops": {
+      "kind": "external",
+      "implemented": false,
+      "sideEffect": "production_visibility",
+      "approval": "required",
+      "scope": "user_or_organization",
+      "availableIn": ["execution"]
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "employee_activate",
+      "description": "Activate a published employee after integrations, Knowledge, skills, and approval checks succeed.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string",
+            "description": "The published employee to activate."
+          }
+        },
+        "required": ["employeeId"]
+      }
+    },
+    "woops": {
+      "kind": "external",
+      "implemented": false,
+      "sideEffect": "production_activation",
+      "approval": "required",
+      "scope": "user_or_organization",
+      "availableIn": ["execution"]
+    }
+  }
+]

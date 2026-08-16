@@ -4,6 +4,7 @@ import { LLMRuntimeService } from '../../../infrastructure/llm-runtime/llm-runti
 import {
   BLUEPRINT_GENERATOR_SYSTEM_PROMPT,
   JAAFAR_IDENTITY_SYSTEM_PROMPT,
+  TOOL_USE_POLICY_SYSTEM_PROMPT,
 } from '../../../infrastructure/prompts/system-prompts';
 import { AgentsService } from '../../agents/services/agents.service';
 import { ConversationsService } from '../../conversations/services/conversations.service';
@@ -11,7 +12,9 @@ import { MemoryService } from '../../memory/services/memory.service';
 import { RunsService } from '../../runs/runs.service';
 import { ContextBuilderService } from '../services/context-builder.service';
 import type { ExecuteResponse } from '../services/runtime.service';
+import { runtimeUserErrorMessage } from '../shared/runtime-user-message';
 import type { RuntimeRequest } from '../types/runtime.types';
+import { validateEmployeeBlueprint } from './employee-blueprint.validation';
 
 const blueprintSchema = z.object({
   ready: z.boolean(),
@@ -60,6 +63,12 @@ export class EmployeeDesignRuntimeService {
     try {
       await this.runsService.transitionStatus(run.id, 'PREPARING');
       const agent = await this.agentsService.findById(request.agentId);
+      const conversation = request.conversationId
+        ? await this.conversationsService.findById(request.conversationId)
+        : undefined;
+      const session = (conversation?.metadata as Record<string, unknown> | null)?.employeeDesign as
+        | Record<string, unknown>
+        | undefined;
       const organizationId = request.organizationId ?? agent.organizationId ?? undefined;
       const history = request.conversationId
         ? (await this.conversationsService.getMessages(request.conversationId, { take: 20 })).map(
@@ -67,10 +76,11 @@ export class EmployeeDesignRuntimeService {
           )
         : [];
       const context = await this.contextBuilder.build({
-        systemPrompt: `${JAAFAR_IDENTITY_SYSTEM_PROMPT}\n\n${BLUEPRINT_GENERATOR_SYSTEM_PROMPT}\n\nEmployee policies:\n${agent.instructions ?? ''}`,
+        systemPrompt: `${JAAFAR_IDENTITY_SYSTEM_PROMPT}\n\n${TOOL_USE_POLICY_SYSTEM_PROMPT}\n\n${BLUEPRINT_GENERATOR_SYSTEM_PROMPT}\n\nCurrent design session:\n${JSON.stringify(session ?? {})}\n\nEmployee policies:\n${agent.instructions ?? ''}`,
         agentId: request.agentId,
         conversationId: request.conversationId,
         organizationId,
+        userId: request.userId,
         userMessage: request.userMessage,
         conversationHistory: history,
       });
@@ -86,15 +96,49 @@ export class EmployeeDesignRuntimeService {
         maxTokens: 2000,
       });
       const blueprint = blueprintSchema.parse(result.object);
+      const validation = validateEmployeeBlueprint(blueprint);
+      const ready =
+        blueprint.ready && validation.valid && blueprint.missingRequirements.length === 0;
+      const missingRequirements = ready
+        ? blueprint.missingRequirements
+        : Array.from(new Set([...blueprint.missingRequirements, ...validation.missing]));
 
       await this.runsService.updateUsage(run.id, result.usage);
       await this.runsService.updateMetadata(run.id, {
-        blueprint,
-        designStatus: blueprint.ready ? 'READY_FOR_REVIEW' : 'GATHERING_REQUIREMENTS',
-        approvalStatus: blueprint.ready ? 'PENDING' : 'NOT_READY',
+        blueprint: { ...blueprint, ready, missingRequirements },
+        designStatus: ready ? 'READY_FOR_REVIEW' : 'GATHERING_REQUIREMENTS',
+        approvalStatus: ready ? 'READY' : 'NOT_READY',
+        missingRequirements,
         execution: result.execution,
       });
-      const response = this.formatSummary(blueprint);
+      if (request.conversationId) {
+        await this.conversationsService.addMessage(request.conversationId, {
+          role: 'user',
+          content: request.userMessage,
+        });
+        await this.conversationsService.titleFromFirstMessage(
+          request.conversationId,
+          request.userMessage,
+        );
+      }
+      const updatedBlueprint = { ...blueprint, ready, missingRequirements };
+      const response = this.formatSummary(updatedBlueprint);
+      if (request.conversationId) {
+        await this.conversationsService.addMessage(request.conversationId, {
+          role: 'assistant',
+          content: response,
+        });
+        await this.conversationsService.updateMetadata(request.conversationId, {
+          employeeDesign: {
+            status: ready ? 'READY_FOR_REVIEW' : 'GATHERING_REQUIREMENTS',
+            approvalStatus: ready ? 'READY' : 'NOT_READY',
+            blueprint: updatedBlueprint,
+            missingRequirements,
+            sourceConversationId: request.conversationId,
+            sourceDesignRunId: run.id,
+          },
+        });
+      }
       const completed = await this.runsService.complete(run.id, response);
 
       return {
@@ -102,7 +146,7 @@ export class EmployeeDesignRuntimeService {
         mode: request.mode,
         status: 'COMPLETED',
         response,
-        plan: blueprint,
+        plan: updatedBlueprint,
         usage: {
           promptTokens: completed.promptTokens,
           completionTokens: completed.completionTokens,
@@ -117,14 +161,35 @@ export class EmployeeDesignRuntimeService {
         runId: run.id,
         mode: request.mode,
         status: 'FAILED',
-        response: `An error occurred: ${message}`,
+        response: runtimeUserErrorMessage(error),
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       };
     }
   }
 
-  async confirm(runId: string): Promise<ExecuteResponse> {
+  async confirm(
+    runId: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<ExecuteResponse> {
     const run = await this.runsService.findById(runId);
+    if (scope && run.userId && run.userId !== scope.userId) {
+      return {
+        runId,
+        mode: 'employee_design',
+        status: 'FAILED',
+        response: 'This employee plan is not available in the current user scope.',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
+    if (scope && run.organizationId && run.organizationId !== scope.organizationId) {
+      return {
+        runId,
+        mode: 'employee_design',
+        status: 'FAILED',
+        response: 'This employee plan is not available in the current organization scope.',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
     const metadata = (run.metadata as Record<string, unknown> | null) ?? {};
     if (typeof metadata.createdAgentId === 'string') {
       const existingAgent = await this.agentsService.findById(metadata.createdAgentId);
@@ -138,6 +203,15 @@ export class EmployeeDesignRuntimeService {
       };
     }
 
+    if (metadata.runtimeMode !== 'employee_design' && typeof metadata.blueprint === 'undefined') {
+      return {
+        runId,
+        mode: 'employee_design',
+        status: 'FAILED',
+        response: 'This confirmation does not belong to an employee design plan.',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
     if (metadata.designStatus !== 'READY_FOR_REVIEW' || metadata.approvalStatus === 'REJECTED') {
       return {
         runId,
@@ -149,21 +223,73 @@ export class EmployeeDesignRuntimeService {
     }
 
     const blueprint = blueprintSchema.parse(metadata.blueprint);
+    const validation = validateEmployeeBlueprint(blueprint);
+    if (!validation.valid) {
+      return {
+        runId,
+        mode: 'employee_design',
+        status: 'FAILED',
+        response: `This employee plan still needs:\n${validation.missing.map((item) => `- ${item}`).join('\n')}`,
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
+    const claimed = await this.runsService.claimEmployeeCreation(runId);
+    if (!claimed) {
+      const currentRun = await this.runsService.findById(runId);
+      const currentMetadata = (currentRun.metadata as Record<string, unknown> | null) ?? {};
+      if (typeof currentMetadata.createdAgentId === 'string') {
+        const existingAgent = await this.agentsService.findById(currentMetadata.createdAgentId);
+        return {
+          runId,
+          mode: 'employee_design',
+          status: 'COMPLETED',
+          response: `Employee draft "${existingAgent.name}" was already created and is ready for configuration.`,
+          plan: { ...blueprint, agentId: existingAgent.id },
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        };
+      }
+      return {
+        runId,
+        mode: 'employee_design',
+        status: 'WAITING',
+        response: 'This employee plan is already being processed. Please try again shortly.',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
     const approvedMetadata = {
       ...metadata,
       approvalStatus: 'APPROVED',
       approvedAt: metadata.approvedAt ?? new Date().toISOString(),
     };
-    if (metadata.approvalStatus !== 'APPROVED') {
-      await this.runsService.updateMetadata(runId, approvedMetadata);
+    await this.runsService.updateMetadata(runId, approvedMetadata);
+    let agent: Awaited<ReturnType<AgentsService['create']>>;
+    try {
+      agent = await this.agentsService.create({
+        name: blueprint.name,
+        description: blueprint.description,
+        instructions: blueprint.instructions,
+        status: 'DRAFT',
+        model: 'gpt-4o',
+        organizationId: run.organizationId ?? undefined,
+      });
+    } catch (error) {
+      await this.runsService.updateMetadata(runId, {
+        ...metadata,
+        designStatus: 'READY_FOR_REVIEW',
+        approvalStatus: 'READY',
+      });
+      this.logger.error(`Employee creation for design run ${runId} failed`, error);
+      return {
+        runId,
+        mode: 'employee_design',
+        status: 'FAILED',
+        response: runtimeUserErrorMessage(error),
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
     }
-    const agent = await this.agentsService.create({
-      name: blueprint.name,
-      description: blueprint.description,
-      instructions: blueprint.instructions,
-      status: 'DRAFT',
-      model: 'gpt-4o',
-      organizationId: run.organizationId ?? undefined,
+    await this.runsService.updateMetadata(runId, {
+      ...approvedMetadata,
+      createdAgentId: agent.id,
     });
 
     await this.memoryService.upsert(
@@ -186,6 +312,18 @@ export class EmployeeDesignRuntimeService {
       designStatus: 'CREATED',
       createdAgentId: agent.id,
     });
+    if (run.conversationId) {
+      await this.conversationsService.updateMetadata(run.conversationId, {
+        employeeDesign: {
+          status: 'CREATED',
+          approvalStatus: 'APPROVED',
+          blueprint,
+          createdEmployeeId: agent.id,
+          sourceConversationId: run.conversationId,
+          sourceDesignRunId: runId,
+        },
+      });
+    }
 
     return {
       runId,
@@ -208,7 +346,8 @@ export class EmployeeDesignRuntimeService {
 
     return (
       `Draft employee blueprint: ${blueprint.name}\n\n${blueprint.summary}\n\n` +
-      `Responsibilities:\n${blueprint.responsibilities.map((item) => `- ${item}`).join('\n')}`
+      `Responsibilities:\n${blueprint.responsibilities.map((item) => `- ${item}`).join('\n')}\n\n` +
+      'This plan is ready for your review. The employee has not been created. Confirm this plan when you want me to create the employee draft.'
     );
   }
 }

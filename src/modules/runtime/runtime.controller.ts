@@ -93,7 +93,10 @@ export class RuntimeController {
   @HttpCode(HttpStatus.ACCEPTED)
   async confirm(@Param('id') id: string, @CurrentUser() user: RuntimeUser) {
     await this.assertRunAccess(id, user);
-    return this.runtimeRouter.confirmEmployeeDesign(id);
+    return this.runtimeRouter.confirmEmployeeDesign(id, {
+      userId: user.id,
+      organizationId: user.activeContext === 'organization' ? user.organizationId : undefined,
+    });
   }
 
   @Get(':id')

@@ -46,6 +46,22 @@ export class RunsRepository {
     return this.db.run.update({ where: { id }, data });
   }
 
+  async claimEmployeeCreation(
+    id: string,
+    version: number,
+    metadata: Record<string, unknown>,
+  ): Promise<boolean> {
+    const result = await this.db.run.updateMany({
+      where: {
+        id,
+        version,
+        metadata: { path: ['designStatus'], equals: 'READY_FOR_REVIEW' },
+      },
+      data: { metadata: metadata as never, version: { increment: 1 } },
+    });
+    return result.count === 1;
+  }
+
   async softDelete(id: string): Promise<Run> {
     return this.db.run.update({
       where: { id },

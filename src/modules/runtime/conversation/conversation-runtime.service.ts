@@ -7,6 +7,7 @@ import { RunsService } from '../../runs/runs.service';
 import { ContextBuilderService } from '../services/context-builder.service';
 import type { ExecuteResponse } from '../services/runtime.service';
 import { RuntimeCacheService } from '../shared/runtime-cache.service';
+import { runtimeUserErrorMessage } from '../shared/runtime-user-message';
 import type { RuntimeRequest } from '../types/runtime.types';
 
 export type ConversationStreamEvent =
@@ -126,7 +127,7 @@ export class ConversationRuntimeService {
         runId: run.id,
         mode: request.mode,
         status: 'FAILED',
-        response: `An error occurred: ${message}`,
+        response: runtimeUserErrorMessage(error),
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       };
     }
@@ -211,7 +212,12 @@ export class ConversationRuntimeService {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       await this.runsService.fail(run.id, message);
-      yield { type: 'run.failed', runId: run.id, code: 'CONVERSATION_FAILED', message };
+      yield {
+        type: 'run.failed',
+        runId: run.id,
+        code: 'CONVERSATION_FAILED',
+        message: runtimeUserErrorMessage(error),
+      };
     }
   }
 
