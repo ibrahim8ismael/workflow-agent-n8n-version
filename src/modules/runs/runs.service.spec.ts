@@ -174,4 +174,37 @@ describe('RunsService', () => {
       );
     });
   });
+
+  describe('recordModelUsage', () => {
+    it('accumulates usage and estimated cost across graph model calls', async () => {
+      vi.mocked(mockRepo.findById).mockResolvedValue(
+        run({
+          promptTokens: 10,
+          completionTokens: 5,
+          totalTokens: 15,
+          estimatedCost: 0.25,
+        }) as never,
+      );
+
+      await service.recordModelUsage(
+        'run-1',
+        {
+          promptTokens: 3,
+          completionTokens: 2,
+          totalTokens: 5,
+        },
+        0.1,
+      );
+
+      expect(mockRepo.update).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({
+          promptTokens: 13,
+          completionTokens: 7,
+          totalTokens: 20,
+          estimatedCost: 0.35,
+        }),
+      );
+    });
+  });
 });

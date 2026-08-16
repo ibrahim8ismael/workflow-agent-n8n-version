@@ -101,6 +101,7 @@ describe('EmployeeDesignRuntimeService', () => {
     const { service, runsService, agentsService, memoryService } = createService();
     runsService.findById.mockResolvedValue({
       id: 'design-run-1',
+      userId: 'user-1',
       organizationId: 'org-1',
       metadata: { designStatus: 'READY_FOR_REVIEW', blueprint },
     });
@@ -113,6 +114,7 @@ describe('EmployeeDesignRuntimeService', () => {
         description: blueprint.description,
         instructions: blueprint.instructions,
         status: 'DRAFT',
+        userId: 'user-1',
         organizationId: 'org-1',
       }),
     );
@@ -229,5 +231,36 @@ describe('EmployeeDesignRuntimeService', () => {
     expect(result.response).toContain('already created');
     expect(agentsService.create).not.toHaveBeenCalled();
     expect(memoryService.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects confirmation for a stale blueprint revision', async () => {
+    const { service, runsService, agentsService } = createService();
+    runsService.findById.mockResolvedValue({
+      id: 'design-run-1',
+      metadata: { designStatus: 'READY_FOR_REVIEW', blueprint },
+    });
+
+    const result = await service.confirm('design-run-1', undefined, {
+      blueprintRevision: 'a'.repeat(64),
+    });
+
+    expect(result.status).toBe('FAILED');
+    expect(result.response).toContain('changed');
+    expect(agentsService.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects confirmation outside the run user scope', async () => {
+    const { service, runsService, agentsService } = createService();
+    runsService.findById.mockResolvedValue({
+      id: 'design-run-1',
+      userId: 'owner-1',
+      metadata: { designStatus: 'READY_FOR_REVIEW', blueprint },
+    });
+
+    const result = await service.confirm('design-run-1', { userId: 'other-user' });
+
+    expect(result.status).toBe('FAILED');
+    expect(result.response).toContain('current user scope');
+    expect(agentsService.create).not.toHaveBeenCalled();
   });
 });

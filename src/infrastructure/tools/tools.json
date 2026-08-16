@@ -298,5 +298,34 @@
       "scope": "user_or_organization",
       "availableIn": ["execution"]
     }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "human_approval",
+      "description": "Request explicit human approval for a proposed action. This tool never performs the action itself.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "requestedAction": {
+            "type": "string",
+            "description": "The exact action requiring approval."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why approval is required."
+          }
+        },
+        "required": ["requestedAction", "reason"]
+      }
+    },
+    "woops": {
+      "kind": "read",
+      "implemented": true,
+      "sideEffect": "none",
+      "approval": "required",
+      "scope": "user_or_organization",
+      "availableIn": ["conversation", "planning", "employee_design", "execution"]
+    }
   }
 ]

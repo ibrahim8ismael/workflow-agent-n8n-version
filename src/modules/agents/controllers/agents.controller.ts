@@ -49,48 +49,74 @@ export class AgentsController {
     });
   }
 
+  @Get('platform/jaafar')
+  async getJaafar(): Promise<Agent> {
+    return this.agentsService.getJaafar();
+  }
+
+  @Get('platform/:slug')
+  async getPlatformAgent(@Param('slug') slug: string): Promise<Agent> {
+    return this.agentsService.findPlatformAgent(slug);
+  }
+
   @Get(':id')
   async findById(@Param('id') id: string, @CurrentUser() user: AgentUser): Promise<Agent> {
-    return this.agentsService.findById(id, true, {
-      userId: user.id,
-      organizationId: user.activeContext === 'organization' ? user.organizationId : undefined,
-    });
+    return this.agentsService.findById(id, true, this.scopeFor(user));
   }
 
   @Patch(':id')
-  async update(@Param('id') id: string, @Body() dto: UpdateAgentDto): Promise<Agent> {
+  async update(
+    @Param('id') id: string,
+    @Body() dto: UpdateAgentDto,
+    @CurrentUser() user: AgentUser,
+  ): Promise<Agent> {
     const parsed = updateAgentSchema.parse(dto);
-    return this.agentsService.update(id, parsed);
+    return this.agentsService.update(id, parsed, this.scopeFor(user));
   }
 
   @Delete(':id')
-  async remove(@Param('id') id: string): Promise<Agent> {
-    return this.agentsService.softDelete(id);
+  async remove(@Param('id') id: string, @CurrentUser() user: AgentUser): Promise<Agent> {
+    return this.agentsService.softDelete(id, this.scopeFor(user));
   }
 
   @Post(':id/publish')
-  async publish(@Param('id') id: string): Promise<Agent> {
-    return this.agentsService.publish(id);
+  async publish(@Param('id') id: string, @CurrentUser() user: AgentUser): Promise<Agent> {
+    return this.agentsService.publish(id, this.scopeFor(user));
   }
 
   @Post(':id/archive')
-  async archive(@Param('id') id: string): Promise<Agent> {
-    return this.agentsService.archive(id);
+  async archive(@Param('id') id: string, @CurrentUser() user: AgentUser): Promise<Agent> {
+    return this.agentsService.archive(id, this.scopeFor(user));
   }
 
   @Post(':id/skills/:skillId')
-  async addSkill(@Param('id') id: string, @Param('skillId') skillId: string): Promise<void> {
-    return this.agentsService.addSkill(id, skillId);
+  async addSkill(
+    @Param('id') id: string,
+    @Param('skillId') skillId: string,
+    @CurrentUser() user: AgentUser,
+  ): Promise<void> {
+    return this.agentsService.addSkill(id, skillId, undefined, this.scopeFor(user));
   }
 
   @Delete(':id/skills/:skillId')
-  async removeSkill(@Param('id') id: string, @Param('skillId') skillId: string): Promise<void> {
-    return this.agentsService.removeSkill(id, skillId);
+  async removeSkill(
+    @Param('id') id: string,
+    @Param('skillId') skillId: string,
+    @CurrentUser() user: AgentUser,
+  ): Promise<void> {
+    return this.agentsService.removeSkill(id, skillId, this.scopeFor(user));
   }
 
   @Get(':id/skills')
-  async getSkills(@Param('id') id: string) {
-    return this.agentsService.getSkills(id);
+  async getSkills(@Param('id') id: string, @CurrentUser() user: AgentUser) {
+    return this.agentsService.getSkills(id, this.scopeFor(user));
+  }
+
+  private scopeFor(user: AgentUser): { userId: string; organizationId?: string } {
+    return {
+      userId: user.id,
+      organizationId: user.activeContext === 'organization' ? user.organizationId : undefined,
+    };
   }
 }
 

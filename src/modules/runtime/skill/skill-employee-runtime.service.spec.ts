@@ -27,7 +27,7 @@ describe('SkillEmployeeRuntimeService', () => {
     inputSchema: { type: 'object', required: ['query'] },
   };
 
-  function createService() {
+  function createService(toolExecutor?: { execute: ReturnType<typeof vi.fn> }) {
     const knowledgeService = {
       search: vi.fn().mockResolvedValue([{ content: 'Refunds are available.' }]),
     };
@@ -40,6 +40,7 @@ describe('SkillEmployeeRuntimeService', () => {
         memoryService as never,
         llmRuntime as never,
         configService as never,
+        toolExecutor as never,
       ),
       knowledgeService,
       memoryService,
@@ -52,6 +53,27 @@ describe('SkillEmployeeRuntimeService', () => {
     await expect(service.execute(step, skill, {}, request)).rejects.toMatchObject({
       code: 'INVALID_INPUT',
     });
+    expect(knowledgeService.search).not.toHaveBeenCalled();
+  });
+
+  it('routes run-bound executions through the shared tool executor', async () => {
+    const toolExecutor = {
+      execute: vi.fn().mockResolvedValue({ success: true, output: 'shared result' }),
+    };
+    const { service, knowledgeService } = createService(toolExecutor);
+
+    const result = await service.execute(
+      step,
+      { ...skill, executionMode: SKILL_EXECUTION_MODE.AI_ONLY },
+      { query: 'refund policy' },
+      { ...request, runId: 'run-1' },
+    );
+
+    expect(result).toBe('shared result');
+    expect(toolExecutor.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'find-faq', executionMode: 'ai' }),
+      expect.objectContaining({ runId: 'run-1', input: { query: 'refund policy' } }),
+    );
     expect(knowledgeService.search).not.toHaveBeenCalled();
   });
 

@@ -20,8 +20,8 @@ export class SkillsService {
     } as Record<string, unknown> as never);
   }
 
-  async findById(id: string): Promise<Skill> {
-    const skill = await this.skillsRepository.findById(id);
+  async findById(id: string, scope?: { userId?: string; organizationId?: string }): Promise<Skill> {
+    const skill = await this.skillsRepository.findById(id, scope);
     if (!skill) {
       throw new NotFoundException(`Skill with id "${id}" not found`);
     }
@@ -41,23 +41,30 @@ export class SkillsService {
     return this.skillsRepository.findMany(params);
   }
 
-  async update(id: string, dto: UpdateSkillDto): Promise<Skill> {
-    await this.findById(id);
+  async update(
+    id: string,
+    dto: UpdateSkillDto,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Skill> {
+    await this.findById(id, scope);
     return this.skillsRepository.update(id, dto as Record<string, unknown> as never);
   }
 
-  async softDelete(id: string): Promise<Skill> {
-    await this.findById(id);
+  async softDelete(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Skill> {
+    await this.findById(id, scope);
     return this.skillsRepository.softDelete(id);
   }
 
-  async publish(id: string): Promise<Skill> {
-    await this.findById(id);
+  async publish(id: string, scope?: { userId?: string; organizationId?: string }): Promise<Skill> {
+    await this.findById(id, scope);
     return this.skillsRepository.update(id, { status: SKILL_STATUS.PUBLISHED } as never);
   }
 
-  async archive(id: string): Promise<Skill> {
-    await this.findById(id);
+  async archive(id: string, scope?: { userId?: string; organizationId?: string }): Promise<Skill> {
+    await this.findById(id, scope);
     return this.skillsRepository.update(id, { status: SKILL_STATUS.ARCHIVED } as never);
   }
 }

@@ -14,8 +14,24 @@ export class MemoryRepository {
     return this.delegate.create({ data });
   }
 
-  async findById(id: string): Promise<Memory | null> {
-    return this.delegate.findFirst({ where: { id, deletedAt: null } });
+  async findById(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Memory | null> {
+    return this.delegate.findFirst({
+      where: {
+        id,
+        deletedAt: null,
+        ...(scope
+          ? {
+              OR: [
+                ...(scope.userId ? [{ userId: scope.userId }] : []),
+                ...(scope.organizationId ? [{ organizationId: scope.organizationId }] : []),
+              ],
+            }
+          : {}),
+      },
+    });
   }
 
   async findByAgentAndKey(agentId: string, key: string, type?: string): Promise<Memory | null> {
@@ -45,11 +61,27 @@ export class MemoryRepository {
 
   async findByAgent(
     agentId: string,
-    options?: { type?: string; userId?: string; skip?: number; take?: number },
+    options?: {
+      type?: string;
+      userId?: string;
+      organizationId?: string;
+      skip?: number;
+      take?: number;
+    },
   ): Promise<Memory[]> {
-    const where: Prisma.MemoryWhereInput = { agentId, deletedAt: null };
+    const where: Prisma.MemoryWhereInput = {
+      agentId,
+      deletedAt: null,
+      ...(options?.userId || options?.organizationId
+        ? {
+            OR: [
+              ...(options.userId ? [{ userId: options.userId }] : []),
+              ...(options.organizationId ? [{ organizationId: options.organizationId }] : []),
+            ],
+          }
+        : {}),
+    };
     if (options?.type) where.type = options.type as Prisma.EnumMemoryTypeFilter['equals'];
-    if (options?.userId) where.userId = options.userId;
 
     return this.delegate.findMany({
       where,
@@ -62,15 +94,30 @@ export class MemoryRepository {
   async searchByAgent(
     agentId: string,
     query: string,
-    options?: { type?: string; limit?: number },
+    options?: {
+      type?: string;
+      userId?: string;
+      organizationId?: string;
+      limit?: number;
+    },
   ): Promise<Memory[]> {
+    const where: Prisma.MemoryWhereInput = {
+      agentId,
+      content: { contains: query, mode: 'insensitive' },
+      deletedAt: null,
+      ...(options?.userId || options?.organizationId
+        ? {
+            OR: [
+              ...(options.userId ? [{ userId: options.userId }] : []),
+              ...(options.organizationId ? [{ organizationId: options.organizationId }] : []),
+            ],
+          }
+        : {}),
+    };
+    if (options?.type) where.type = options.type as Prisma.EnumMemoryTypeFilter['equals'];
+
     return this.delegate.findMany({
-      where: {
-        agentId,
-        content: { contains: query, mode: 'insensitive' },
-        ...(options?.type ? { type: options.type as Prisma.EnumMemoryTypeFilter['equals'] } : {}),
-        deletedAt: null,
-      },
+      where,
       orderBy: { createdAt: 'desc' },
       take: options?.limit ?? 10,
     });

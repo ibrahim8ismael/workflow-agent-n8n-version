@@ -7,6 +7,7 @@ describe('ToolManifestService', () => {
 
     expect(service.require('knowledge_search').woops.kind).toBe('read');
     expect(service.require('employee_create_draft').woops.approval).toBe('required');
+    expect(service.require('human_approval').woops.approval).toBe('required');
   });
 
   it('returns only implemented tools available in a mode by default', () => {
@@ -20,6 +21,7 @@ describe('ToolManifestService', () => {
       'employee_skills_list',
       'employee_blueprint_prepare',
       'employee_create_draft',
+      'human_approval',
     ]);
     expect(tools.some((tool) => tool.function.name === 'skill_proposal_prepare')).toBe(false);
   });

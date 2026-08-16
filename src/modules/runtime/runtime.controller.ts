@@ -10,24 +10,25 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { Run } from '@prisma/client';
 import type { Response } from 'express';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { TenantAccessGuard } from '../../common/guards/tenant-access.guard';
 import { JwtAuthGuard } from '../auth/guards/auth.guard';
 import { ConversationsService } from '../conversations/services/conversations.service';
 import { RunsService } from '../runs/runs.service';
+import {
+  type ConfirmEmployeeDesignDto,
+  confirmEmployeeDesignSchema,
+} from './dto/confirm-employee-design.dto';
 import { type ExecuteRunDto, executeRunSchema } from './dto/execute-run.dto';
-import { RuntimeRouterService } from './runtime-router.service';
-import { RuntimeService } from './services/runtime.service';
+import { JaafarRuntimeService } from './services/jaafar-runtime.service';
 import { RuntimeMode } from './types/runtime.types';
 
 @Controller('runs')
 @UseGuards(JwtAuthGuard, TenantAccessGuard)
 export class RuntimeController {
   constructor(
-    private readonly runtimeService: RuntimeService,
-    private readonly runtimeRouter: RuntimeRouterService,
+    private readonly jaafarRuntime: JaafarRuntimeService,
     private readonly runsService: RunsService,
     private readonly conversationsService: ConversationsService,
   ) {}
@@ -37,7 +38,7 @@ export class RuntimeController {
   async execute(@Body() dto: ExecuteRunDto, @CurrentUser() user: RuntimeUser) {
     const parsed = executeRunSchema.parse(dto);
     const request = await this.ensureConversation(this.withUserScope(parsed, user));
-    const result = await this.runtimeRouter.run(request);
+    const result = await this.jaafarRuntime.start(request);
     return { ...result, conversationId: request.conversationId };
   }
 
@@ -48,9 +49,9 @@ export class RuntimeController {
     @Res() response: Response,
   ): Promise<void> {
     const parsed = executeRunSchema.parse(dto);
-    if (parsed.mode !== RuntimeMode.CONVERSATION) {
+    if (parsed.mode !== RuntimeMode.CONVERSATION && parsed.mode !== RuntimeMode.EXECUTION) {
       response.status(HttpStatus.BAD_REQUEST).json({
-        message: 'Streaming is currently supported only for conversation mode',
+        message: 'Streaming is supported for conversation and execution modes',
       });
       return;
     }
@@ -62,11 +63,27 @@ export class RuntimeController {
     response.setHeader('Connection', 'keep-alive');
     response.flushHeaders();
 
+    let activeRunId: string | undefined;
+    let terminal = false;
+    const cancelOnDisconnect = () => {
+      if (!terminal && activeRunId) {
+        void this.jaafarRuntime.cancel(activeRunId, this.scope(user));
+      }
+    };
+    response.once('close', cancelOnDisconnect);
+
     try {
-      for await (const event of this.runtimeRouter.stream(request)) {
+      for await (const event of this.jaafarRuntime.stream(request)) {
+        activeRunId = event.runId;
+        terminal =
+          event.type === 'run.completed' ||
+          event.type === 'run.waiting' ||
+          event.type === 'run.failed' ||
+          event.type === 'run.cancelled';
         response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
       }
     } finally {
+      response.off('close', cancelOnDisconnect);
       response.end();
     }
   }
@@ -75,7 +92,7 @@ export class RuntimeController {
   @HttpCode(HttpStatus.ACCEPTED)
   async approve(@Param('id') id: string, @CurrentUser() user: RuntimeUser) {
     await this.assertRunAccess(id, user);
-    return this.runtimeService.approve(id);
+    return this.jaafarRuntime.approve(id, { approved: true }, this.scope(user));
   }
 
   @Post(':id/reject')
@@ -86,21 +103,30 @@ export class RuntimeController {
     @CurrentUser() user: RuntimeUser,
   ) {
     await this.assertRunAccess(id, user);
-    return this.runtimeService.reject(id, body?.reason);
+    return this.jaafarRuntime.reject(id, body?.reason, this.scope(user));
   }
 
   @Post(':id/confirm')
   @HttpCode(HttpStatus.ACCEPTED)
-  async confirm(@Param('id') id: string, @CurrentUser() user: RuntimeUser) {
+  async confirm(
+    @Param('id') id: string,
+    @Body() dto: ConfirmEmployeeDesignDto,
+    @CurrentUser() user: RuntimeUser,
+  ) {
     await this.assertRunAccess(id, user);
-    return this.runtimeRouter.confirmEmployeeDesign(id, {
-      userId: user.id,
-      organizationId: user.activeContext === 'organization' ? user.organizationId : undefined,
-    });
+    const confirmation = confirmEmployeeDesignSchema.parse(dto);
+    return this.jaafarRuntime.confirmEmployeeDesign(
+      id,
+      {
+        userId: user.id,
+        organizationId: user.activeContext === 'organization' ? user.organizationId : undefined,
+      },
+      confirmation,
+    );
   }
 
   @Get(':id')
-  async findById(@Param('id') id: string, @CurrentUser() user: RuntimeUser): Promise<Run> {
+  async findById(@Param('id') id: string, @CurrentUser() user: RuntimeUser) {
     await this.assertRunAccess(id, user);
     return this.runsService.findById(id);
   }
@@ -124,6 +150,13 @@ export class RuntimeController {
       ...(user.activeContext === 'organization' && user.organizationId
         ? { organizationId: user.organizationId }
         : { organizationId: undefined }),
+    };
+  }
+
+  private scope(user: RuntimeUser) {
+    return {
+      userId: user.id,
+      organizationId: user.activeContext === 'organization' ? user.organizationId : undefined,
     };
   }
 

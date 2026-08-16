@@ -38,13 +38,20 @@ export class WalletRepository {
   }
 
   async deductCreditsAtomic(walletId: string, amount: bigint, version: number) {
-    return this.db.wallet.update({
-      where: { id: walletId, version },
+    const result = await this.db.wallet.updateMany({
+      where: {
+        id: walletId,
+        version,
+        balanceCredits: { gte: amount },
+        isFrozen: false,
+      },
       data: {
         balanceCredits: { decrement: amount },
         version: { increment: 1 },
       },
     });
+    if (result.count === 0) return null;
+    return this.findById(walletId);
   }
 
   async addCreditsAtomic(walletId: string, amount: bigint) {

@@ -78,7 +78,7 @@ Roll back a bad release: `git checkout <previous-tag> && docker compose up -d --
 
 ## 5. n8n integration
 
-Set `N8N_WEBHOOK_URL=https://n8n.example.com/webhook` in `.env` and restart `app`. Skills with `executionMode = N8N_WORKFLOW` call `POST {N8N_WEBHOOK_URL}/{skill.slug}` with the skill args (+ `userId` / `organizationId`). 5xx responses are retried per the skill's `retryPolicy.maxAttempts` (default 1).
+Set `N8N_WEBHOOK_URL=https://n8n.example.com/webhook` in `.env` and restart `app`. Skills with `executionMode = N8N_WORKFLOW` call the registered workflow through the n8n infrastructure adapter. Optional `N8N_WORKFLOW_MAP` is a JSON object mapping skill slugs to `{ "workflow": "...", "requiredIntegration": "..." }`; credentials and provider payloads remain outside graph state. 5xx responses are retried per the skill's `retryPolicy.maxAttempts` (default 1).
 
 ## 6. Observability
 
@@ -104,4 +104,5 @@ Restore: `gunzip -c <backup> | docker compose exec -T postgres psql -U woops woo
 | `migrate` job fails | DB unreachable or `CREATE EXTENSION vector` missing — ensure the `pgvector/pgvector:pg16` image |
 | health 503 | Redis/Postgres down — `docker compose restart redis postgres` |
 | runs fail with `N8N_WEBHOOK_URL is not configured` | set `N8N_WEBHOOK_URL` for n8n-backed skills |
+| n8n tools report `Required integration ... is not ready` | connect the organization integration and verify its provider matches the registered capability |
 | out of memory during CI typecheck | `NODE_OPTIONS=--max-old-space-size=4096` is baked into the `typecheck` script |

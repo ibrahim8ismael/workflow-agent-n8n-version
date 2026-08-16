@@ -14,9 +14,24 @@ export class SkillsRepository {
     return this.delegate.create({ data });
   }
 
-  async findById(id: string): Promise<Skill | null> {
+  async findById(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Skill | null> {
     return this.delegate.findFirst({
-      where: { id, deletedAt: null },
+      where: {
+        id,
+        deletedAt: null,
+        ...(scope
+          ? {
+              OR: [
+                ...(scope.userId ? [{ userId: scope.userId }] : []),
+                ...(scope.organizationId ? [{ organizationId: scope.organizationId }] : []),
+                { userId: null, organizationId: null },
+              ],
+            }
+          : {}),
+      },
     });
   }
 

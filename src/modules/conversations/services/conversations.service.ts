@@ -23,15 +23,23 @@ export class ConversationsService {
     } as never);
   }
 
-  async updateTitle(id: string, title: string): Promise<Conversation> {
-    await this.findById(id);
+  async updateTitle(
+    id: string,
+    title: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Conversation> {
+    await this.findById(id, scope);
     const normalizedTitle = title.trim();
     if (!normalizedTitle) throw new Error('Conversation title cannot be empty');
     return this.conversationsRepository.update(id, { title: normalizedTitle });
   }
 
-  async updateMetadata(id: string, metadata: Record<string, unknown>): Promise<Conversation> {
-    const conversation = await this.findById(id);
+  async updateMetadata(
+    id: string,
+    metadata: Record<string, unknown>,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Conversation> {
+    const conversation = await this.findById(id, scope);
     const currentMetadata = (conversation.metadata as Record<string, unknown> | null) ?? {};
     return this.conversationsRepository.update(id, {
       metadata: { ...currentMetadata, ...metadata } as never,
@@ -50,10 +58,20 @@ export class ConversationsService {
     return title ? this.conversationsRepository.update(id, { title }) : conversation;
   }
 
-  async findById(id: string): Promise<Conversation> {
-    const conversation = await this.conversationsRepository.findById(id);
+  async findById(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Conversation> {
+    const conversation = await this.conversationsRepository.findById(id, scope);
     if (!conversation) throw new NotFoundException(`Conversation with id "${id}" not found`);
     return conversation;
+  }
+
+  async findByIdInScope(
+    id: string,
+    scope: { userId?: string; organizationId?: string },
+  ): Promise<Conversation> {
+    return this.findById(id, scope);
   }
 
   async findMany(params?: {
@@ -81,8 +99,9 @@ export class ConversationsService {
   async addMessage(
     conversationId: string,
     message: { role: string; content: string; metadata?: Record<string, unknown> },
+    scope?: { userId?: string; organizationId?: string },
   ): Promise<Message> {
-    await this.findById(conversationId);
+    await this.findById(conversationId, scope);
     const createdMessage = await this.conversationsRepository.addMessage({
       conversation: { connect: { id: conversationId } },
       role: message.role,
@@ -96,23 +115,33 @@ export class ConversationsService {
   async getMessages(
     conversationId: string,
     options?: { skip?: number; take?: number },
+    scope?: { userId?: string; organizationId?: string },
   ): Promise<Message[]> {
-    await this.findById(conversationId);
+    await this.findById(conversationId, scope);
     return this.conversationsRepository.getMessages(conversationId, options);
   }
 
-  async resolve(id: string): Promise<Conversation> {
-    await this.findById(id);
+  async resolve(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Conversation> {
+    await this.findById(id, scope);
     return this.conversationsRepository.update(id, { status: 'RESOLVED' });
   }
 
-  async archive(id: string): Promise<Conversation> {
-    await this.findById(id);
+  async archive(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Conversation> {
+    await this.findById(id, scope);
     return this.conversationsRepository.update(id, { status: 'ARCHIVED' });
   }
 
-  async softDelete(id: string): Promise<Conversation> {
-    await this.findById(id);
+  async softDelete(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Conversation> {
+    await this.findById(id, scope);
     return this.conversationsRepository.softDelete(id);
   }
 }

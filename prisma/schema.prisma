@@ -109,6 +109,13 @@ enum BillingEventType {
   HARD_LIMIT_REACHED
 }
 
+enum RuntimeIdempotencyStatus {
+  STARTED
+  COMPLETED
+  FAILED
+  UNKNOWN
+}
+
 enum CouponType {
   PERCENTAGE
   FIXED_AMOUNT
@@ -582,6 +589,8 @@ model Run {
   updatedAt       DateTime  @updatedAt
   deletedAt       DateTime?
 
+  idempotencyKeys RuntimeIdempotencyKey[]
+
   @@index([agentId])
   @@index([conversationId])
   @@index([userId])
@@ -589,6 +598,29 @@ model Run {
   @@index([status])
   @@index([agentId, status])
   @@map("runs")
+}
+
+model RuntimeIdempotencyKey {
+  id            String                   @id @default(uuid())
+  key           String                   @unique
+  runId         String
+  toolId        String
+  logicalAction String
+  inputHash     String
+  status        RuntimeIdempotencyStatus @default(STARTED)
+  result        Json?
+  error         String?
+  startedAt     DateTime                 @default(now())
+  completedAt   DateTime?
+  updatedAt     DateTime                 @updatedAt
+  expiresAt     DateTime?
+
+  run Run @relation(fields: [runId], references: [id])
+
+  @@index([runId])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("runtime_idempotency_keys")
 }
 
 model RuntimeDeployment {

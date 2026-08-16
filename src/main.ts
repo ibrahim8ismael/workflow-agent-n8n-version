@@ -42,9 +42,10 @@ async function bootstrap() {
   app.use(
     rateLimit({
       windowMs: 15 * 60 * 1000,
-      limit: 100,
+      limit: Number(process.env.RATE_LIMIT_MAX ?? 1000),
       standardHeaders: true,
       legacyHeaders: false,
+      skip: (req) => req.path === '/api/v1/health' || req.path === '/health',
     }),
   );
 

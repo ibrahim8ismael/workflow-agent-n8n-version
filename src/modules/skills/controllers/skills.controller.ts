@@ -55,29 +55,40 @@ export class SkillsController {
   }
 
   @Get(':id')
-  async findById(@Param('id') id: string): Promise<Skill> {
-    return this.skillsService.findById(id);
+  async findById(@Param('id') id: string, @CurrentUser() user: SkillUser): Promise<Skill> {
+    return this.skillsService.findById(id, this.scopeFor(user));
   }
 
   @Patch(':id')
-  async update(@Param('id') id: string, @Body() dto: UpdateSkillDto): Promise<Skill> {
+  async update(
+    @Param('id') id: string,
+    @Body() dto: UpdateSkillDto,
+    @CurrentUser() user: SkillUser,
+  ): Promise<Skill> {
     const parsed = updateSkillSchema.parse(dto);
-    return this.skillsService.update(id, parsed);
+    return this.skillsService.update(id, parsed, this.scopeFor(user));
   }
 
   @Delete(':id')
-  async remove(@Param('id') id: string): Promise<Skill> {
-    return this.skillsService.softDelete(id);
+  async remove(@Param('id') id: string, @CurrentUser() user: SkillUser): Promise<Skill> {
+    return this.skillsService.softDelete(id, this.scopeFor(user));
   }
 
   @Post(':id/publish')
-  async publish(@Param('id') id: string): Promise<Skill> {
-    return this.skillsService.publish(id);
+  async publish(@Param('id') id: string, @CurrentUser() user: SkillUser): Promise<Skill> {
+    return this.skillsService.publish(id, this.scopeFor(user));
   }
 
   @Post(':id/archive')
-  async archive(@Param('id') id: string): Promise<Skill> {
-    return this.skillsService.archive(id);
+  async archive(@Param('id') id: string, @CurrentUser() user: SkillUser): Promise<Skill> {
+    return this.skillsService.archive(id, this.scopeFor(user));
+  }
+
+  private scopeFor(user: SkillUser): { userId: string; organizationId?: string } {
+    return {
+      userId: user.id,
+      organizationId: user.activeContext === 'organization' ? user.organizationId : undefined,
+    };
   }
 }
 

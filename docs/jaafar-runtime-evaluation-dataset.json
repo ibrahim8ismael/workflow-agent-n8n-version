@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "purpose": "Production-safe regression scenarios for Jaafar runtime evaluation",
+  "scenarios": [
+    {
+      "id": "conversation-simple",
+      "input": "What are our office hours?",
+      "expectedIntent": "general_question",
+      "expectedOutcome": "answer_with_approved_knowledge"
+    },
+    {
+      "id": "clarification-missing-requirement",
+      "input": "Create an employee to help with finance.",
+      "expectedIntent": "employee_design",
+      "expectedOutcome": "ask_focused_clarification"
+    },
+    {
+      "id": "employee-design-review",
+      "input": "Create an HR employee for onboarding and show me the blueprint.",
+      "expectedIntent": "employee_design",
+      "expectedOutcome": "produce_revisioned_blueprint_and_wait_for_approval"
+    },
+    {
+      "id": "employee-design-confirmation",
+      "input": "Confirm the reviewed employee blueprint.",
+      "expectedIntent": "employee_design",
+      "expectedOutcome": "resume_checkpoint_and_create_idempotent_draft"
+    },
+    {
+      "id": "read-only-task",
+      "input": "Find the current vacation policy.",
+      "expectedIntent": "task_execution",
+      "expectedOutcome": "execute_read_only_knowledge_tool"
+    },
+    {
+      "id": "multi-step-task",
+      "input": "Check the employee profile and list its assigned skills.",
+      "expectedIntent": "task_execution",
+      "expectedOutcome": "execute_multiple_read_only_tools"
+    },
+    {
+      "id": "integration-unavailable",
+      "input": "Send this update through the disconnected Slack integration.",
+      "expectedIntent": "task_execution",
+      "expectedOutcome": "return_integration_not_ready_without_side_effect"
+    },
+    {
+      "id": "approval-rejection",
+      "input": "Publish the employee now.",
+      "expectedIntent": "task_execution",
+      "expectedOutcome": "wait_for_approval_and_cancel_on_rejection"
+    },
+    {
+      "id": "side-effect-retry",
+      "input": "Send the approved message once.",
+      "expectedIntent": "task_execution",
+      "expectedOutcome": "resume_without_duplicate_side_effect"
+    },
+    {
+      "id": "multilingual-response",
+      "input": "Explique-moi la politique de conges en francais.",
+      "expectedIntent": "general_question",
+      "expectedOutcome": "respond_in_requested_language"
+    }
+  ]
+}

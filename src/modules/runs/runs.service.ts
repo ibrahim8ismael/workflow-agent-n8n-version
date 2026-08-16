@@ -78,6 +78,20 @@ export class RunsService {
     } as never);
   }
 
+  async recordModelUsage(
+    id: string,
+    usage: { promptTokens: number; completionTokens: number; totalTokens: number },
+    estimatedCost = 0,
+  ): Promise<Run> {
+    const run = await this.findById(id);
+    return this.runsRepository.update(id, {
+      promptTokens: Number(run.promptTokens ?? 0) + usage.promptTokens,
+      completionTokens: Number(run.completionTokens ?? 0) + usage.completionTokens,
+      totalTokens: Number(run.totalTokens ?? 0) + usage.totalTokens,
+      estimatedCost: Number(run.estimatedCost ?? 0) + estimatedCost,
+    } as never);
+  }
+
   async savePlan(id: string, plan: Record<string, unknown>): Promise<Run> {
     await this.findById(id);
     return this.runsRepository.update(id, { plan: plan as never });
@@ -118,7 +132,7 @@ export class RunsService {
     const validTransitions: Record<string, string[]> = {
       CREATED: ['PREPARING', 'CANCELLED'],
       PREPARING: ['PLANNING', 'FAILED', 'CANCELLED'],
-      PLANNING: ['WAITING', 'FAILED', 'CANCELLED'],
+      PLANNING: ['EXECUTING', 'WAITING', 'FAILED', 'CANCELLED'],
       EXECUTING: ['WAITING', 'GENERATING', 'FAILED', 'CANCELLED'],
       WAITING: ['EXECUTING', 'TIMEOUT', 'FAILED', 'CANCELLED'],
       GENERATING: ['PERSISTING', 'FAILED', 'CANCELLED'],

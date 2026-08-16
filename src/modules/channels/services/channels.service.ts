@@ -16,22 +16,35 @@ export class ChannelsService {
     } as never);
   }
 
-  async findById(id: string): Promise<Channel> {
-    const channel = await this.channelsRepository.findById(id);
+  async findById(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Channel> {
+    const channel = scope
+      ? await this.channelsRepository.findById(id, scope)
+      : await this.channelsRepository.findById(id);
     if (!channel) throw new NotFoundException(`Channel with id "${id}" not found`);
     return channel;
   }
 
-  async findByAgent(agentId: string): Promise<Channel[]> {
-    return this.channelsRepository.findByAgent(agentId);
+  async findByAgent(
+    agentId: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Channel[]> {
+    return scope
+      ? this.channelsRepository.findByAgent(agentId, scope)
+      : this.channelsRepository.findByAgent(agentId);
   }
 
   async isAvailable(agentId: string, type: string): Promise<boolean> {
     return this.channelsRepository.isAvailable(agentId, type);
   }
 
-  async softDelete(id: string): Promise<Channel> {
-    await this.findById(id);
+  async softDelete(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Channel> {
+    await this.findById(id, scope);
     return this.channelsRepository.softDelete(id);
   }
 }

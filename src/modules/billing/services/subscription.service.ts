@@ -79,9 +79,23 @@ export class SubscriptionService {
     throw new BadRequestException('Either userId or organizationId is required');
   }
 
-  async upgrade(subscriptionId: string, newPlanId: string) {
+  async upgrade(
+    subscriptionId: string,
+    newPlanId: string,
+    scope?: { userId?: string; organizationId?: string },
+  ) {
     const sub = await this.subRepo.findById(subscriptionId);
     if (!sub) throw new NotFoundException('Subscription not found');
+
+    if (scope) {
+      const personalAccess = Boolean(scope.userId && sub.userId === scope.userId);
+      const organizationAccess = Boolean(
+        scope.organizationId && sub.organizationId === scope.organizationId,
+      );
+      if (!personalAccess && !organizationAccess) {
+        throw new NotFoundException('Subscription not found');
+      }
+    }
 
     const plan = await this.subRepo.findById(newPlanId);
     if (!plan) throw new NotFoundException('New plan not found');
@@ -97,9 +111,19 @@ export class SubscriptionService {
     return updated;
   }
 
-  async cancel(subscriptionId: string) {
+  async cancel(subscriptionId: string, scope?: { userId?: string; organizationId?: string }) {
     const sub = await this.subRepo.findById(subscriptionId);
     if (!sub) throw new NotFoundException('Subscription not found');
+
+    if (scope) {
+      const personalAccess = Boolean(scope.userId && sub.userId === scope.userId);
+      const organizationAccess = Boolean(
+        scope.organizationId && sub.organizationId === scope.organizationId,
+      );
+      if (!personalAccess && !organizationAccess) {
+        throw new NotFoundException('Subscription not found');
+      }
+    }
 
     const canceled = await this.subRepo.cancel(subscriptionId);
 
