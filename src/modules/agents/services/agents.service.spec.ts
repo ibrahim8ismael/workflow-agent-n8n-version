@@ -23,6 +23,7 @@ describe('AgentsService', () => {
     removeSkill: vi.fn(),
     getSkills: vi.fn(),
     getAssignedSkills: vi.fn(),
+    findPlatformAgent: vi.fn(),
   } as unknown as AgentsRepository;
 
   beforeEach(() => {
@@ -36,6 +37,9 @@ describe('AgentsService', () => {
     vi.mocked(mockRepo.removeSkill).mockResolvedValue(undefined);
     vi.mocked(mockRepo.getSkills).mockResolvedValue([] as never);
     vi.mocked(mockRepo.getAssignedSkills).mockResolvedValue([] as never);
+    vi.mocked(mockRepo.findPlatformAgent).mockResolvedValue(
+      agent({ id: '00000000-0000-4000-8000-000000000001', name: 'Jaafar' }) as never,
+    );
     service = new AgentsService(mockRepo);
   });
 
@@ -180,6 +184,27 @@ describe('AgentsService', () => {
         userId: 'user-1',
         organizationId: 'org-1',
       });
+    });
+  });
+
+  describe('platform agents', () => {
+    it('should retrieve the Jaafar platform agent', async () => {
+      const result = await service.getJaafar();
+
+      expect(mockRepo.findPlatformAgent).toHaveBeenCalledWith('Jaafar');
+      expect(result.id).toBe('00000000-0000-4000-8000-000000000001');
+    });
+
+    it('should retrieve a platform agent by slug', async () => {
+      const result = await service.findPlatformAgent('jaafar');
+
+      expect(result.name).toBe('Jaafar');
+    });
+
+    it('should throw NotFoundException for unknown platform agent', async () => {
+      vi.mocked(mockRepo.findPlatformAgent).mockResolvedValue(null);
+
+      await expect(service.findPlatformAgent('unknown-guide')).rejects.toThrow(NotFoundException);
     });
   });
 });

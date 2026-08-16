@@ -10,16 +10,50 @@ export class ChannelsRepository {
     return this.db.channel.create({ data });
   }
 
-  async findById(id: string): Promise<Channel | null> {
+  async findById(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Channel | null> {
     return this.db.channel.findFirst({
-      where: { id, deletedAt: null },
+      where: {
+        id,
+        deletedAt: null,
+        ...(scope
+          ? {
+              agent: {
+                deletedAt: null,
+                OR: [
+                  ...(scope.userId ? [{ userId: scope.userId }] : []),
+                  ...(scope.organizationId ? [{ organizationId: scope.organizationId }] : []),
+                ],
+              },
+            }
+          : {}),
+      },
       include: { configs: { where: { deletedAt: null } } },
     });
   }
 
-  async findByAgent(agentId: string): Promise<Channel[]> {
+  async findByAgent(
+    agentId: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Channel[]> {
     return this.db.channel.findMany({
-      where: { agentId, deletedAt: null },
+      where: {
+        agentId,
+        deletedAt: null,
+        ...(scope
+          ? {
+              agent: {
+                deletedAt: null,
+                OR: [
+                  ...(scope.userId ? [{ userId: scope.userId }] : []),
+                  ...(scope.organizationId ? [{ organizationId: scope.organizationId }] : []),
+                ],
+              },
+            }
+          : {}),
+      },
       include: { configs: { where: { deletedAt: null } } },
     });
   }

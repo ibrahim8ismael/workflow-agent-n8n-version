@@ -35,6 +35,18 @@ export class AgentsRepository {
     });
   }
 
+  async findPlatformAgent(slug = 'Jaafar'): Promise<Agent | null> {
+    const fixedId = '00000000-0000-4000-8000-000000000001';
+    return this.db.agent.findFirst({
+      where: {
+        OR: [{ id: fixedId }, { name: { equals: slug, mode: 'insensitive' } }],
+        userId: null,
+        organizationId: null,
+        deletedAt: null,
+      },
+    });
+  }
+
   async findMany(params?: {
     where?: Prisma.AgentWhereInput;
     orderBy?: Prisma.AgentOrderByWithRelationInput;

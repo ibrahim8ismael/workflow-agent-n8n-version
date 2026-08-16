@@ -7,24 +7,40 @@ import { IntegrationsRepository } from '../repositories/integrations.repository'
 export class IntegrationsService {
   constructor(private readonly integrationsRepository: IntegrationsRepository) {}
 
-  async create(dto: CreateIntegrationDto): Promise<Integration> {
+  async create(
+    dto: CreateIntegrationDto,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Integration> {
+    const userId = scope?.userId;
+    const organizationId = scope?.organizationId ?? dto.organizationId;
+
     return this.integrationsRepository.create({
       name: dto.name,
       category: dto.category as never,
       provider: dto.provider,
       config: dto.config as never,
       status: 'DISCONNECTED',
-      ...(dto.organizationId ? { organization: { connect: { id: dto.organizationId } } } : {}),
+      ...(userId ? { user: { connect: { id: userId } } } : {}),
+      ...(organizationId ? { organization: { connect: { id: organizationId } } } : {}),
     } as never);
   }
 
-  async findById(id: string): Promise<Integration> {
-    const integration = await this.integrationsRepository.findById(id);
+  async findById(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Integration> {
+    const integration = await this.integrationsRepository.findById(id, scope);
     if (!integration) throw new NotFoundException(`Integration with id "${id}" not found`);
     return integration;
   }
 
-  async findByOrganization(organizationId: string): Promise<Integration[]> {
+  async findByOrganization(
+    organizationId: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Integration[]> {
+    if (scope?.organizationId && scope.organizationId !== organizationId) {
+      return [];
+    }
     return this.integrationsRepository.findByOrganization(organizationId);
   }
 
@@ -32,8 +48,11 @@ export class IntegrationsService {
     return this.integrationsRepository.checkAvailability(organizationId, provider);
   }
 
-  async softDelete(id: string): Promise<Integration> {
-    await this.findById(id);
+  async softDelete(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Integration> {
+    await this.findById(id, scope);
     return this.integrationsRepository.softDelete(id);
   }
 }

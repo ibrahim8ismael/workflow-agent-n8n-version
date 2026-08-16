@@ -34,6 +34,35 @@ export class AgentsService {
     return agent;
   }
 
+  async getJaafar(): Promise<Agent> {
+    let agent = await this.agentsRepository.findPlatformAgent('Jaafar');
+    if (!agent) {
+      agent = await this.agentsRepository.findById('00000000-0000-4000-8000-000000000001');
+    }
+    if (!agent) {
+      agent = await this.agentsRepository.create({
+        id: '00000000-0000-4000-8000-000000000001',
+        name: 'Jaafar',
+        description: 'The Woops AI guide who designs digital employees with business owners.',
+        instructions:
+          'You are Jaafar, the AI guide inside Woops. Help business owners design digital employees. Never claim an employee was created without backend confirmation.',
+        status: 'PUBLISHED' as never,
+      } as never);
+    }
+    return agent;
+  }
+
+  async findPlatformAgent(slug: string): Promise<Agent> {
+    if (slug.toLowerCase() === 'jaafar') {
+      return this.getJaafar();
+    }
+    const agent = await this.agentsRepository.findPlatformAgent(slug);
+    if (!agent) {
+      throw new NotFoundException(`Platform agent "${slug}" not found`);
+    }
+    return agent;
+  }
+
   async findMany(params?: {
     userId?: string;
     organizationId?: string;
@@ -58,23 +87,30 @@ export class AgentsService {
     });
   }
 
-  async update(id: string, dto: UpdateAgentDto): Promise<Agent> {
-    await this.findById(id);
+  async update(
+    id: string,
+    dto: UpdateAgentDto,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Agent> {
+    await this.findById(id, false, scope);
     return this.agentsRepository.update(id, dto as never);
   }
 
-  async softDelete(id: string): Promise<Agent> {
-    await this.findById(id);
+  async softDelete(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Agent> {
+    await this.findById(id, false, scope);
     return this.agentsRepository.softDelete(id);
   }
 
-  async publish(id: string): Promise<Agent> {
-    await this.findById(id);
+  async publish(id: string, scope?: { userId?: string; organizationId?: string }): Promise<Agent> {
+    await this.findById(id, false, scope);
     return this.agentsRepository.update(id, { status: AGENT_STATUS.PUBLISHED });
   }
 
-  async archive(id: string): Promise<Agent> {
-    await this.findById(id);
+  async archive(id: string, scope?: { userId?: string; organizationId?: string }): Promise<Agent> {
+    await this.findById(id, false, scope);
     return this.agentsRepository.update(id, { status: AGENT_STATUS.ARCHIVED });
   }
 
@@ -82,18 +118,23 @@ export class AgentsService {
     agentId: string,
     skillId: string,
     config?: Record<string, unknown>,
+    scope?: { userId?: string; organizationId?: string },
   ): Promise<void> {
-    await this.findById(agentId);
+    await this.findById(agentId, false, scope);
     await this.agentsRepository.addSkill(agentId, skillId, config);
   }
 
-  async removeSkill(agentId: string, skillId: string): Promise<void> {
-    await this.findById(agentId);
+  async removeSkill(
+    agentId: string,
+    skillId: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<void> {
+    await this.findById(agentId, false, scope);
     await this.agentsRepository.removeSkill(agentId, skillId);
   }
 
-  async getSkills(agentId: string) {
-    await this.findById(agentId);
+  async getSkills(agentId: string, scope?: { userId?: string; organizationId?: string }) {
+    await this.findById(agentId, false, scope);
     return this.agentsRepository.getSkills(agentId);
   }
 

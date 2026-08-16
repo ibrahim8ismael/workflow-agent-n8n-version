@@ -10,9 +10,23 @@ export class ConversationsRepository {
     return this.db.conversation.create({ data });
   }
 
-  async findById(id: string): Promise<Conversation | null> {
+  async findById(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Conversation | null> {
     return this.db.conversation.findFirst({
-      where: { id, deletedAt: null },
+      where: {
+        id,
+        deletedAt: null,
+        ...(scope
+          ? {
+              OR: [
+                ...(scope.userId ? [{ userId: scope.userId }] : []),
+                ...(scope.organizationId ? [{ organizationId: scope.organizationId }] : []),
+              ],
+            }
+          : {}),
+      },
       include: { messages: { orderBy: { createdAt: 'asc' }, where: { deletedAt: null } } },
     });
   }

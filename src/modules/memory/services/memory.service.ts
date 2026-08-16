@@ -32,15 +32,24 @@ export class MemoryService {
     } as never);
   }
 
-  async findById(id: string): Promise<Memory> {
-    const memory = await this.memoryRepository.findById(id);
+  async findById(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Memory> {
+    const memory = await this.memoryRepository.findById(id, scope);
     if (!memory) throw new NotFoundException(`Memory with id "${id}" not found`);
     return memory;
   }
 
   async findByAgent(
     agentId: string,
-    options?: { type?: string; userId?: string; skip?: number; take?: number },
+    options?: {
+      type?: string;
+      userId?: string;
+      organizationId?: string;
+      skip?: number;
+      take?: number;
+    },
   ): Promise<Memory[]> {
     return this.memoryRepository.findByAgent(agentId, options);
   }
@@ -48,13 +57,22 @@ export class MemoryService {
   async searchByAgent(
     agentId: string,
     query: string,
-    options?: { type?: string; limit?: number },
+    options?: {
+      type?: string;
+      userId?: string;
+      organizationId?: string;
+      limit?: number;
+    },
   ): Promise<Memory[]> {
     return this.memoryRepository.searchByAgent(agentId, query, options);
   }
 
-  async update(id: string, dto: UpdateMemoryDto): Promise<Memory> {
-    await this.findById(id);
+  async update(
+    id: string,
+    dto: UpdateMemoryDto,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Memory> {
+    await this.findById(id, scope);
     return this.memoryRepository.update(id, {
       content: dto.content,
       metadata: toJson(dto.metadata),
@@ -85,8 +103,11 @@ export class MemoryService {
     } as never);
   }
 
-  async softDelete(id: string): Promise<Memory> {
-    await this.findById(id);
+  async softDelete(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Memory> {
+    await this.findById(id, scope);
     return this.memoryRepository.softDelete(id);
   }
 }

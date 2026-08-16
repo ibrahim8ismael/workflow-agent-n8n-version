@@ -19,11 +19,11 @@ export class SubscriptionController {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async create(@Body() dto: CreateSubscriptionDto, @Req() req: any) {
     const data = createSubscriptionSchema.parse(dto);
-    const userId = req.user.id;
+    const { id: userId, activeContext, organizationId } = req.user;
     return this.subscriptionService.create({
       planId: data.planId,
-      userId,
-      organizationId: data.organizationId,
+      userId: activeContext === 'organization' ? undefined : userId,
+      organizationId: activeContext === 'organization' ? organizationId : undefined,
     });
   }
 
@@ -38,13 +38,23 @@ export class SubscriptionController {
   }
 
   @Patch(':id/upgrade')
-  async upgrade(@Param('id') id: string, @Body() dto: UpgradeSubscriptionDto) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async upgrade(@Param('id') id: string, @Body() dto: UpgradeSubscriptionDto, @Req() req: any) {
     const data = upgradeSubscriptionSchema.parse(dto);
-    return this.subscriptionService.upgrade(id, data.planId);
+    const { id: userId, activeContext, organizationId } = req.user;
+    return this.subscriptionService.upgrade(id, data.planId, {
+      userId,
+      organizationId: activeContext === 'organization' ? organizationId : undefined,
+    });
   }
 
   @Delete(':id')
-  async cancel(@Param('id') id: string) {
-    return this.subscriptionService.cancel(id);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async cancel(@Param('id') id: string, @Req() req: any) {
+    const { id: userId, activeContext, organizationId } = req.user;
+    return this.subscriptionService.cancel(id, {
+      userId,
+      organizationId: activeContext === 'organization' ? organizationId : undefined,
+    });
   }
 }

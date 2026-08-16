@@ -10,8 +10,24 @@ export class IntegrationsRepository {
     return this.db.integration.create({ data });
   }
 
-  async findById(id: string): Promise<Integration | null> {
-    return this.db.integration.findFirst({ where: { id, deletedAt: null } });
+  async findById(
+    id: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<Integration | null> {
+    return this.db.integration.findFirst({
+      where: {
+        id,
+        deletedAt: null,
+        ...(scope
+          ? {
+              OR: [
+                ...(scope.userId ? [{ userId: scope.userId }] : []),
+                ...(scope.organizationId ? [{ organizationId: scope.organizationId }] : []),
+              ],
+            }
+          : {}),
+      },
+    });
   }
 
   async findByOrganization(organizationId: string): Promise<Integration[]> {
