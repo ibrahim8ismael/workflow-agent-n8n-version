@@ -1,6 +1,10 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { LLMRuntimeService } from '../../../infrastructure/llm-runtime/llm-runtime.service';
+import {
+  N8nWorkflowError,
+  N8nWorkflowExecutorService,
+} from '../../../infrastructure/n8n/n8n-workflow-executor.service';
 import { buildSkillSystemPrompt } from '../../../infrastructure/prompts/system-prompts';
 import { KnowledgeService } from '../../knowledge/services/knowledge.service';
 import { MemoryService } from '../../memory/services/memory.service';
@@ -44,6 +48,7 @@ export class SkillEmployeeRuntimeService {
     private readonly llmRuntime: LLMRuntimeService,
     private readonly configService: ConfigService,
     @Optional() private readonly toolExecutor?: ToolExecutorService,
+    @Optional() private readonly n8nExecutor?: N8nWorkflowExecutorService,
   ) {}
 
   async execute(
@@ -262,6 +267,26 @@ export class SkillEmployeeRuntimeService {
     args: Record<string, unknown>,
     request: SkillRuntimeRequest,
   ): Promise<unknown> {
+    if (this.n8nExecutor) {
+      try {
+        return await this.n8nExecutor.execute({
+          workflow: skill.slug,
+          input: args,
+          runId: request.runId,
+          agentId: request.agentId,
+          userId: request.userId,
+          organizationId: request.organizationId,
+          timeoutMs: this.toNumber(skill.timeout, 30_000),
+          idempotencyKey: request.runId ? `${request.runId}:${skill.slug}` : undefined,
+        });
+      } catch (error) {
+        if (error instanceof N8nWorkflowError) {
+          throw new SkillRuntimeError('EXECUTION_FAILED', error.message, error.retryable);
+        }
+        throw error;
+      }
+    }
+
     const webhookBase = this.configService.get<string>('N8N_WEBHOOK_URL');
     if (!webhookBase) {
       throw new SkillRuntimeError('DEPENDENCY_MISSING', 'N8N_WEBHOOK_URL is not configured');

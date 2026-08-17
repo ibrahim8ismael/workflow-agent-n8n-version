@@ -58,6 +58,20 @@ export class ChannelsRepository {
     });
   }
 
+  async findByAgentAndType(agentId: string, type: string): Promise<Channel | null> {
+    return this.db.channel.findFirst({
+      where: { agentId, type: type as never, deletedAt: null },
+      include: { configs: { where: { deletedAt: null } } },
+    });
+  }
+
+  async findByType(type: string): Promise<Channel[]> {
+    return this.db.channel.findMany({
+      where: { type: type as never, status: 'ACTIVE', deletedAt: null },
+      include: { configs: { where: { deletedAt: null } } },
+    });
+  }
+
   async isAvailable(agentId: string, type: string): Promise<boolean> {
     const channel = await this.db.channel.findFirst({
       where: { agentId, type: type as never, status: 'ACTIVE', deletedAt: null },

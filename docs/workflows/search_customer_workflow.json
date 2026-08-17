@@ -1,0 +1,67 @@
+{
+  "name": "Woops - Search Customer Skill Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "search_customer",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "id": "webhook-trigger",
+      "name": "Webhook: /webhook/search_customer"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract input query parameters sent by Woops Agent Engine\nconst payload = $json.body || $json;\nconst input = payload.input || {};\nconst query = input.query || input.email || input.customerId || 'Sarah';\n\n// Simulate/Fetch CRM customer record (e.g. from HubSpot / Database)\nconst mockCustomerDatabase = [\n  {\n    customerId: 'cust_98231',\n    name: 'Sarah Connor',\n    email: 'sarah@example.com',\n    plan: 'BUSINESS',\n    status: 'ACTIVE',\n    lifetimeValue: 1240,\n    openTickets: 0\n  },\n  {\n    customerId: 'cust_44120',\n    name: 'Alex Vance',\n    email: 'alex@example.com',\n    plan: 'PRO',\n    status: 'ACTIVE',\n    lifetimeValue: 450,\n    openTickets: 1\n  }\n];\n\nconst match = mockCustomerDatabase.find(c => \n  c.email.toLowerCase().includes(query.toLowerCase()) || \n  c.name.toLowerCase().includes(query.toLowerCase()) || \n  c.customerId === query\n) || mockCustomerDatabase[0];\n\n// Return standard structured data response\nreturn {\n  json: {\n    success: true,\n    data: match\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [250, 0],
+      "id": "crm-lookup-logic",
+      "name": "CRM Record Lookup"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}"
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [500, 0],
+      "id": "respond-to-agent",
+      "name": "Respond to Agent Engine"
+    }
+  ],
+  "connections": {
+    "Webhook: /webhook/search_customer": {
+      "main": [
+        [
+          {
+            "node": "CRM Record Lookup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM Record Lookup": {
+      "main": [
+        [
+          {
+            "node": "Respond to Agent Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

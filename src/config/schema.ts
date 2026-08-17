@@ -73,8 +73,19 @@ export const configSchema = z.object({
   JAAFAR_RUNTIME_ENABLED: z.coerce.boolean().default(true),
   JAAFAR_RUNTIME_KILL_SWITCH: z.coerce.boolean().default(false),
   JAAFAR_RUNTIME_INTERNAL_ONLY: z.coerce.boolean().default(false),
+  N8N_BASE_URL: z.string().url().optional(),
   N8N_WEBHOOK_URL: z.string().url().optional(),
+  N8N_API_URL: z.string().url().optional(),
+  N8N_API_KEY: z.string().optional(),
+  N8N_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  N8N_MAX_RETRIES: z.coerce.number().int().min(0).default(3),
   N8N_WORKFLOW_MAP: z.string().optional(),
+
+  WOOPS_INTER_SERVICE_SECRET: z
+    .string()
+    .min(16)
+    .default('woops-default-inter-service-secret-123456'),
+  WOOPS_SIGNATURE_EXPIRY_SECONDS: z.coerce.number().int().positive().default(300),
 
   SENTRY_DSN: z.string().optional(),
   SENTRY_ENV: z.string().default('development'),
