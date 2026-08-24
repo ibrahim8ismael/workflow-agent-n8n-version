@@ -358,4 +358,60 @@ describe('ToolExecutorService', () => {
     expect(channels.isAvailable).toHaveBeenCalledWith('agent-1', 'slack');
     expect(JSON.stringify(result)).not.toContain('token');
   });
+
+  // --- Characterization tests (PLAN Step 0): lock the n8n tool path before client-n8n refactor ---
+
+  it('routes n8n-mode tools through the workflow executor with slug, input and stable idempotency key', async () => {
+    const n8n = {
+      execute: vi.fn().mockResolvedValue({ customerId: 'cust_1' }),
+    };
+    const { service, llm } = setup();
+    (service as unknown as { n8n: unknown }).n8n = n8n;
+
+    const result = await service.execute(
+      tool({
+        id: 'crm_lookup',
+        slug: 'search_customer',
+        executionMode: 'n8n' as const,
+        inputSchema: { type: 'object', required: ['query'] },
+        outputSchema: { type: 'object' },
+      }),
+      request(),
+    );
+
+    expect(result).toMatchObject({ success: true, output: { customerId: 'cust_1' } });
+    expect(n8n.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflow: 'search_customer',
+        input: { query: 'find this' },
+        userId: 'user-1',
+        organizationId: 'org-1',
+        idempotencyKey: 'run-1:crm_lookup',
+      }),
+    );
+    expect(llm.generateText).not.toHaveBeenCalled();
+  });
+
+  it('surfaces n8n executor failures as failed tool results without retrying non-retryable errors', async () => {
+    const { N8nWorkflowError } = await import(
+      '../../../infrastructure/n8n/n8n-workflow-executor.service'
+    );
+    const n8n = {
+      execute: vi.fn().mockRejectedValue(new N8nWorkflowError('workflow returned HTTP 400', false)),
+    };
+    const { service } = setup();
+    (service as unknown as { n8n: unknown }).n8n = n8n;
+
+    const result = await service.execute(
+      tool({
+        id: 'crm_lookup',
+        executionMode: 'n8n' as const,
+        maxRetries: 3,
+      }),
+      request(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(n8n.execute).toHaveBeenCalledTimes(1);
+  });
 });

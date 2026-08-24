@@ -191,6 +191,7 @@ export class EmployeeDesignRuntimeService {
             blueprintRevision: design.blueprintRevision ?? metadata.blueprintRevision,
             runtimeMode: 'employee_design',
           };
+          await this.runsService.updateMetadata(runId, metadata);
         }
       } catch {
         // ignore conversation lookup error

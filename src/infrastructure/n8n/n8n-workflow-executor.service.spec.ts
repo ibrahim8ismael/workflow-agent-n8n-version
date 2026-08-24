@@ -6,11 +6,12 @@ describe('N8nWorkflowExecutorService', () => {
 
   const mockConfig = (overrides: Record<string, unknown> = {}) => ({
     get: vi.fn((key: string) => {
+      if (key in overrides) return overrides[key];
       if (key === 'N8N_WEBHOOK_URL') return 'https://n8n.example.com/webhook';
       if (key === 'WOOPS_INTER_SERVICE_SECRET') return secret;
       if (key === 'N8N_TIMEOUT_MS') return 1000;
       if (key === 'N8N_MAX_RETRIES') return 0;
-      return overrides[key];
+      return undefined;
     }),
   });
 
@@ -99,6 +100,76 @@ describe('N8nWorkflowExecutorService', () => {
         headers: expect.objectContaining({ 'Idempotency-Key': 'run-1:plan-step-1:v1' }),
       }),
     );
+    vi.unstubAllGlobals();
+  });
+
+  // --- Characterization tests (PLAN Step 0): lock the contract before client-n8n refactor ---
+
+  it('retries retryable HTTP 500 failures with backoff and then succeeds', async () => {
+    const okResponse = {
+      ok: true,
+      headers: { get: vi.fn().mockReturnValue('application/json') },
+      json: vi.fn().mockResolvedValue({ result: 'ok' }),
+    };
+    const serverErrorResponse = {
+      ok: false,
+      status: 500,
+      text: vi.fn().mockResolvedValue('boom'),
+      json: vi.fn().mockResolvedValue({}),
+      headers: { get: vi.fn().mockReturnValue('application/json') },
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(serverErrorResponse)
+      .mockResolvedValue(okResponse);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const config = mockConfig({ N8N_MAX_RETRIES: 2 });
+    const service = new N8nWorkflowExecutorService(config as never);
+    await expect(
+      service.execute({ workflow: 'support', input: {}, timeoutMs: 1_000 }),
+    ).resolves.toEqual({ result: 'ok' });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
+  });
+
+  it('does not retry non-retryable HTTP 4xx failures', async () => {
+    const badRequestResponse = {
+      ok: false,
+      status: 400,
+      text: vi.fn().mockResolvedValue('bad request'),
+      json: vi.fn().mockResolvedValue({ message: 'invalid payload' }),
+      headers: { get: vi.fn().mockReturnValue('application/json') },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(badRequestResponse);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const config = mockConfig({ N8N_MAX_RETRIES: 3 });
+    const service = new N8nWorkflowExecutorService(config as never);
+    await expect(
+      service.execute({ workflow: 'support', input: {}, timeoutMs: 1_000 }),
+    ).rejects.toMatchObject({ retryable: false, statusCode: 400 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+
+  it('classifies network errors as retryable and exhausts retries before failing', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error('network down'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const config = mockConfig({ N8N_MAX_RETRIES: 2 });
+    const service = new N8nWorkflowExecutorService(config as never);
+    await expect(
+      service.execute({ workflow: 'support', input: {}, timeoutMs: 1_000 }),
+    ).rejects.toMatchObject({
+      name: 'N8nWorkflowError',
+      message: expect.stringContaining('network down'),
+    });
+
+    // initial attempt + 2 retries
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     vi.unstubAllGlobals();
   });
 });

@@ -1,4 +1,4 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { LangGraphCheckpointError } from '../../../infrastructure/langgraph/langgraph-postgres-checkpointer.service';
 import { QuotaEnforcerService } from '../../billing/services/quota-enforcer.service';
 import { SubscriptionService } from '../../billing/services/subscription.service';
@@ -29,6 +29,7 @@ import {
   type JaafarGraphRoute,
   JaafarGraphService,
 } from './jaafar-graph.service';
+import { RuntimeService } from './runtime.service';
 import { RuntimeBillingAccountingService } from './runtime-billing-accounting.service';
 import { RuntimeEventJournalService } from './runtime-event-journal.service';
 import { RuntimeObservabilityService } from './runtime-observability.service';
@@ -36,9 +37,11 @@ import { RuntimeObservabilityService } from './runtime-observability.service';
 @Injectable()
 export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
   constructor(
-    @Optional() private readonly runtime: import('./runtime.service').RuntimeService | undefined,
+    @Optional() @Inject(RuntimeService) private readonly runtime: RuntimeService | undefined,
     private readonly runs: RunsService,
-    @Optional() private readonly employeeDesignRuntime: EmployeeDesignRuntimeService | undefined,
+    @Optional()
+    @Inject(EmployeeDesignRuntimeService)
+    private readonly employeeDesignRuntime: EmployeeDesignRuntimeService | undefined,
     private readonly employeeDesignGraph: JaafarEmployeeDesignGraphService,
     private readonly executionGraph: JaafarExecutionGraphService,
     private readonly conversationGraph: JaafarConversationGraphService,
@@ -125,11 +128,47 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       }
 
       if (route === 'employee_design') {
-        const result = await this.employeeDesignGraph.run(runtimeRequest);
+        await this.runs.updateMetadata(run.id, {
+          runtimeMode: RuntimeMode.EMPLOYEE_DESIGN,
+        });
+        await this.runs.transitionStatus(run.id, 'EXECUTING');
+        const employeeInput = {
+          runId: run.id,
+          agentId: runtimeRequest.agentId,
+          userMessage: runtimeRequest.userMessage,
+          conversationId: runtimeRequest.conversationId,
+          userId: runtimeRequest.userId,
+          organizationId: runtimeRequest.organizationId,
+          effort: runtimeRequest.effort,
+        };
+        const result = (await this.employeeDesignGraph
+          .build()
+          .invoke(
+            { input: employeeInput },
+            this.employeeDesignGraph.graphConfig(run.id, runtimeRequest),
+          )) as Record<string, unknown>;
+        const mapped = this.mapEmployeeDesignResult(result);
+        if (mapped.route === 'waiting') {
+          await this.runs.transitionStatus(run.id, 'WAITING');
+          await this.recordEvent({
+            type: 'run.waiting',
+            runId: run.id,
+            occurredAt: new Date().toISOString(),
+            payload: { reason: 'approval' },
+          });
+          return this.normalize({
+            runId: run.id,
+            mode: RuntimeMode.EMPLOYEE_DESIGN,
+            status: 'WAITING',
+            response: result.response as string | undefined,
+            plan: result.blueprint as unknown as Record<string, unknown>,
+            usage: result.usage as RuntimeUsage | undefined,
+          });
+        }
         await this.handleGraphCompletion(run.id, {
           route: 'completed',
-          response: result.response,
-          usage: result.usage,
+          response: result.response as string | undefined,
+          usage: result.usage as RuntimeUsage | undefined,
           modelCalls: [],
         });
         await this.recordEvent({
@@ -137,8 +176,12 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           runId: run.id,
           occurredAt: new Date().toISOString(),
           payload: {
-            response: result.response ?? '',
-            usage: result.usage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+            response: (result.response as string) ?? '',
+            usage: (result.usage as RuntimeUsage) ?? {
+              promptTokens: 0,
+              completionTokens: 0,
+              totalTokens: 0,
+            },
           },
         });
         await this.recordBilling(run.id);
@@ -146,9 +189,9 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           runId: run.id,
           mode: RuntimeMode.EMPLOYEE_DESIGN,
           status: 'COMPLETED',
-          response: result.response,
-          plan: result.plan as unknown as Record<string, unknown>,
-          usage: result.usage,
+          response: result.response as string | undefined,
+          plan: result.blueprint as unknown as Record<string, unknown>,
+          usage: result.usage as RuntimeUsage | undefined,
         });
       }
 
@@ -322,6 +365,9 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       }
 
       if (route === 'employee_design') {
+        await this.runs.updateMetadata(run.id, {
+          runtimeMode: RuntimeMode.EMPLOYEE_DESIGN,
+        });
         const employeeInput = {
           runId: run.id,
           agentId: runtimeRequest.agentId,
@@ -564,22 +610,78 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     confirmation?: { blueprintRevision?: string },
   ): Promise<RuntimeResult> {
     const run = await this.runs.findById(runId);
-    const isGraphEmployeeDesign =
-      (run.metadata as Record<string, unknown> | null)?.runtimeMode === RuntimeMode.EMPLOYEE_DESIGN;
+    if (!this.matchesScope(run, scope)) return this.failure(runId, 'Run scope does not match.');
 
-    if (isGraphEmployeeDesign) {
-      return this.resume(runId, scope);
+    const isEmployeeDesign = this.isEmployeeDesignRun(run);
+
+    if (isEmployeeDesign && run.status === 'WAITING') {
+      try {
+        const resumeResult = await this.resumeGraphBranch(
+          runId,
+          true,
+          scope,
+          confirmation?.blueprintRevision,
+        );
+        const normalized = this.normalize({
+          runId,
+          mode: RuntimeMode.EMPLOYEE_DESIGN,
+          status:
+            resumeResult.route === 'failed'
+              ? 'FAILED'
+              : resumeResult.route === 'waiting'
+                ? 'WAITING'
+                : 'COMPLETED',
+          response: resumeResult.response as string | undefined,
+          plan: resumeResult.plan as unknown as Record<string, unknown>,
+          usage: (resumeResult.usage as RuntimeUsage) ?? {
+            promptTokens: 0,
+            completionTokens: 0,
+            totalTokens: 0,
+          },
+        });
+        if (normalized.status === 'FAILED') {
+          await this.recordEvent({
+            type: 'run.failed',
+            runId,
+            occurredAt: new Date().toISOString(),
+            payload: {
+              error: normalized.error ?? {
+                code: 'UNKNOWN_RUNTIME_FAILURE' as RuntimeErrorCode,
+                message: normalized.response ?? 'Runtime failed',
+                retryable: false,
+              },
+            },
+          });
+        } else {
+          await this.recordEvent({
+            type: 'run.completed',
+            runId,
+            occurredAt: new Date().toISOString(),
+            payload: { response: normalized.response ?? '', usage: normalized.usage },
+          });
+        }
+        await this.recordBilling(runId);
+        return normalized;
+      } catch (error) {
+        if (!this.employeeDesignRuntime) {
+          throw error;
+        }
+      }
     }
 
-    if (!this.employeeDesignRuntime)
-      return this.failure(runId, 'This legacy run cannot be confirmed.');
-    const legacyResult = await this.employeeDesignRuntime.confirm(runId, scope, confirmation);
-    return this.normalize({
-      runId: legacyResult.runId,
-      status: legacyResult.status ?? 'COMPLETED',
-      response: legacyResult.response,
-      usage: legacyResult.usage,
-    });
+    if (this.employeeDesignRuntime) {
+      const legacyResult = await this.employeeDesignRuntime.confirm(runId, scope, confirmation);
+      return this.normalize({
+        runId: legacyResult.runId,
+        mode: RuntimeMode.EMPLOYEE_DESIGN,
+        status: legacyResult.status ?? 'COMPLETED',
+        response: legacyResult.response,
+        usage: legacyResult.usage,
+        plan: legacyResult.plan as Record<string, unknown> | undefined,
+      });
+    }
+
+    return this.failure(runId, 'This legacy run cannot be confirmed.');
   }
 
   private async executeGraphBranch(
@@ -625,15 +727,15 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     runId: string,
     approved: boolean,
     scope?: RuntimeScope,
+    blueprintRevision?: string,
   ): Promise<Record<string, unknown>> {
     const run = await this.runs.findById(runId);
-    const isEmployeeDesign =
-      (run.metadata as Record<string, unknown> | null)?.runtimeMode === RuntimeMode.EMPLOYEE_DESIGN;
+    const isEmployeeDesign = this.isEmployeeDesignRun(run);
 
     if (isEmployeeDesign) {
       const result = await this.employeeDesignGraph.resume(
         runId,
-        { approved, blueprintRevision: '' },
+        { approved, blueprintRevision: blueprintRevision ?? '' },
         scope,
       );
       return result as unknown as Record<string, unknown>;
@@ -824,7 +926,10 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     for (const [node, value] of Object.entries(update)) {
       const state = (value ?? {}) as Record<string, unknown> & { __interrupt__?: unknown };
 
-      if (node === 'create_employee' && state.__interrupt__) {
+      if (
+        (node === 'await_approval' || node === 'create_employee') &&
+        (state.__interrupt__ || this.isInterrupted(state))
+      ) {
         events.push({
           type: 'approval.required',
           runId,
@@ -972,9 +1077,18 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     );
   }
 
-  private isGraphEmployeeDesign(run: { metadata: unknown; status: string }): boolean {
+  private isEmployeeDesignRun(run: { metadata: unknown }): boolean {
     const metadata = (run.metadata as Record<string, unknown> | null) ?? {};
-    return metadata.runtimeMode === RuntimeMode.EMPLOYEE_DESIGN && run.status === 'WAITING';
+    return (
+      metadata.runtimeMode === RuntimeMode.EMPLOYEE_DESIGN ||
+      Boolean(metadata.employeeDesign) ||
+      Boolean(metadata.blueprint) ||
+      Boolean(metadata.designStatus)
+    );
+  }
+
+  private isGraphEmployeeDesign(run: { metadata: unknown; status: string }): boolean {
+    return this.isEmployeeDesignRun(run) && run.status === 'WAITING';
   }
 
   private isGraphExecution(run: { metadata: unknown; status: string }): boolean {

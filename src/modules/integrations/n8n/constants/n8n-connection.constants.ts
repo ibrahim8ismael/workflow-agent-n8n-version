@@ -1,0 +1,9 @@
+export const N8N_CONNECTION_STATUS = {
+  PENDING_VERIFICATION: 'PENDING_VERIFICATION',
+  ACTIVE: 'ACTIVE',
+  INVALID: 'INVALID',
+  SUSPENDED: 'SUSPENDED',
+} as const;
+
+export type N8nConnectionStatus =
+  (typeof N8N_CONNECTION_STATUS)[keyof typeof N8N_CONNECTION_STATUS];

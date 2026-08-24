@@ -21,6 +21,7 @@ import { ChannelsModule } from './modules/channels/channels.module';
 import { ConversationsModule } from './modules/conversations/conversations.module';
 import { HealthModule } from './modules/health/health.module';
 import { IntegrationsModule } from './modules/integrations/integrations.module';
+import { N8nConnectionsModule } from './modules/integrations/n8n/n8n-connections.module';
 import { KnowledgeModule } from './modules/knowledge/knowledge.module';
 import { MemoryModule } from './modules/memory/memory.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
@@ -62,6 +63,7 @@ import { SharedModule } from './shared/shared.module';
     RuntimeModule,
     ChannelsModule,
     IntegrationsModule,
+    N8nConnectionsModule,
     HealthModule,
     NotificationsModule,
     SharedModule,

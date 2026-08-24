@@ -81,6 +81,22 @@ export const configSchema = z.object({
   N8N_MAX_RETRIES: z.coerce.number().int().min(0).default(3),
   N8N_WORKFLOW_MAP: z.string().optional(),
 
+  /** AES-256-GCM key (base64, 32 bytes) for encrypting client integration secrets at rest. Required before enabling n8n connections. */
+  CREDENTIAL_ENCRYPTION_KEY: z
+    .string()
+    .optional()
+    .refine(
+      (v) => {
+        if (!v) return true;
+        try {
+          return Buffer.from(v, 'base64').length === 32;
+        } catch {
+          return false;
+        }
+      },
+      { message: 'CREDENTIAL_ENCRYPTION_KEY must be base64 and decode to exactly 32 bytes' },
+    ),
+
   WOOPS_INTER_SERVICE_SECRET: z
     .string()
     .min(16)

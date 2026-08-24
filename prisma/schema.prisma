@@ -151,6 +151,8 @@ model User {
   knowledgeDocuments   KnowledgeDocument[]  @relation("UserKnowledgeDocuments")
   memories             Memory[]             @relation("UserMemories")
   integrations         Integration[]        @relation("UserIntegrations")
+  n8nConnections       N8nConnection[]      @relation("UserN8nConnections")
+  automations          Automation[]         @relation("UserAutomations")
   notifications        Notification[]
   subscription         Subscription?        @relation("UserSubscription")
   wallet               Wallet?
@@ -179,6 +181,8 @@ model Organization {
   knowledgeDocuments KnowledgeDocument[]  @relation("OrganizationKnowledgeDocuments")
   memories           Memory[]             @relation("OrganizationMemories")
   integrations       Integration[]        @relation("OrganizationIntegrations")
+  n8nConnections     N8nConnection[]      @relation("OrganizationN8nConnections")
+  automations        Automation[]         @relation("OrganizationAutomations")
   notifications      Notification[]
   subscription       Subscription?        @relation("OrganizationSubscription")
   wallet             Wallet?
@@ -509,6 +513,75 @@ model IntegrationCredential {
 
   @@index([integrationId])
   @@map("integration_credentials")
+}
+
+// ──────────────────────────────────────────────
+// Client-managed n8n connections & automations
+// (@PLAN.N8N.CLIENT.MODE.md)
+// ──────────────────────────────────────────────
+
+model N8nConnection {
+  id             String    @id @default(uuid())
+  name           String
+  baseUrl        String
+  status         String    @default("PENDING_VERIFICATION") // PENDING_VERIFICATION | ACTIVE | INVALID | SUSPENDED
+  lastVerifiedAt DateTime?
+  lastError      String?
+  metadata       Json?
+  userId         String?
+  organizationId String? // exactly one populated (owner XOR)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  user         User?                     @relation("UserN8nConnections", fields: [userId], references: [id])
+  organization Organization?             @relation("OrganizationN8nConnections", fields: [organizationId], references: [id])
+  credential   N8nConnectionCredential?
+  automations  Automation[]
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([status])
+  @@map("n8n_connections")
+}
+
+model N8nConnectionCredential {
+  id            String   @id @default(uuid())
+  connectionId  String   @unique
+  encryptedData String // AES-256-GCM via SecretBoxService
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  connection N8nConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@map("n8n_connection_credentials")
+}
+
+model Automation {
+  id                 String    @id @default(uuid())
+  name               String
+  description        String?
+  blueprint          Json // approved AutomationBlueprint (immutable after approval)
+  status             String    @default("DESIGN") // DESIGN | PENDING_APPROVAL | PROVISIONING | ACTIVE | FAILED | SUSPENDED
+  connectionId       String
+  externalWorkflowId String?
+  webhookPath        String?
+  lastSyncedAt       DateTime?
+  userId             String?
+  organizationId     String? // exactly one populated (owner XOR)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  deletedAt          DateTime?
+
+  connection N8nConnection @relation(fields: [connectionId], references: [id])
+  user       User?         @relation("UserAutomations", fields: [userId], references: [id])
+  organization Organization? @relation("OrganizationAutomations", fields: [organizationId], references: [id])
+
+  @@index([connectionId])
+  @@index([userId])
+  @@index([organizationId])
+  @@index([status])
+  @@map("automations")
 }
 
 model Channel {

@@ -149,10 +149,19 @@ export class JaafarEmployeeDesignGraphService {
       return this.scopeFailure(runId, 'organization');
     }
     const metadata = (run.metadata as Record<string, unknown> | null) ?? {};
-    const session = metadata.employeeDesign as Record<string, unknown> | undefined;
+    let session = metadata.employeeDesign as Record<string, unknown> | undefined;
+    if (!session && run.conversationId) {
+      try {
+        const conv = await this.conversations.findByIdInScope(run.conversationId, scope ?? {});
+        const convMeta = (conv?.metadata as Record<string, unknown> | null) ?? {};
+        session = convMeta.employeeDesign as Record<string, unknown> | undefined;
+      } catch {
+        // ignore
+      }
+    }
     const revision =
-      decision.blueprintRevision ??
-      (typeof session?.blueprintRevision === 'string' ? session.blueprintRevision : undefined) ??
+      decision.blueprintRevision ||
+      (typeof session?.blueprintRevision === 'string' ? session.blueprintRevision : undefined) ||
       (typeof metadata.blueprintRevision === 'string' ? metadata.blueprintRevision : undefined);
 
     if (!decision.approved) {
@@ -270,6 +279,7 @@ export class JaafarEmployeeDesignGraphService {
           await this.runs.updateUsage(state.input.runId, usage);
         }
         await this.runs.updateMetadata(state.input.runId, {
+          runtimeMode: 'employee_design',
           employeeDesign: session,
           blueprint: state.blueprint,
           designStatus: session.status,
