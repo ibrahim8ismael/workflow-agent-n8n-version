@@ -16,6 +16,20 @@ export interface N8nWorkflowRequest {
   timeoutMs?: number;
   idempotencyKey?: string;
   metadata?: Record<string, unknown>;
+  /**
+   * Per-automation binding into a CLIENT's n8n instance (PLAN Step 10).
+   * When present, execution targets {baseUrl}/webhook/{webhookPath} with
+   * the binding's HMAC secret. When absent, the deprecated platform-global
+   * env path is used (dual-read until Step 11 removes it).
+   */
+  binding?: N8nWorkflowBinding;
+}
+
+export interface N8nWorkflowBinding {
+  baseUrl: string;
+  webhookPath: string;
+  /** Optional per-binding HMAC shared secret (same signature scheme). */
+  secret?: string;
 }
 
 export class N8nWorkflowError extends Error {
@@ -39,19 +53,35 @@ export class N8nWorkflowExecutorService {
   ) {}
 
   async execute(request: N8nWorkflowRequest): Promise<JsonValue> {
-    const webhookBase = this.config.get<string>('N8N_WEBHOOK_URL');
-    if (!webhookBase) {
-      throw new N8nWorkflowError('N8N_WEBHOOK_URL is not configured', false);
+    let webhookBase: string | undefined;
+    let targetPath: string;
+    let descriptor: { workflow: string; requiredIntegration?: string };
+
+    if (request.binding) {
+      webhookBase = `${request.binding.baseUrl.replace(/\/+$/, '')}/webhook`;
+      targetPath = `/${request.binding.webhookPath.replace(/^\/+/, '')}`;
+      descriptor = { workflow: request.binding.webhookPath };
+    } else {
+      // Deprecated platform-global path (dual-read). Removed at Step 11.
+      this.logger.warn({
+        event: 'n8n.legacy_env_binding',
+        workflow: request.workflow,
+        hint: 'Resolve automations into per-run bindings instead of platform n8n env globals',
+      });
+      webhookBase = this.config.get<string>('N8N_WEBHOOK_URL');
+      if (!webhookBase) {
+        throw new N8nWorkflowError('N8N_WEBHOOK_URL is not configured', false);
+      }
+      const resolved = this.registry?.resolve(request.workflow) ?? { workflow: request.workflow };
+      descriptor = resolved;
+      await this.registry?.assertAvailable(request.organizationId, descriptor.requiredIntegration);
+      targetPath = `/${descriptor.workflow.replace(/^\/+/, '')}`;
     }
 
-    const descriptor = this.registry?.resolve(request.workflow) ?? { workflow: request.workflow };
-    await this.registry?.assertAvailable(request.organizationId, descriptor.requiredIntegration);
-
-    const targetPath = `/${descriptor.workflow.replace(/^\/+/, '')}`;
     const url = `${webhookBase.replace(/\/+$/, '')}${targetPath}`;
     const timeoutMs = request.timeoutMs ?? this.config.get<number>('N8N_TIMEOUT_MS') ?? 30_000;
     const maxRetries = this.config.get<number>('N8N_MAX_RETRIES') ?? 2;
-    const secret = this.config.get<string>('WOOPS_INTER_SERVICE_SECRET');
+    const secret = request.binding?.secret ?? this.config.get<string>('WOOPS_INTER_SERVICE_SECRET');
 
     const envelope = {
       runId: request.runId,

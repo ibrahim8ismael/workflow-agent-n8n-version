@@ -105,6 +105,16 @@ export class AutomationsService {
     return this.toView(await this.repository.softDelete(id));
   }
 
+  /**
+   * ACTIVE automations joined to their connection for runtime tool
+   * resolution (PLAN Step 10). Includes automations whose connection is not
+   * usable so the runtime can surface INTEGRATION_UNAVAILABLE instead of
+   * silently dropping them.
+   */
+  async listForToolResolution(scope: OwnerScope) {
+    return this.repository.listActiveWithConnection(scope);
+  }
+
   // ── internals ──────────────────────────────────────────────
 
   private async provision(

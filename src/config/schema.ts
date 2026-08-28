@@ -73,15 +73,23 @@ export const configSchema = z.object({
   JAAFAR_RUNTIME_ENABLED: z.coerce.boolean().default(true),
   JAAFAR_RUNTIME_KILL_SWITCH: z.coerce.boolean().default(false),
   JAAFAR_RUNTIME_INTERNAL_ONLY: z.coerce.boolean().default(false),
+  /** @deprecated Platform-global n8n — superseded by client-provided connections (@PLAN.N8N.CLIENT.MODE.md). Warned at boot; removed after cutover. */
   N8N_BASE_URL: z.string().url().optional(),
+  /** @deprecated Platform-global n8n — superseded by client-provided connections. Warned at boot; removed after cutover. */
   N8N_WEBHOOK_URL: z.string().url().optional(),
+  /** @deprecated Platform-global n8n — superseded by client-provided connections. Warned at boot; removed after cutover. */
   N8N_API_URL: z.string().url().optional(),
+  /** @deprecated Platform-global n8n — superseded by client-provided connections. Warned at boot; removed after cutover. */
   N8N_API_KEY: z.string().optional(),
   N8N_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   N8N_MAX_RETRIES: z.coerce.number().int().min(0).default(3),
+  /** @deprecated Platform-global workflow map — superseded by ACTIVE Automation rows. Warned at boot; removed after cutover. */
   N8N_WORKFLOW_MAP: z.string().optional(),
 
-  /** AES-256-GCM key (base64, 32 bytes) for encrypting client integration secrets at rest. Required before enabling n8n connections. */
+  /**
+   * AES-256-GCM key (base64, 32 bytes) for encrypting client integration
+   * secrets at rest. Required outside development (PLAN Step 11).
+   */
   CREDENTIAL_ENCRYPTION_KEY: z
     .string()
     .optional()
@@ -95,6 +103,13 @@ export const configSchema = z.object({
         }
       },
       { message: 'CREDENTIAL_ENCRYPTION_KEY must be base64 and decode to exactly 32 bytes' },
+    )
+    .refine(
+      (v) => Boolean(v) || ['development', 'test'].includes(process.env.NODE_ENV ?? 'development'),
+      {
+        message:
+          'CREDENTIAL_ENCRYPTION_KEY is required outside development — client n8n connections cannot be encrypted without it',
+      },
     ),
 
   WOOPS_INTER_SERVICE_SECRET: z

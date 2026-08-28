@@ -19,6 +19,7 @@ import { IdempotencyRepository } from './repositories/idempotency.repository';
 import { RuntimeRepository } from './repositories/runtime.repository';
 import { RuntimeController } from './runtime.controller';
 import { AutomationDesignSessionService } from './services/automation-design-session.service';
+import { AutomationToolResolverService } from './services/automation-tool-resolver.service';
 import { ContextBuilderService } from './services/context-builder.service';
 import { JaafarApprovalService } from './services/jaafar-approval.service';
 import { JaafarAutomationDesignGraphService } from './services/jaafar-automation-design-graph.service';
@@ -90,6 +91,7 @@ import { RuntimeCacheService } from './shared/runtime-cache.service';
     JaafarFinalResponseService,
     JaafarGraphService,
     AutomationDesignSessionService,
+    AutomationToolResolverService,
     ToolAuditService,
     ToolPermissionService,
     RuntimeRepository,

@@ -279,9 +279,17 @@ export class ToolExecutorService {
     request: ToolExecutionRequest,
   ): Promise<JsonValue> {
     if (!this.n8n) throw new Error('n8n workflow executor is not configured');
+    // Automation-sourced tool whose n8n connection is missing/suspended —
+    // surface a structured, non-retryable error for the planner (Step 10).
+    if (tool.unavailableReason === 'INTEGRATION_UNAVAILABLE') {
+      throw new IntegrationUnavailableError(
+        `Automation "${tool.name}" is unavailable: its n8n connection is not ACTIVE`,
+      );
+    }
     return this.n8n.execute({
       workflow: tool.slug,
       input,
+      binding: tool.binding,
       userId: request.userId,
       organizationId: request.organizationId,
       timeoutMs: tool.timeoutMs,
@@ -360,6 +368,9 @@ export class ToolExecutorService {
   }
 
   private normalizeError(error: unknown): ToolError {
+    if (error instanceof IntegrationUnavailableError) {
+      return { code: 'INTEGRATION_UNAVAILABLE', message: error.message, retryable: false };
+    }
     if (error instanceof ApprovalRequiredError) {
       return { code: 'APPROVAL_REQUIRED', message: error.message, retryable: false };
     }
@@ -465,6 +476,13 @@ class ToolTimeoutError extends Error {
   constructor(timeoutMs: number) {
     super(`Tool execution timed out after ${timeoutMs}ms`);
     this.name = ToolTimeoutError.name;
+  }
+}
+
+export class IntegrationUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = IntegrationUnavailableError.name;
   }
 }
 

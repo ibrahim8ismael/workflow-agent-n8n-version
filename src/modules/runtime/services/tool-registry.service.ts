@@ -3,6 +3,7 @@ import { N8nIntegrationRegistryService } from '../../../infrastructure/n8n/n8n-i
 import { ToolManifestService } from '../../../infrastructure/tools/tool-manifest.service';
 import type { ToolManifest, ToolMode } from '../../../infrastructure/tools/tool-manifest.types';
 import type { JsonValue, ToolDefinition, ToolExecutionMode } from '../interfaces/tool.interface';
+import type { AutomationToolResolverService } from './automation-tool-resolver.service';
 
 export interface ToolRegistryOptions {
   mode?: ToolMode;
@@ -11,14 +12,15 @@ export interface ToolRegistryOptions {
 
 /**
  * Tool registry. Static manifest tools are the primary source; automation
- * tool resolution (from the client's provisioned n8n workflows) lands with
- * PLAN Step 10 behind the runtime cutover.
+ * tools (from the client's provisioned n8n workflows) are enumerated from
+ * ACTIVE Automation rows via the resolver (PLAN Step 10).
  */
 @Injectable()
 export class ToolRegistryService {
   constructor(
     private readonly manifests: ToolManifestService,
     @Optional() private readonly n8nRegistry?: N8nIntegrationRegistryService,
+    @Optional() private readonly automationResolver?: AutomationToolResolverService,
   ) {}
 
   list(options?: ToolRegistryOptions): ToolDefinition[] {
@@ -39,14 +41,23 @@ export class ToolRegistryService {
     _agentId: string,
     options?: ToolRegistryOptions & { userId?: string; organizationId?: string },
   ): Promise<ToolDefinition[]> {
-    const tools = this.list({
+    const staticTools = this.list({
       mode: options?.mode,
       includeUnimplemented: options?.includeUnimplemented,
     });
+    const automationTools = this.automationResolver
+      ? await this.automationResolver.listTools({
+          userId: options?.userId,
+          organizationId: options?.organizationId,
+        })
+      : [];
+    const tools = this.mergeStableTools(staticTools, automationTools);
     if (!this.n8nRegistry) return tools;
     const available = await Promise.all(
       tools.map(async (tool) => {
-        if (tool.executionMode !== 'n8n') return true;
+        // Automation tools carry their own connection binding; availability
+        // is handled via unavailableReason, not the platform registry.
+        if (tool.executionMode !== 'n8n' || tool.binding || tool.unavailableReason) return true;
         return (
           await Promise.all(
             tool.requiredIntegrations.map((integration) =>
@@ -57,6 +68,15 @@ export class ToolRegistryService {
       }),
     );
     return tools.filter((_, index) => available[index]);
+  }
+
+  private mergeStableTools(primary: ToolDefinition[], secondary: ToolDefinition[]) {
+    const tools = new Map<string, ToolDefinition>();
+    for (const tool of primary) tools.set(tool.id, tool);
+    for (const tool of secondary) {
+      if (!tools.has(tool.id)) tools.set(tool.id, tool);
+    }
+    return [...tools.values()];
   }
 
   private toDefinition(manifest: ToolManifest): ToolDefinition {

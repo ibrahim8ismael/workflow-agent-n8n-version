@@ -75,4 +75,26 @@ export class AutomationsRepository {
     });
     return connection?.id ?? null;
   }
+
+  /** ACTIVE automations joined to their connection (tool resolution, Step 10). */
+  async listActiveWithConnection(scope?: OwnerScope) {
+    return this.db.automation.findMany({
+      where: {
+        deletedAt: null,
+        status: 'ACTIVE',
+        ...(scope
+          ? {
+              OR: [
+                ...(scope.userId ? [{ userId: scope.userId }] : []),
+                ...(scope.organizationId ? [{ organizationId: scope.organizationId }] : []),
+              ],
+            }
+          : {}),
+      },
+      include: {
+        connection: { select: { id: true, baseUrl: true, status: true, deletedAt: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
 }

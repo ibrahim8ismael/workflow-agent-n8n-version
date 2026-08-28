@@ -336,4 +336,52 @@ describe('ToolExecutorService', () => {
     expect(result.success).toBe(false);
     expect(n8n.execute).toHaveBeenCalledTimes(1);
   });
+
+  it('passes the automation binding through to the executor (PLAN Step 10)', async () => {
+    const n8n = {
+      execute: vi.fn().mockResolvedValue({ synced: true }),
+    };
+    const { service } = setup();
+    (service as unknown as { n8n: unknown }).n8n = n8n;
+
+    const result = await service.execute(
+      tool({
+        id: 'invoice-sync-b7e2c1aa',
+        slug: 'invoice-sync-b7e2c1aa',
+        executionMode: 'n8n' as const,
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        binding: { baseUrl: 'https://client.example.com', webhookPath: 'invoice-sync-b7e2c1aa' },
+      }),
+      request(),
+    );
+
+    expect(result).toMatchObject({ success: true, output: { synced: true } });
+    expect(n8n.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        binding: { baseUrl: 'https://client.example.com', webhookPath: 'invoice-sync-b7e2c1aa' },
+      }),
+    );
+  });
+
+  it('returns INTEGRATION_UNAVAILABLE without executing when the automation connection is unusable', async () => {
+    const n8n = { execute: vi.fn() };
+    const { service } = setup();
+    (service as unknown as { n8n: unknown }).n8n = n8n;
+
+    const result = await service.execute(
+      tool({
+        id: 'invoice-sync-b7e2c1aa',
+        executionMode: 'n8n' as const,
+        unavailableReason: 'INTEGRATION_UNAVAILABLE' as const,
+      }),
+      request(),
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { code: 'INTEGRATION_UNAVAILABLE', retryable: false },
+    });
+    expect(n8n.execute).not.toHaveBeenCalled();
+  });
 });

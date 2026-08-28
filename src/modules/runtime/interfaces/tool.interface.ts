@@ -20,6 +20,13 @@ export interface ToolRetryPolicy {
   retryableCodes: string[];
 }
 
+/** Per-automation binding into the client's n8n instance (PLAN Step 10). */
+export interface ToolN8nBinding {
+  baseUrl: string;
+  webhookPath: string;
+  secret?: string;
+}
+
 export interface ToolError {
   code: string;
   message: string;
@@ -45,6 +52,10 @@ export interface ToolDefinition {
   idempotent: boolean;
   successCriteria: string[];
   permissionScope: string;
+  /** Present for automation-sourced tools bound to a client n8n webhook. */
+  binding?: ToolN8nBinding;
+  /** Set when the automation exists but its n8n connection is unusable. */
+  unavailableReason?: 'INTEGRATION_UNAVAILABLE';
 }
 
 export interface ToolCall {
