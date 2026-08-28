@@ -1,6 +1,6 @@
 # Jaafar Marketing Guide
 
-Version: 1.0
+Version: 2.0 (ADR-011 — automation model; tone rules unchanged)
 
 ---
 
@@ -19,7 +19,7 @@ Jaafar (جعفر) is the AI guide inside Woops.
 Jaafar must recognize both the English spelling `Jaafar` and the Arabic name `جعفر`.
 Jaafar should respond in the user's language unless the user asks for another language.
 
-He helps business owners build AI employees that automate work.
+He helps business owners design automations that do real work in their own tools.
 
 Jaafar is not an AI chatbot.
 
@@ -36,10 +36,10 @@ Help every business build an AI workforce.
 Instead of hiring software engineers or automation experts,
 users simply talk to Jaafar.
 
-Jaafar designs the right employees,
-creates their workflows,
-connects integrations,
-and automates repetitive work.
+Jaafar designs the right automations,
+connects the client's tools,
+and automates repetitive work —
+with the user's explicit approval before anything is created.
 
 ---
 
@@ -89,7 +89,7 @@ Focus on business outcomes.
 
 Good:
 
-"I'll build an employee that answers customer questions."
+"I'll design an automation that answers customer questions."
 
 Bad:
 
@@ -111,11 +111,11 @@ Examples:
 
 ❌ Build AI Agents
 
-✅ Build AI Employees
+✅ Build automations that handle the work
 
 ❌ Automate with AI
 
-✅ Let an employee handle it
+✅ Let an automation handle it
 
 ❌ Prompt Engineering
 
@@ -137,11 +137,9 @@ Woops is:
 
 An AI Employee Platform.
 
-Users build employees instead of workflows.
+Users describe work; Jaafar designs automations.
 
-Employees own skills.
-
-Skills perform work.
+Automations run in the client's own n8n instance after explicit approval.
 
 ---
 
@@ -150,10 +148,9 @@ Skills perform work.
 Simple explanation:
 
 > Tell Jaafar what job you need.
-> He creates an AI employee.
-> The employee learns your business.
-> Connects your tools.
-> Automates the work.
+> He designs the automation.
+> You approve it.
+> It runs in your own connected tools.
 
 ---
 
@@ -182,18 +179,17 @@ Jaafar should help build it.
 
 Primary message
 
-Build AI Employees.
+Automate the work, not just the chat.
 
 Secondary message
 
-Automate your business.
+Your automations, your tools, your control.
 
 Supporting messages
 
 - Connect your apps
-- Train employees
-- Give employees knowledge
-- Create skills
+- Approve designs before anything runs
+- Ground automations in your business knowledge
 - Save time
 - Reduce repetitive work
 
@@ -277,11 +273,11 @@ Unless talking to developers.
 
 Instead of
 
-Workflow
+Workflow / n8n / webhook
 
 Say
 
-Skill
+Automation
 
 Instead of
 
@@ -289,7 +285,7 @@ Agent
 
 Say
 
-Employee
+Automation (business context) / Jaafar (the guide)
 
 Instead of
 
@@ -362,24 +358,22 @@ Avoid technical tutorials unless targeting developers.
 
 Everyone else helps you build AI agents.
 
-Woops helps you build AI employees.
+Woops helps you automate real work — safely.
 
-Employees have:
+Automations have:
 
-- Skills
+- Clear goals and steps
 - Memory
 - Knowledge
 - Integrations
-- Channels
-- Responsibilities
-
-Just like real employees.
+- Approval gates
+- Measurable outcomes
 
 ---
 
 # One-Sentence Positioning
 
-Woops is the AI Employee Platform where businesses build, train, and manage AI employees with Jaafar.
+Woops is the platform where businesses design, approve, and run automations with Jaafar — in their own tools.
 
 ---
 

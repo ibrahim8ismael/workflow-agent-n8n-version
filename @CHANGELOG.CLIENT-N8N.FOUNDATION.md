@@ -2,7 +2,7 @@
 > Branch: `feat/client-managed-n8n-foundation` (from `feat/jaafar-employee-design-and-n8n-runtime`)
 > Date: 2026-08-24
 > Plans implemented: [[@PLAN.N8N.CLIENT.MODE.md]] + [[@PLAN.IMPLEMENTATION.N8N.CLIENT.MODE.md]] Steps 0–4
-> Status: Steps 0–4 complete. Next: Steps 5+8+9 (Employee Design removal + Automation Design) as one atomic unit.
+> Status: Steps 0–4 complete. Steps 5–13 completed on `feat/automation-design-core` (see Phase 2/3 below).
 
 ---
 
@@ -82,4 +82,49 @@ npm run lint:ci     ✅ 455 files clean
 
 - Steps 5+8+9 as one atomic unit: remove Employee Design flow + build Automation Design graph + approval/provisioner wiring (surgery map documented in implementation plan)
 - Step 6: Skills system removal · Steps 7–13: blueprint module, provisioner, runtime cutover, config cleanup, sync-service deletion, docs propagation
+- Migration SQL needs applying to a reachable Postgres
+
+---
+
+# Phase 2 — Automation Design Core (Steps 5–9)
+> Branch: `feat/automation-design-core` · Commit `8eb1b76` · 2026-08-28
+
+Atomic unit — Jaafar never without a working design flow.
+
+## Removed (Part A)
+- Employee Design flow: `runtime/employee-design/*`, design graph, session service, confirm DTO
+- Skills system: `modules/skills/*`, `skill-employee-runtime.service`, tool-registry skill sources
+
+## Added (Part B)
+- `modules/automations/` — blueprint Zod schema (+revision hash, webhook slug), lifecycle `DESIGN→PENDING_APPROVAL→PROVISIONING→ACTIVE|FAILED`, approval-gate enforced in service layer; REST `/api/v1/automations` (approve/reprovision/delete)
+- `runtime/services/automation-design-session.service.ts` + `jaafar-automation-design-graph.service.ts` (LangGraph: context → requirements → blueprint → approval interrupt → provisioning hand-off)
+- `infrastructure/n8n/n8n-provisioner.service.ts` — blueprint → webhook + Code-skeleton nodes + respondToWebhook, create+activate+read-back in the client's n8n
+- `POST runs/:id/confirm` → `confirmAutomationDesign` → graph resume → provisioning
+- Route/mode renamed `employee_design` → `automation_design` across understanding, planner, graphs, tool manifests; Jaafar prompts rewritten (tone rules preserved); `Automation.lastError` column added
+
+---
+
+# Phase 3 — Runtime Cutover + Config (Steps 10–11)
+> Commit `5e8185a` · 2026-08-28
+
+- `N8nWorkflowExecutorService` binding `{baseUrl, webhookPath, secret?}` — per-binding HMAC, same signature scheme; env fallback = deprecated dual-read
+- `AutomationToolResolverService` — ACTIVE automations joined to connections as n8n tools, 30s TTL cache; unusable connection → `INTEGRATION_UNAVAILABLE` (non-retryable) to the planner
+- Config: `N8N_BASE_URL/WEBHOOK_URL/API_URL/API_KEY/WORKFLOW_MAP` deprecated (boot warning); `CREDENTIAL_ENCRYPTION_KEY` required outside dev/test
+- `scripts/migrate-skills-to-automations.ts` (dry-run default, `--write`)
+
+---
+
+# Phase 4 — Test Alignment + Docs (Steps 12–13)
+> 2026-08-28
+
+- `n8n-vertical-slice.spec.ts` rewritten: client-managed end-to-end (connect → design → approve → provision → execute via client webhook w/ HMAC verification); legacy slice retained
+- e2e `test/e2e/automations.e2e-spec.ts` — RBAC matrix + cross-tenant isolation
+- Real bugs fixed by e2e: `import type` DI failures, missing provider in N8nModule, **route shadowing of GET/DELETE `/integrations/n8n`** by legacy IntegrationsController wildcards (connections controller now declared first in `IntegrationsModule`), MockDatabaseService gaps (`upsert`, OR in `findMany`, relation flattening)
+- Docs: `@RULE.BUSINESS_MODEL.md` v2.1 · `@RULE.AGENT.Jaafar.md` v2.0 · ADR-011 in `@RULE.ARCHITECTURE.md` · `@RULE.AGENT.N8N.CALL.md` v2.0 · new `@RULE.AUTOMATIONS.md`
+- Verification: typecheck ✅ · unit 82 files / 555 tests ✅ · e2e 5 files / 35 tests ✅ · biome ✅
+
+# Not done (post-plan)
+- Open Q1: Inbound Channel Gateway provisioning (blocks `n8n-workflow-sync.service` deletion)
+- `Skill`/`AgentSkill` table drop migration (after staging cutover verification)
+- Executor env-fallback removal (post-cutover)
 - Migration SQL needs applying to a reachable Postgres

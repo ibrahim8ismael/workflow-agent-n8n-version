@@ -1,5 +1,5 @@
 # IMPLEMENTATION PLAN — Jaafar Automation Model on Client-Managed n8n
-> Version: 1.1 (Draft)
+> Version: 1.2 (Implemented — Steps 0–13 complete; Open Q1 + staging cutover pending)
 > Strategy doc: [[@PLAN.N8N.CLIENT.MODE.md]]
 > Branch strategy: one PR per step; steps ordered by dependency.
 >
@@ -17,7 +17,9 @@
 > - ⏳ Remaining: Step 10 (runtime tool resolution → automations + executor dual-read), Step 11 (config cleanup + delete `n8n-workflow-sync.service`, blocked on Open Q1), Steps 12–13 (test alignment, docs propagation).
 > - ✅ Step 10 DONE — `N8nWorkflowExecutorService` accepts optional `binding{baseUrl,webhookPath,secret}` (per-binding HMAC, same signature scheme); env-global fallback kept as deprecated dual-read with boot warning. `AutomationToolResolverService` enumerates ACTIVE Automations joined to connections as n8n tools (30s TTL cache); tools carry `binding`; unusable connection → tool flagged `INTEGRATION_UNAVAILABLE` (retryable=false) surfaced to planner, no silent fallback. `ToolRegistryService.listForAgent` merges static + automation tools. `ToolExecutorService.runN8nWorkflow` passes binding / maps INTEGRATION_UNAVAILABLE. +7 tests.
 > - ✅ Step 11 (unblocked parts) — `config/schema.ts`: `N8N_BASE_URL/WEBHOOK_URL/API_URL/API_KEY/WORKFLOW_MAP` marked @deprecated with boot warning (`validation.ts`); `CREDENTIAL_ENCRYPTION_KEY` required outside development/test. Migration script `scripts/migrate-skills-to-automations.ts` (dry-run default, `--write` to apply; skips skills without an ACTIVE owner connection). STILL BLOCKED on Open Q1: delete `n8n-workflow-sync.service.*` (Inbound Channel Gateway provisioning) + drop Skill/AgentSkill tables (post-staging-cutover).
-> - ⏳ Remaining: Step 12 (e2e vertical-slice rewrite: connect → chat → blueprint → approve → provisioned → run executes via webhook mock), Step 13 (docs propagation), Open Q1 decision for sync-service deletion.
+> - ✅ Step 12 DONE — `n8n-vertical-slice.spec.ts` rewritten: client-managed flow (connect n8n → real connections service w/ AES-GCM → Jaafar design graph (mock LLM) → approval interrupt → approve → real provisioner via mock n8n REST → automation ACTIVE → tool resolver → ToolExecutor → client webhook with HMAC + Idempotency-Key verified); legacy env-path slice retained (dual-read). e2e added `test/e2e/automations.e2e-spec.ts` (RBAC matrix + cross-tenant isolation on connections & automations). Found & fixed real bugs: `import type` DI failures (N8nConnectionsService/AutomationsService), missing N8nClientApiService provider in N8nModule, route shadowing of GET/DELETE /integrations/n8n by legacy IntegrationsController wildcards (controller now declared before legacy in IntegrationsModule), MockDatabaseService gaps (upsert, OR in findMany, relation flattening). Unit 82 files/555 tests, e2e 5 files/35 tests, typecheck + biome green.
+> - ✅ Step 13 DONE — mother doc [[@RULE.BUSINESS_MODEL.md]] v2.1 (automations replace Skills, ADR-011 runtime ownership, golden rule 9); [[@RULE.AGENT.Jaafar.md]] v2.0 vocabulary shift employee→automation (tone rules preserved); [[@RULE.ARCHITECTURE.md]] ADR-011 recorded; [[@RULE.AGENT.N8N.CALL.md]] v2.0 header note; new [[@RULE.AUTOMATIONS.md]] (canonical automation rules).
+> - ⏳ Open items: Open Q1 (Inbound Channel Gateway provisioning — blocks `n8n-workflow-sync.service` deletion); Skill/AgentSkill table drop migration (after staging cutover verification); executor env-fallback removal (post-cutover).
 
 ---
 

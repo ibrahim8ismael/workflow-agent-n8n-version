@@ -1,10 +1,11 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { N8nClientApiError } from '../../../infrastructure/n8n/n8n-client-api.service';
 import { N8nProvisionerService } from '../../../infrastructure/n8n/n8n-provisioner.service';
-import type { N8nConnectionsService } from '../../integrations/n8n/services/n8n-connections.service';
+import { N8nConnectionsService } from '../../integrations/n8n/services/n8n-connections.service';
 import { AUTOMATION_STATUS, type AutomationStatus } from '../constants/automation-status.constants';
 import type { CreateAutomationFromBlueprintDto } from '../dto/automation.dto';
-import type { AutomationsRepository, OwnerScope } from '../repositories/automations.repository';
+import type { OwnerScope } from '../repositories/automations.repository';
+import { AutomationsRepository } from '../repositories/automations.repository';
 import {
   automationBlueprintSchema,
   blueprintRevision,

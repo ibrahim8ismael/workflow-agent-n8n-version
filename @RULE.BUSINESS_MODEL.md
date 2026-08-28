@@ -10,7 +10,7 @@ aliases:
 ---
 
 # Woops — Complete Business Model
-> Master Product & Business Documentation (Version 2.0)
+> Master Product & Business Documentation (Version 2.1)
 >
 > This is the **mother document**. Every other `@RULE.*.md` file derives from here.
 >
@@ -22,6 +22,7 @@ aliases:
 > - [[@RULE.DB.md]] — Database standards & persistence rules
 > - [[@RULE.API.md]] — REST API design & endpoint rules
 > - [[@RULE.CODEBASE.md]] — Coding standards & implementation guidelines
+> - [[@RULE.AUTOMATIONS.md]] — Automation lifecycle & client-managed n8n (ADR-011)
 
 ---
 
@@ -121,9 +122,12 @@ Responsible only for executing workflows, skills, and background jobs.
 
 ### Design Constraint
 
-The Runtime must remain **replaceable**. Today it is n8n. Tomorrow it could be Temporal, LangGraph, or a custom engine.
+The Runtime must remain **replaceable**. Per **ADR-011**, customer automations
+execute in **client-provided n8n instances** — the platform does not require a
+platform-owned n8n. Tomorrow the execution layer could be Temporal, LangGraph,
+or a custom engine.
 
-See [[@RULE.ARCHITECTURE.md#Runtime Boundary]].
+See [[@RULE.ARCHITECTURE.md#Runtime Boundary]] and [[@RULE.AUTOMATIONS.md]].
 
 ---
 
@@ -226,20 +230,24 @@ An AI Agent contains:
 - Permissions & Variables
 - Runtime Configuration
 
-## 5.2 Skills
+## 5.2 Automations
 
-Skills define what an AI Agent can do. Examples:
-- Book appointments, Send emails, Create invoices
-- Update CRM, Generate reports, Answer questions
-- Search documents, Analyze images, Execute workflows
+Automations define the work an AI system performs for a business. Examples:
+- Sync paid invoices to a ledger, send daily reports, route leads to the CRM
+- Answer customer questions, escalate sensitive requests, update records
 
-Skills are internally executed by the Workflow Runtime.
+Per **ADR-011**, each client connects **their own n8n instance** (API key).
+Jaafar designs an automation blueprint conversationally; the user approves it;
+Woops provisions the workflow into the client's n8n. See
+[[@RULE.AUTOMATIONS.md]]. The legacy Skills system (`Skill`/`AgentSkill`) is
+removed; its tables are deprecated during the migration window.
 
 ## 5.3 Tools
 
-A Skill may use one or more tools:
-- HTTP APIs, Database, Google Calendar, Gmail
-- Slack, Stripe, Shopify, WhatsApp, Custom APIs
+The runtime executes automations as tools:
+- Provisioned client n8n workflows (webhook + envelope + HMAC)
+- Native capabilities (knowledge retrieval, memory, integration readiness)
+- Human-in-the-loop approval steps
 
 ## 5.4 Knowledge
 
@@ -638,7 +646,8 @@ The model must support without redesign:
 5. **The database is the source of truth.** Redis is optimization only.
 6. **Repositories are the only database access layer.** No service or controller touches Prisma directly.
 7. **Every external dependency is abstracted behind an adapter.** Never call external SDKs directly.
-8. **The platform must remain runtime-agnostic.** Switching from n8n to Temporal or a custom engine must not require architectural changes.
+8. **The platform must remain runtime-agnostic.** Customer automations live in client-provided n8n instances (ADR-011); switching the execution layer must not require architectural changes.
+9. **Nothing is provisioned without explicit human approval.** Jaafar designs; the user approves; the platform provisions (see [[@RULE.AUTOMATIONS.md]]).
 
 ---
 
@@ -649,6 +658,7 @@ The model must support without redesign:
          │
          ├── @RULE.USERS.md           → Identity, ownership, roles & permissions
          ├── @RULE.ARCHITECTURE.md    → System architecture & engineering rules
+         ├── @RULE.AUTOMATIONS.md     → Automation lifecycle & client-managed n8n (ADR-011)
          ├── @RULE.REPO_PATTERN.md    → Repository structure & folder rules
          ├── @RULE.SCOPE.md           → Current development scope
          ├── @RULE.DB.md              → Database standards & persistence rules
