@@ -1,0 +1,110 @@
+{
+  "id": "wf_order_inquiry_101",
+  "name": "Woops - customer_order_inquiry",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "customer_order_inquiry",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "id": "webhook-trigger",
+      "name": "Webhook: /webhook/customer_order_inquiry"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = ($input.item && $input.item.json) ? ($input.item.json.body || $input.item.json) : {};\nconst input = body.input || body || {};\nconst email = (input.email || input.query || 'sarah@example.com').toLowerCase().trim();\nconst orderId = input.orderId || null;\n\nconst crmRecords = [\n  {\n    customerId: 'cust_98231',\n    name: 'Sarah Connor',\n    email: 'sarah@example.com',\n    tier: 'BUSINESS',\n    vipStatus: true,\n    lifetimeValue: 2450,\n    accountAgeDays: 420\n  },\n  {\n    customerId: 'cust_44120',\n    name: 'Alex Vance',\n    email: 'alex@example.com',\n    tier: 'PRO',\n    vipStatus: false,\n    lifetimeValue: 620,\n    accountAgeDays: 180\n  }\n];\n\nconst customer = crmRecords.find(c => c.email === email || c.name.toLowerCase().includes(email)) || crmRecords[0];\n\nreturn { customer, inputOrderId: orderId };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [250, 0],
+      "id": "crm-lookup-node",
+      "name": "1. CRM Customer Intelligence"
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = ($input.item && $input.item.json) ? $input.item.json : {};\nconst customer = prev.customer || { customerId: 'cust_98231', name: 'Sarah Connor', tier: 'BUSINESS', vipStatus: true };\nconst inputOrderId = prev.inputOrderId;\n\nconst ordersDatabase = {\n  'cust_98231': [\n    {\n      orderId: 'ORD-9821',\n      date: '2026-08-14T10:30:00Z',\n      status: 'OUT_FOR_DELIVERY',\n      carrier: 'DHL Express',\n      trackingNumber: 'DHL-98421098',\n      estimatedDelivery: 'Today by 5:00 PM',\n      items: [\n        { item: 'Ergonomic AI Workspace Hub', qty: 1, price: 499 },\n        { item: 'Ultra-Fast USB-C Cable Pack', qty: 2, price: 45 }\n      ],\n      total: 544\n    }\n  ],\n  'cust_44120': [\n    {\n      orderId: 'ORD-6542',\n      date: '2026-08-10T14:00:00Z',\n      status: 'DELIVERED',\n      carrier: 'FedEx',\n      trackingNumber: 'FDX-5512998',\n      estimatedDelivery: 'Delivered on Aug 12',\n      items: [\n        { item: 'Smart Studio Microphone', qty: 1, price: 189 }\n      ],\n      total: 189\n    }\n  ]\n};\n\nconst customerOrders = ordersDatabase[customer.customerId] || [];\nconst selectedOrder = inputOrderId \n  ? customerOrders.find(o => o.orderId === inputOrderId) || customerOrders[0]\n  : customerOrders[0];\n\nreturn { customer, activeOrder: selectedOrder };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 0],
+      "id": "orders-lookup-node",
+      "name": "2. Order Fulfillment & Tracking"
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = ($input.item && $input.item.json) ? $input.item.json : {};\nconst customer = prev.customer || { tier: 'BUSINESS', vipStatus: true };\nconst activeOrder = prev.activeOrder;\n\nconst returnWindowDays = customer.tier === 'BUSINESS' ? 60 : 30;\nconst orderDate = activeOrder ? new Date(activeOrder.date) : new Date();\nconst diffDays = Math.floor((Date.now() - orderDate.getTime()) / (1000 * 60 * 60 * 24));\nconst isEligibleForReturn = diffDays <= returnWindowDays;\n\nconst returnPolicyDetails = {\n  tier: customer.tier,\n  maxReturnWindowDays: returnWindowDays,\n  daysSincePurchase: diffDays,\n  eligibleForReturn: isEligibleForReturn,\n  freeReturnShipping: customer.vipStatus || customer.tier === 'BUSINESS',\n  requiresManagerApproval: !isEligibleForReturn && customer.vipStatus\n};\n\nreturn {\n  success: true,\n  data: {\n    customer: {\n      customerId: customer.customerId,\n      name: customer.name,\n      email: customer.email,\n      tier: customer.tier,\n      vipStatus: customer.vipStatus\n    },\n    activeOrder: activeOrder || null,\n    returnPolicy: returnPolicyDetails,\n    workflowExecutionTime: new Date().toISOString()\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [750, 0],
+      "id": "policy-calculator-node",
+      "name": "3. Return Policy Engine"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}"
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1000, 0],
+      "id": "respond-to-agent-engine",
+      "name": "4. Respond to Agent Engine"
+    }
+  ],
+  "connections": {
+    "Webhook: /webhook/customer_order_inquiry": {
+      "main": [
+        [
+          {
+            "node": "1. CRM Customer Intelligence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. CRM Customer Intelligence": {
+      "main": [
+        [
+          {
+            "node": "2. Order Fulfillment & Tracking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Order Fulfillment & Tracking": {
+      "main": [
+        [
+          {
+            "node": "3. Return Policy Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Return Policy Engine": {
+      "main": [
+        [
+          {
+            "node": "4. Respond to Agent Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

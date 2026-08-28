@@ -176,7 +176,28 @@ export class EmployeeDesignRuntimeService {
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       };
     }
-    const metadata = (run.metadata as Record<string, unknown> | null) ?? {};
+    let metadata = (run.metadata as Record<string, unknown> | null) ?? {};
+    if (typeof metadata.blueprint === 'undefined' && run.conversationId) {
+      try {
+        const conv = await this.conversationsService.findById(run.conversationId);
+        const convMeta = (conv.metadata as Record<string, unknown> | null) ?? {};
+        const design = convMeta.employeeDesign as Record<string, unknown> | undefined;
+        if (design?.blueprint) {
+          metadata = {
+            ...metadata,
+            blueprint: design.blueprint,
+            designStatus: design.status ?? metadata.designStatus ?? 'READY_FOR_REVIEW',
+            approvalStatus: design.approvalStatus ?? metadata.approvalStatus ?? 'READY',
+            blueprintRevision: design.blueprintRevision ?? metadata.blueprintRevision,
+            runtimeMode: 'employee_design',
+          };
+          await this.runsService.updateMetadata(runId, metadata);
+        }
+      } catch {
+        // ignore conversation lookup error
+      }
+    }
+
     if (typeof metadata.createdAgentId === 'string') {
       const existingAgent = await this.agentsService.findById(metadata.createdAgentId);
       return {
@@ -193,7 +214,7 @@ export class EmployeeDesignRuntimeService {
       };
     }
 
-    if (metadata.runtimeMode !== 'employee_design' && typeof metadata.blueprint === 'undefined') {
+    if (typeof metadata.blueprint === 'undefined') {
       return {
         runId,
         mode: 'employee_design',
@@ -202,7 +223,7 @@ export class EmployeeDesignRuntimeService {
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       };
     }
-    if (metadata.designStatus !== 'READY_FOR_REVIEW' || metadata.approvalStatus === 'REJECTED') {
+    if (metadata.approvalStatus === 'REJECTED') {
       return {
         runId,
         mode: 'employee_design',
@@ -352,7 +373,7 @@ export class EmployeeDesignRuntimeService {
     return (
       `Draft employee blueprint: ${blueprint.name}\n\n${blueprint.summary}\n\n` +
       `Responsibilities:\n${blueprint.responsibilities.map((item) => `- ${item}`).join('\n')}\n\n` +
-      'This plan is ready for your review. The employee has not been created. Confirm this plan when you want me to create the employee draft.'
+      'The blueprint is ready! Click "Start Process" above the chat to create and activate your new employee.'
     );
   }
 }

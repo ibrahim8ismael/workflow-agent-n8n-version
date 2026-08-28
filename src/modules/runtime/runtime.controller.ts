@@ -113,10 +113,10 @@ export class RuntimeController {
     @Body() dto: ConfirmEmployeeDesignDto,
     @CurrentUser() user: RuntimeUser,
   ) {
-    await this.assertRunAccess(id, user);
+    const run = await this.assertRunAccess(id, user);
     const confirmation = confirmEmployeeDesignSchema.parse(dto);
     return this.jaafarRuntime.confirmEmployeeDesign(
-      id,
+      run.id,
       {
         userId: user.id,
         organizationId: user.activeContext === 'organization' ? user.organizationId : undefined,
@@ -127,8 +127,8 @@ export class RuntimeController {
 
   @Get(':id')
   async findById(@Param('id') id: string, @CurrentUser() user: RuntimeUser) {
-    await this.assertRunAccess(id, user);
-    return this.runsService.findById(id);
+    const run = await this.assertRunAccess(id, user);
+    return run;
   }
 
   private async ensureConversation(request: ExecuteRunDto): Promise<ExecuteRunDto> {
@@ -140,6 +140,7 @@ export class RuntimeController {
       userId: request.userId,
       organizationId: request.organizationId,
     });
+
     return { ...request, conversationId: conversation.id };
   }
 
@@ -160,9 +161,9 @@ export class RuntimeController {
     };
   }
 
-  private async assertRunAccess(id: string, user: RuntimeUser): Promise<void> {
-    const run = await this.runsService.findById(id);
-    const personalAccess = run.userId === user.id;
+  private async assertRunAccess(id: string, user: RuntimeUser) {
+    const run = await this.runsService.findByIdOrConversation(id);
+    const personalAccess = !run.userId || run.userId === user.id;
     const organizationAccess =
       user.activeContext === 'organization' &&
       Boolean(user.organizationId) &&
@@ -170,6 +171,7 @@ export class RuntimeController {
     if (!personalAccess && !organizationAccess) {
       throw new NotFoundException(`Run with id "${id}" not found`);
     }
+    return run;
   }
 }
 

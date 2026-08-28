@@ -24,6 +24,22 @@ export class RunsService {
     return run;
   }
 
+  async findByIdOrConversation(id: string): Promise<Run> {
+    const run = await this.runsRepository.findById(id);
+    if (run) return run;
+
+    const conversationRuns = await this.runsRepository.findMany({
+      where: { conversationId: id },
+      orderBy: { createdAt: 'desc' },
+      take: 1,
+    });
+    if (conversationRuns.length > 0) {
+      return conversationRuns[0];
+    }
+
+    throw new NotFoundException(`Run with id "${id}" not found`);
+  }
+
   async findByAgent(
     agentId: string,
     options?: { limit?: number; status?: string },
@@ -115,15 +131,17 @@ export class RunsService {
   async claimEmployeeCreation(id: string): Promise<boolean> {
     const run = await this.findById(id);
     const currentMetadata = (run.metadata as Record<string, unknown> | null) ?? {};
-    if (
-      currentMetadata.runtimeMode !== 'employee_design' ||
-      currentMetadata.designStatus !== 'READY_FOR_REVIEW'
-    ) {
+    const isEmployeeDesign =
+      currentMetadata.runtimeMode === 'employee_design' ||
+      Boolean(currentMetadata.employeeDesign) ||
+      Boolean(currentMetadata.blueprint);
+    if (!isEmployeeDesign || currentMetadata.designStatus !== 'READY_FOR_REVIEW') {
       return false;
     }
 
     return this.runsRepository.claimEmployeeCreation(id, run.version, {
       ...currentMetadata,
+      runtimeMode: 'employee_design',
       approvalStatus: 'CREATING',
     });
   }

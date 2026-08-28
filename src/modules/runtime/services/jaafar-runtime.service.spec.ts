@@ -98,10 +98,15 @@ function createService() {
       modelCalls: [],
     }),
   };
+  const employeeDesignRuntime = {
+    confirm: vi
+      .fn()
+      .mockResolvedValue({ runId: 'task-run', status: 'COMPLETED', response: 'Created.' }),
+  };
   const service = new JaafarRuntimeService(
     runtime as never,
     runs as never,
-    { confirm: vi.fn() } as never,
+    employeeDesignRuntime as never,
     employeeDesignGraph as never,
     executionGraph as never,
     conversationGraph as never,
@@ -111,7 +116,7 @@ function createService() {
     service,
     runtime,
     runs,
-    employeeDesignRuntime: { confirm: vi.fn() },
+    employeeDesignRuntime,
     employeeDesignGraph,
     understandingGraph,
     executionGraph,
@@ -135,9 +140,7 @@ describe('JaafarRuntimeService', () => {
     });
 
     expect(result.runId).toBe('task-run');
-    expect(employeeDesignGraph.run).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: 'employee_design' }),
-    );
+    expect(employeeDesignGraph.build().invoke).toHaveBeenCalled();
   });
 
   it('uses the conversation graph when classification is unavailable', async () => {
@@ -336,5 +339,56 @@ describe('JaafarRuntimeService', () => {
 
     expect(runs.fail).toHaveBeenCalledWith('task-run', 'graph provider failed');
     expect(events.at(-1)?.type).toBe('run.failed');
+  });
+
+  it('confirms graph employee design by resuming the graph when status is WAITING', async () => {
+    const { service, runs, employeeDesignGraph } = createService();
+    runs.findById.mockResolvedValue({
+      status: 'WAITING',
+      metadata: { runtimeMode: 'employee_design', blueprintRevision: 'rev-1' },
+    });
+
+    const result = await service.confirmEmployeeDesign(
+      'task-run',
+      { userId: 'user-1' },
+      { blueprintRevision: 'rev-1' },
+    );
+
+    expect(result.status).toBe('COMPLETED');
+    expect(employeeDesignGraph.resume).toHaveBeenCalledWith(
+      'task-run',
+      { approved: true, blueprintRevision: 'rev-1' },
+      { userId: 'user-1' },
+    );
+  });
+
+  it('confirms employee design when metadata has employeeDesign even if runtimeMode was conversation', async () => {
+    const { service, runs, employeeDesignGraph } = createService();
+    runs.findById.mockResolvedValue({
+      status: 'WAITING',
+      metadata: { runtimeMode: 'conversation', employeeDesign: { status: 'READY_FOR_REVIEW' } },
+    });
+
+    const result = await service.confirmEmployeeDesign('task-run', { userId: 'user-1' });
+
+    expect(result.status).toBe('COMPLETED');
+    expect(employeeDesignGraph.resume).toHaveBeenCalled();
+  });
+
+  it('falls back to employeeDesignRuntime when run is not waiting on graph', async () => {
+    const { service, runs, employeeDesignRuntime } = createService();
+    runs.findById.mockResolvedValue({
+      status: 'COMPLETED',
+      metadata: { blueprint: { name: 'Accountant' } },
+    });
+
+    const result = await service.confirmEmployeeDesign('task-run', { userId: 'user-1' });
+
+    expect(result.status).toBe('COMPLETED');
+    expect(employeeDesignRuntime.confirm).toHaveBeenCalledWith(
+      'task-run',
+      { userId: 'user-1' },
+      undefined,
+    );
   });
 });
