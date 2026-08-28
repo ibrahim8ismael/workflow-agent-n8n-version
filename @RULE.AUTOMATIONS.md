@@ -170,13 +170,28 @@ connection:
 
 ---
 
-# 8. Open Questions (from @PLAN.N8N.CLIENT.MODE.md)
+# 8. Inbound Channel Gateway (Open Q1 — resolved)
 
-1. Inbound Channel Gateway provisioning (blocks legacy sync-service removal).
-2. May users manually edit Jaafar-generated workflows in their n8n editor?
+The legacy boot-time auto-provisioning of the Inbound Channel Gateway
+(`N8nWorkflowSyncService`) has been **removed**. The platform no longer
+provisions anything into a platform-owned n8n. Instead, the gateway ships as
+an **installable workflow template**:
+
+- `docs/workflows/inbound_channel_workflow.json` — import into the client's
+  n8n instance; it normalizes channel payloads and forwards them to
+  `POST /api/v1/channels/inbound` with `X-Woops-Internal-Key`.
+
+Additional templates: `docs/workflows/search_customer_workflow.json`,
+`docs/workflows/customer_order_inquiry_workflow.json`.
+
+---
+
+# 9. Open Questions (remaining)
+
+1. May users manually edit Jaafar-generated workflows in their n8n editor?
    (affects drift policy strictness)
-3. Free-tier clients without n8n → AI_ONLY conversations only?
-4. Pre-connection check for third-party apps inside the client's n8n before
+2. Free-tier clients without n8n → AI_ONLY conversations only?
+3. Pre-connection check for third-party apps inside the client's n8n before
    blueprint approval?
 
 ---

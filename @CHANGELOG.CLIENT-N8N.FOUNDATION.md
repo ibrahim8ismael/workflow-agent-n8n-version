@@ -123,8 +123,18 @@ Atomic unit — Jaafar never without a working design flow.
 - Docs: `@RULE.BUSINESS_MODEL.md` v2.1 · `@RULE.AGENT.Jaafar.md` v2.0 · ADR-011 in `@RULE.ARCHITECTURE.md` · `@RULE.AGENT.N8N.CALL.md` v2.0 · new `@RULE.AUTOMATIONS.md`
 - Verification: typecheck ✅ · unit 82 files / 555 tests ✅ · e2e 5 files / 35 tests ✅ · biome ✅
 
-# Not done (post-plan)
-- Open Q1: Inbound Channel Gateway provisioning (blocks `n8n-workflow-sync.service` deletion)
-- `Skill`/`AgentSkill` table drop migration (after staging cutover verification)
-- Executor env-fallback removal (post-cutover)
-- Migration SQL needs applying to a reachable Postgres
+# Phase 5 — Open Q1 resolution + legacy sync removal
+> 2026-08-28
+
+- Open Q1 resolved: Inbound Channel Gateway ships as an installable template
+  (`docs/workflows/inbound_channel_workflow.json`) — no platform-owned n8n anywhere
+- Deleted `n8n-workflow-sync.service.*` (+ spec, module wiring): boot-time
+  auto-sync, hardcoded default skills, platform-env auto-provisioning all gone
+- Prepared `prisma/migrations/20260829000000_drop_skills_tables/migration.sql`
+  (hand-written; apply ONLY after staging cutover verification, together with
+  removing the deprecated `Skill`/`AgentSkill` models from `prisma/schema.prisma`)
+
+# Not done (post-cutover)
+- Apply migrations to a reachable Postgres (client n8n tables + drop migration)
+- Executor env-fallback removal (dual-read until staging cutover verified)
+- Skill/AgentSkill model removal from schema.prisma (same release as drop migration)

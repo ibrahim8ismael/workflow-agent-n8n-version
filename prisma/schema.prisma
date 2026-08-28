@@ -295,6 +295,9 @@ model Agent {
   @@map("agents")
 }
 
+/// @deprecated (ADR-011) — Skills system removed; tables kept only for the
+/// migration window. Apply prisma/migrations/20260829000000_drop_skills_tables
+/// (after staging cutover verification) and delete these models together.
 enum SkillExecutionMode {
   AI_ONLY
   N8N_WORKFLOW
@@ -304,6 +307,7 @@ enum SkillExecutionMode {
   HUMAN_APPROVAL
 }
 
+/// @deprecated (ADR-011) — see SkillExecutionMode note above.
 model Skill {
   id              String               @id @default(uuid())
   name            String
