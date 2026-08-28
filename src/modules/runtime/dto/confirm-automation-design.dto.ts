@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const confirmEmployeeDesignSchema = z
+export const confirmAutomationDesignSchema = z
   .object({
     confirm: z.boolean().optional(),
     confirmed: z.boolean().optional(),
@@ -10,4 +10,4 @@ export const confirmEmployeeDesignSchema = z
     message: 'Confirmation must be true',
   });
 
-export type ConfirmEmployeeDesignDto = z.infer<typeof confirmEmployeeDesignSchema>;
+export type ConfirmAutomationDesignDto = z.infer<typeof confirmAutomationDesignSchema>;

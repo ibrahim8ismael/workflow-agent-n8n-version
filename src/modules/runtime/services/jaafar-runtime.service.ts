@@ -3,7 +3,6 @@ import { LangGraphCheckpointError } from '../../../infrastructure/langgraph/lang
 import { QuotaEnforcerService } from '../../billing/services/quota-enforcer.service';
 import { SubscriptionService } from '../../billing/services/subscription.service';
 import { RunsService } from '../../runs/runs.service';
-import { EmployeeDesignRuntimeService } from '../employee-design/employee-design-runtime.service';
 import type { JaafarRuntimeServiceContract } from '../interfaces/jaafar-runtime.interface';
 import { RuntimeMode, type RuntimeRequest } from '../types/runtime.types';
 import type {
@@ -16,10 +15,13 @@ import type {
   StartRunRequest,
 } from '../types/runtime-contract.types';
 import {
+  type JaafarAutomationDesignGraphInput,
+  JaafarAutomationDesignGraphService,
+} from './jaafar-automation-design-graph.service';
+import {
   type ConversationGraphStreamEvent,
   JaafarConversationGraphService,
 } from './jaafar-conversation-graph.service';
-import { JaafarEmployeeDesignGraphService } from './jaafar-employee-design-graph.service';
 import {
   type ExecutionGraphStreamEvent,
   JaafarExecutionGraphService,
@@ -39,10 +41,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
   constructor(
     @Optional() @Inject(RuntimeService) private readonly runtime: RuntimeService | undefined,
     private readonly runs: RunsService,
-    @Optional()
-    @Inject(EmployeeDesignRuntimeService)
-    private readonly employeeDesignRuntime: EmployeeDesignRuntimeService | undefined,
-    private readonly employeeDesignGraph: JaafarEmployeeDesignGraphService,
+    private readonly automationDesignGraph: JaafarAutomationDesignGraphService,
     private readonly executionGraph: JaafarExecutionGraphService,
     private readonly conversationGraph: JaafarConversationGraphService,
     private readonly jaafarGraph: JaafarGraphService,
@@ -127,12 +126,12 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
         };
       }
 
-      if (route === 'employee_design') {
+      if (route === 'automation_design') {
         await this.runs.updateMetadata(run.id, {
-          runtimeMode: RuntimeMode.EMPLOYEE_DESIGN,
+          runtimeMode: RuntimeMode.AUTOMATION_DESIGN,
         });
         await this.runs.transitionStatus(run.id, 'EXECUTING');
-        const employeeInput = {
+        const automationInput = {
           runId: run.id,
           agentId: runtimeRequest.agentId,
           userMessage: runtimeRequest.userMessage,
@@ -141,13 +140,13 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           organizationId: runtimeRequest.organizationId,
           effort: runtimeRequest.effort,
         };
-        const result = (await this.employeeDesignGraph
+        const result = (await this.automationDesignGraph
           .build()
           .invoke(
-            { input: employeeInput },
-            this.employeeDesignGraph.graphConfig(run.id, runtimeRequest),
+            { input: automationInput },
+            this.automationDesignGraph.graphConfig(run.id, runtimeRequest),
           )) as Record<string, unknown>;
-        const mapped = this.mapEmployeeDesignResult(result);
+        const mapped = this.mapDesignGraphResult(result);
         if (mapped.route === 'waiting') {
           await this.runs.transitionStatus(run.id, 'WAITING');
           await this.recordEvent({
@@ -158,7 +157,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           });
           return this.normalize({
             runId: run.id,
-            mode: RuntimeMode.EMPLOYEE_DESIGN,
+            mode: RuntimeMode.AUTOMATION_DESIGN,
             status: 'WAITING',
             response: result.response as string | undefined,
             plan: result.blueprint as unknown as Record<string, unknown>,
@@ -187,7 +186,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
         await this.recordBilling(run.id);
         return this.normalize({
           runId: run.id,
-          mode: RuntimeMode.EMPLOYEE_DESIGN,
+          mode: RuntimeMode.AUTOMATION_DESIGN,
           status: 'COMPLETED',
           response: result.response as string | undefined,
           plan: result.blueprint as unknown as Record<string, unknown>,
@@ -364,11 +363,11 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
         return;
       }
 
-      if (route === 'employee_design') {
+      if (route === 'automation_design') {
         await this.runs.updateMetadata(run.id, {
-          runtimeMode: RuntimeMode.EMPLOYEE_DESIGN,
+          runtimeMode: RuntimeMode.AUTOMATION_DESIGN,
         });
-        const employeeInput = {
+        const automationInput = {
           runId: run.id,
           agentId: runtimeRequest.agentId,
           userMessage: runtimeRequest.userMessage,
@@ -377,15 +376,15 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           organizationId: runtimeRequest.organizationId,
           effort: runtimeRequest.effort,
         };
-        const stream = await this.employeeDesignGraph.build().stream(
-          { input: employeeInput },
+        const stream = await this.automationDesignGraph.build().stream(
+          { input: automationInput },
           {
-            ...this.employeeDesignGraph.graphConfig(run.id, runtimeRequest),
+            ...this.automationDesignGraph.graphConfig(run.id, runtimeRequest),
             streamMode: 'updates',
           },
         );
         for await (const update of stream) {
-          const events = this.mapEmployeeDesignEvents(run.id, update as Record<string, unknown>);
+          const events = this.mapAutomationDesignEvents(run.id, update as Record<string, unknown>);
           for (const event of events) {
             terminal =
               event.type === 'run.completed' ||
@@ -567,7 +566,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       };
     }
 
-    const isGraphRun = this.isGraphEmployeeDesign(run) || this.isGraphExecution(run);
+    const isGraphRun = this.isGraphDesign(run) || this.isGraphExecution(run);
     if (!isGraphRun && this.runtime) {
       const legacyResult = decision.approved
         ? await this.runtime.approve(runId)
@@ -604,7 +603,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     };
   }
 
-  async confirmEmployeeDesign(
+  async confirmAutomationDesign(
     runId: string,
     scope?: RuntimeScope,
     confirmation?: { blueprintRevision?: string },
@@ -612,9 +611,9 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     const run = await this.runs.findById(runId);
     if (!this.matchesScope(run, scope)) return this.failure(runId, 'Run scope does not match.');
 
-    const isEmployeeDesign = this.isEmployeeDesignRun(run);
+    const isAutomationDesign = this.isAutomationDesignRun(run);
 
-    if (isEmployeeDesign && run.status === 'WAITING') {
+    if (isAutomationDesign && run.status === 'WAITING') {
       try {
         const resumeResult = await this.resumeGraphBranch(
           runId,
@@ -624,7 +623,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
         );
         const normalized = this.normalize({
           runId,
-          mode: RuntimeMode.EMPLOYEE_DESIGN,
+          mode: RuntimeMode.AUTOMATION_DESIGN,
           status:
             resumeResult.route === 'failed'
               ? 'FAILED'
@@ -663,25 +662,32 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
         await this.recordBilling(runId);
         return normalized;
       } catch (error) {
-        if (!this.employeeDesignRuntime) {
-          throw error;
-        }
+        // Provisioning failure keeps the design recoverable in chat.
+        const message = error instanceof Error ? error.message : 'Automation provisioning failed';
+        await this.recordEvent({
+          type: 'run.failed',
+          runId,
+          occurredAt: new Date().toISOString(),
+          payload: {
+            error: {
+              code: 'UNKNOWN_RUNTIME_FAILURE' as RuntimeErrorCode,
+              message,
+              retryable: false,
+            },
+          },
+        });
+        await this.recordBilling(runId);
+        return this.normalize({
+          runId,
+          mode: RuntimeMode.AUTOMATION_DESIGN,
+          status: 'FAILED',
+          response: message,
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        });
       }
     }
 
-    if (this.employeeDesignRuntime) {
-      const legacyResult = await this.employeeDesignRuntime.confirm(runId, scope, confirmation);
-      return this.normalize({
-        runId: legacyResult.runId,
-        mode: RuntimeMode.EMPLOYEE_DESIGN,
-        status: legacyResult.status ?? 'COMPLETED',
-        response: legacyResult.response,
-        usage: legacyResult.usage,
-        plan: legacyResult.plan as Record<string, unknown> | undefined,
-      });
-    }
-
-    return this.failure(runId, 'This legacy run cannot be confirmed.');
+    return this.failure(runId, 'This run cannot be confirmed.');
   }
 
   private async executeGraphBranch(
@@ -696,18 +702,17 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     usage?: RuntimeUsage;
     error?: { code: string; message: string; retryable: boolean };
   }> {
-    if (route === 'employee_design') {
-      const result = await this.employeeDesignGraph.build().invoke(
+    if (route === 'automation_design') {
+      const result = await this.automationDesignGraph.build().invoke(
         {
-          input:
-            executionInput as import('./jaafar-employee-design-graph.service').JaafarEmployeeDesignGraphInput,
+          input: executionInput as JaafarAutomationDesignGraphInput,
         },
-        this.employeeDesignGraph.graphConfig(
+        this.automationDesignGraph.graphConfig(
           runId,
           executionInput as { userId?: string; organizationId?: string },
         ),
       );
-      return this.mapEmployeeDesignResult(result);
+      return this.mapDesignGraphResult(result);
     }
 
     const result = await this.executionGraph.build({ durable: true }).invoke(
@@ -730,10 +735,10 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     blueprintRevision?: string,
   ): Promise<Record<string, unknown>> {
     const run = await this.runs.findById(runId);
-    const isEmployeeDesign = this.isEmployeeDesignRun(run);
+    const isAutomationDesign = this.isAutomationDesignRun(run);
 
-    if (isEmployeeDesign) {
-      const result = await this.employeeDesignGraph.resume(
+    if (isAutomationDesign) {
+      const result = await this.automationDesignGraph.resume(
         runId,
         { approved, blueprintRevision: blueprintRevision ?? '' },
         scope,
@@ -764,7 +769,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     };
   }
 
-  private mapEmployeeDesignResult(result: Record<string, unknown>): {
+  private mapDesignGraphResult(result: Record<string, unknown>): {
     route: string;
     response?: string;
     modelCalls?: unknown[];
@@ -919,7 +924,10 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     }
   }
 
-  private mapEmployeeDesignEvents(runId: string, update: Record<string, unknown>): RuntimeEvent[] {
+  private mapAutomationDesignEvents(
+    runId: string,
+    update: Record<string, unknown>,
+  ): RuntimeEvent[] {
     const events: RuntimeEvent[] = [];
     const occurredAt = new Date().toISOString();
 
@@ -927,17 +935,17 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       const state = (value ?? {}) as Record<string, unknown> & { __interrupt__?: unknown };
 
       if (
-        (node === 'await_approval' || node === 'create_employee') &&
+        (node === 'await_approval' || node === 'provision_automation') &&
         (state.__interrupt__ || this.isInterrupted(state))
       ) {
         events.push({
           type: 'approval.required',
           runId,
           occurredAt,
-          payload: { reason: 'Employee design requires approval before creation.' },
+          payload: { reason: 'Automation design requires approval before provisioning.' },
         });
         events.push({ type: 'run.waiting', runId, occurredAt, payload: { reason: 'approval' } });
-      } else if (node === 'create_employee' && state.response) {
+      } else if (node === 'provision_automation' && state.response) {
         events.push({
           type: 'run.completed',
           runId,
@@ -1077,18 +1085,18 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     );
   }
 
-  private isEmployeeDesignRun(run: { metadata: unknown }): boolean {
+  private isAutomationDesignRun(run: { metadata: unknown }): boolean {
     const metadata = (run.metadata as Record<string, unknown> | null) ?? {};
     return (
-      metadata.runtimeMode === RuntimeMode.EMPLOYEE_DESIGN ||
-      Boolean(metadata.employeeDesign) ||
+      metadata.runtimeMode === RuntimeMode.AUTOMATION_DESIGN ||
+      Boolean(metadata.automationDesign) ||
       Boolean(metadata.blueprint) ||
       Boolean(metadata.designStatus)
     );
   }
 
-  private isGraphEmployeeDesign(run: { metadata: unknown; status: string }): boolean {
-    return this.isEmployeeDesignRun(run) && run.status === 'WAITING';
+  private isGraphDesign(run: { metadata: unknown; status: string }): boolean {
+    return this.isAutomationDesignRun(run) && run.status === 'WAITING';
   }
 
   private isGraphExecution(run: { metadata: unknown; status: string }): boolean {

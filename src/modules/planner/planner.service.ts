@@ -10,7 +10,7 @@ import { Plan, PlannerInput } from './interfaces/plan.interface';
 const planSchema = z.object({
   intent: z.enum([
     'brainstorming',
-    'employee_design',
+    'automation_design',
     'task_execution',
     'clarification',
     'general_question',

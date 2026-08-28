@@ -123,7 +123,7 @@ export class JaafarUnderstandingGraphService {
         {
           clarification: END,
           conversation: END,
-          employee_design: END,
+          automation_design: END,
           task_execution: 'plan_task',
           general_question: END,
         },

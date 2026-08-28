@@ -16,6 +16,7 @@ import { LoggerModule } from './logger/logger.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { AgentsModule } from './modules/agents/agents.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { AutomationsModule } from './modules/automations/automations.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { ChannelsModule } from './modules/channels/channels.module';
 import { ConversationsModule } from './modules/conversations/conversations.module';
@@ -29,7 +30,6 @@ import { OrganizationsModule } from './modules/organizations/organizations.modul
 import { PlannerModule } from './modules/planner/planner.module';
 import { RunsModule } from './modules/runs/runs.module';
 import { RuntimeModule } from './modules/runtime/runtime.module';
-import { SkillsModule } from './modules/skills/skills.module';
 import { UsersModule } from './modules/users/users.module';
 import { SharedModule } from './shared/shared.module';
 
@@ -50,7 +50,6 @@ import { SharedModule } from './shared/shared.module';
     UsersModule,
     OrganizationsModule,
     AgentsModule,
-    SkillsModule,
     PlannerModule,
     RunsModule,
     AIAdapterModule,
@@ -64,6 +63,7 @@ import { SharedModule } from './shared/shared.module';
     ChannelsModule,
     IntegrationsModule,
     N8nConnectionsModule,
+    AutomationsModule,
     HealthModule,
     NotificationsModule,
     SharedModule,

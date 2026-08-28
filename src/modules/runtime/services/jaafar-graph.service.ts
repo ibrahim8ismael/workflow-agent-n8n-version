@@ -10,7 +10,7 @@ import { JaafarUnderstandingGraphService } from './jaafar-understanding-graph.se
 
 export type JaafarGraphRoute =
   | 'conversation'
-  | 'employee_design'
+  | 'automation_design'
   | 'task_execution'
   | 'general_question'
   | 'clarification';
@@ -24,7 +24,7 @@ export interface JaafarGraphOutput {
   route?: JaafarGraphRoute;
   understanding?: {
     route: JaafarGraphRoute;
-    intent: 'conversation' | 'employee_design' | 'task_execution' | 'general_question';
+    intent: 'conversation' | 'automation_design' | 'task_execution' | 'general_question';
     goal: string;
     businessContext: string;
     requirements: string[];
@@ -98,7 +98,7 @@ const JaafarGraphState = Annotation.Root({
   }),
   understanding: Annotation<{
     route?: JaafarGraphRoute;
-    intent?: 'conversation' | 'employee_design' | 'task_execution' | 'general_question';
+    intent?: 'conversation' | 'automation_design' | 'task_execution' | 'general_question';
     goal?: string;
     businessContext?: string;
     requirements: string[];
@@ -235,8 +235,11 @@ export class JaafarGraphService {
         };
       })
       .addNode('understand_request', async (state: typeof JaafarGraphState.State) => {
-        if (state.request.mode === RuntimeMode.EMPLOYEE_DESIGN) {
-          return { route: 'employee_design' as const, understanding: { route: 'employee_design' } };
+        if (state.request.mode === RuntimeMode.AUTOMATION_DESIGN) {
+          return {
+            route: 'automation_design' as const,
+            understanding: { route: 'automation_design' },
+          };
         }
         const result = await this.understandingGraph.build({ durable: options.durable }).invoke(
           {
@@ -316,7 +319,7 @@ export class JaafarGraphService {
         {
           clarification: END,
           conversation: END,
-          employee_design: END,
+          automation_design: END,
           task_execution: 'plan_task',
           general_question: END,
         },

@@ -4,28 +4,27 @@ import { Injectable, Logger, Optional } from '@nestjs/common';
 import { LangGraphPostgresCheckpointerService } from '../../../infrastructure/langgraph/langgraph-postgres-checkpointer.service';
 import { LLMRuntimeService } from '../../../infrastructure/llm-runtime/llm-runtime.service';
 import {
-  BLUEPRINT_GENERATOR_SYSTEM_PROMPT,
+  AUTOMATION_BLUEPRINT_SYSTEM_PROMPT,
   JAAFAR_IDENTITY_SYSTEM_PROMPT,
   TOOL_USE_POLICY_SYSTEM_PROMPT,
 } from '../../../infrastructure/prompts/system-prompts';
+import {
+  type AutomationBlueprint,
+  automationBlueprintSchema,
+  blueprintRevision,
+} from '../../automations/schemas/automation-blueprint.schema';
+import { AutomationsService } from '../../automations/services/automations.service';
 import { ConversationsService } from '../../conversations/services/conversations.service';
 import { RunsService } from '../../runs/runs.service';
-import { blueprintSchema } from '../employee-design/employee-blueprint.schema';
-import { validateEmployeeBlueprint } from '../employee-design/employee-blueprint.validation';
-import { blueprintRevision } from '../employee-design/employee-blueprint-revision';
-import { EmployeeDesignRuntimeService } from '../employee-design/employee-design-runtime.service';
-import type {
-  EmployeeBlueprint,
-  EmployeeDesignSession,
-} from '../employee-design/employee-design-session.types';
-import type { ToolDefinition } from '../interfaces/tool.interface';
+import {
+  type AutomationDesignSession,
+  AutomationDesignSessionService,
+} from './automation-design-session.service';
 import { ContextBuilderService } from './context-builder.service';
-import { EmployeeDesignSessionService } from './employee-design-session.service';
 import { JaafarContextLoaderService } from './jaafar-context-loader.service';
 import { type ExecuteResponse } from './runtime.service';
-import { ToolExecutorService } from './tool-executor.service';
 
-export interface JaafarEmployeeDesignGraphInput {
+export interface JaafarAutomationDesignGraphInput {
   runId: string;
   agentId: string;
   userMessage: string;
@@ -33,34 +32,35 @@ export interface JaafarEmployeeDesignGraphInput {
   userId?: string;
   organizationId?: string;
   effort?: 'low' | 'medium' | 'high';
+  mode?: string;
 }
 
-export interface EmployeeDesignApprovalDecision {
+export interface AutomationDesignApprovalDecision {
   approved: boolean;
   blueprintRevision?: string;
   reason?: string;
 }
 
-interface EmployeeDesignGraphState {
-  input: JaafarEmployeeDesignGraphInput;
+interface AutomationDesignGraphState {
+  input: JaafarAutomationDesignGraphInput;
   context?: Awaited<ReturnType<JaafarContextLoaderService['load']>>;
-  session: EmployeeDesignSession;
-  blueprint?: EmployeeBlueprint;
+  session: AutomationDesignSession;
+  blueprint?: AutomationBlueprint;
   response?: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
   execution?: { durationMs?: number; estimatedCost?: number };
 }
 
-const EmployeeDesignGraphState = Annotation.Root({
-  input: Annotation<JaafarEmployeeDesignGraphInput>({
+const AutomationDesignGraphState = Annotation.Root({
+  input: Annotation<JaafarAutomationDesignGraphInput>({
     default: () => ({ runId: '', agentId: '', userMessage: '' }),
     reducer: (_left, right) => right,
   }),
-  context: Annotation<EmployeeDesignGraphState['context']>({
+  context: Annotation<AutomationDesignGraphState['context']>({
     default: () => undefined,
     reducer: (_left, right) => right,
   }),
-  session: Annotation<EmployeeDesignSession>({
+  session: Annotation<AutomationDesignSession>({
     default: () => ({
       status: 'GATHERING_REQUIREMENTS',
       approvalStatus: 'NOT_READY',
@@ -68,7 +68,7 @@ const EmployeeDesignGraphState = Annotation.Root({
     }),
     reducer: (_left, right) => right,
   }),
-  blueprint: Annotation<EmployeeBlueprint | undefined>({
+  blueprint: Annotation<AutomationBlueprint | undefined>({
     default: () => undefined,
     reducer: (_left, right) => right,
   }),
@@ -76,19 +76,25 @@ const EmployeeDesignGraphState = Annotation.Root({
     default: () => undefined,
     reducer: (_left, right) => right,
   }),
-  usage: Annotation<EmployeeDesignGraphState['usage']>({
+  usage: Annotation<AutomationDesignGraphState['usage']>({
     default: () => undefined,
     reducer: (_left, right) => right,
   }),
-  execution: Annotation<EmployeeDesignGraphState['execution']>({
+  execution: Annotation<AutomationDesignGraphState['execution']>({
     default: () => undefined,
     reducer: (_left, right) => right,
   }),
 });
 
+/**
+ * Jaafar automation design loop: understand → gather requirements (never
+ * guesses) → emit a validated AutomationBlueprint grounded in chat, memory
+ * and knowledge bases → explicit approval gate → provision into the
+ * CLIENT's n8n instance via AutomationsService.
+ */
 @Injectable()
-export class JaafarEmployeeDesignGraphService {
-  private readonly logger = new Logger(JaafarEmployeeDesignGraphService.name);
+export class JaafarAutomationDesignGraphService {
+  private readonly logger = new Logger(JaafarAutomationDesignGraphService.name);
   private readonly memoryCheckpointer = new MemorySaver();
 
   constructor(
@@ -96,21 +102,20 @@ export class JaafarEmployeeDesignGraphService {
     private readonly conversations: ConversationsService,
     private readonly contextLoader: JaafarContextLoaderService,
     private readonly contextBuilder: ContextBuilderService,
-    private readonly sessionService: EmployeeDesignSessionService,
+    private readonly sessionService: AutomationDesignSessionService,
     private readonly llmRuntime: LLMRuntimeService,
-    @Optional() private readonly employeeDesignRuntime?: EmployeeDesignRuntimeService,
+    private readonly automations: AutomationsService,
     @Optional() private readonly postgresCheckpointer?: LangGraphPostgresCheckpointerService,
-    @Optional() private readonly toolExecutor?: ToolExecutorService,
   ) {}
 
-  async run(input: Omit<JaafarEmployeeDesignGraphInput, 'runId'>): Promise<ExecuteResponse> {
+  async run(input: Omit<JaafarAutomationDesignGraphInput, 'runId'>): Promise<ExecuteResponse> {
     const run = await this.runs.create({
       agentId: input.agentId,
       conversationId: input.conversationId,
       userId: input.userId,
       organizationId: input.organizationId,
       metadata: {
-        runtimeMode: 'employee_design',
+        runtimeMode: 'automation_design',
         designStatus: 'DRAFT',
         approvalStatus: 'PENDING',
       },
@@ -130,7 +135,7 @@ export class JaafarEmployeeDesignGraphService {
       return this.result(completed.id, result, 'COMPLETED');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(`Employee design graph run ${run.id} failed: ${message}`);
+      this.logger.error(`Automation design graph run ${run.id} failed: ${message}`);
       await this.runs.fail(run.id, message);
       throw error;
     }
@@ -138,7 +143,7 @@ export class JaafarEmployeeDesignGraphService {
 
   async resume(
     runId: string,
-    decision: EmployeeDesignApprovalDecision,
+    decision: AutomationDesignApprovalDecision,
     scope?: { userId?: string; organizationId?: string },
   ): Promise<ExecuteResponse> {
     const run = await this.runs.findById(runId);
@@ -149,12 +154,12 @@ export class JaafarEmployeeDesignGraphService {
       return this.scopeFailure(runId, 'organization');
     }
     const metadata = (run.metadata as Record<string, unknown> | null) ?? {};
-    let session = metadata.employeeDesign as Record<string, unknown> | undefined;
+    let session = metadata.automationDesign as Record<string, unknown> | undefined;
     if (!session && run.conversationId) {
       try {
         const conv = await this.conversations.findByIdInScope(run.conversationId, scope ?? {});
         const convMeta = (conv?.metadata as Record<string, unknown> | null) ?? {};
-        session = convMeta.employeeDesign as Record<string, unknown> | undefined;
+        session = convMeta.automationDesign as Record<string, unknown> | undefined;
       } catch {
         // ignore
       }
@@ -169,13 +174,13 @@ export class JaafarEmployeeDesignGraphService {
         approvalStatus: 'REJECTED',
         rejectionReason: decision.reason,
       });
-      await this.runs.fail(runId, decision.reason ?? 'Employee design was rejected');
+      await this.runs.fail(runId, decision.reason ?? 'Automation design was rejected');
       return {
         runId,
-        mode: 'employee_design',
+        mode: 'automation_design',
         status: 'FAILED',
         response:
-          decision.reason ?? 'The employee design was rejected and no employee was created.',
+          decision.reason ?? 'The automation design was rejected and nothing was provisioned.',
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       };
     }
@@ -193,7 +198,7 @@ export class JaafarEmployeeDesignGraphService {
   }
 
   build() {
-    return new StateGraph(EmployeeDesignGraphState)
+    return new StateGraph(AutomationDesignGraphState)
       .addNode('load_design_session', async (state) => {
         const context = await this.contextLoader.load({
           agentId: state.input.agentId,
@@ -201,7 +206,7 @@ export class JaafarEmployeeDesignGraphService {
           conversationId: state.input.conversationId,
           userId: state.input.userId,
           organizationId: state.input.organizationId,
-          mode: 'employee_design',
+          mode: 'automation_design',
         });
         const session = await this.sessionService.load({
           conversationId: state.input.conversationId,
@@ -212,16 +217,16 @@ export class JaafarEmployeeDesignGraphService {
         return { context, session };
       })
       .addNode('collect_requirements', async (state) => {
-        if (!state.context) throw new Error('Employee design context was not loaded');
+        if (!state.context) throw new Error('Automation design context was not loaded');
         const history = state.context.history;
         const context = await this.contextBuilder.build({
           systemPrompt: [
             JAAFAR_IDENTITY_SYSTEM_PROMPT,
             TOOL_USE_POLICY_SYSTEM_PROMPT,
-            BLUEPRINT_GENERATOR_SYSTEM_PROMPT,
-            'Continue the existing employee design session. Ask only for requirements that materially affect a safe, useful employee.',
+            AUTOMATION_BLUEPRINT_SYSTEM_PROMPT,
+            'Continue the existing automation design session. Ask only for requirements that materially affect a safe, useful automation. Never guess missing requirements.',
             `Current structured session:\n${JSON.stringify(state.session)}`,
-            `Employee policies:\n${state.context.agent.instructions ?? ''}`,
+            `Automation policies:\n${state.context.agent.instructions ?? ''}`,
           ].join('\n\n'),
           agentId: state.input.agentId,
           conversationId: state.input.conversationId,
@@ -237,12 +242,12 @@ export class JaafarEmployeeDesignGraphService {
             role: message.role as 'system' | 'user' | 'assistant',
             content: message.content,
           })),
-          schema: blueprintSchema,
+          schema: automationBlueprintSchema,
           temperature: 0.2,
           maxTokens: 2000,
         });
-        const blueprint = blueprintSchema.parse(result.object);
-        const validation = validateEmployeeBlueprint(blueprint);
+        const blueprint = automationBlueprintSchema.parse(result.object);
+        const validation = this.validateBlueprint(blueprint);
         const missingRequirements =
           blueprint.ready && validation.valid
             ? blueprint.missingRequirements
@@ -255,10 +260,10 @@ export class JaafarEmployeeDesignGraphService {
         };
       })
       .addNode('persist_design_turn', async (state) => {
-        if (!state.blueprint) throw new Error('Employee blueprint was not generated');
+        if (!state.blueprint) throw new Error('Automation blueprint was not generated');
         const ready = state.blueprint.ready;
         const revision = blueprintRevision(state.blueprint);
-        const session: EmployeeDesignSession = {
+        const session: AutomationDesignSession = {
           status: ready ? 'READY_FOR_REVIEW' : 'GATHERING_REQUIREMENTS',
           approvalStatus: ready ? 'READY' : 'NOT_READY',
           blueprint: state.blueprint,
@@ -279,8 +284,8 @@ export class JaafarEmployeeDesignGraphService {
           await this.runs.updateUsage(state.input.runId, usage);
         }
         await this.runs.updateMetadata(state.input.runId, {
-          runtimeMode: 'employee_design',
-          employeeDesign: session,
+          runtimeMode: 'automation_design',
+          automationDesign: session,
           blueprint: state.blueprint,
           designStatus: session.status,
           approvalStatus: session.approvalStatus,
@@ -314,38 +319,59 @@ export class JaafarEmployeeDesignGraphService {
           throw new Error('A blueprint revision is required before approval');
         }
         interrupt({
-          type: 'employee_design_approval',
+          type: 'automation_design_approval',
           runId: state.input.runId,
           blueprintRevision: state.session.blueprintRevision,
         });
         return {};
       })
-      .addNode('create_employee', async (state) => {
-        if (this.toolExecutor) {
-          const result = await this.toolExecutor.execute(this.employeeCreationTool(), {
-            runId: state.input.runId,
-            agentId: state.input.agentId,
-            userMessage: state.input.userMessage,
-            input: { blueprint: state.blueprint ?? {} },
-            userId: state.input.userId,
-            organizationId: state.input.organizationId,
-            approvalStatus: 'approved',
-            logicalAction: 'employee-design-create',
-          });
-          if (!result.success) throw new Error(result.error?.message ?? 'Employee creation failed');
-          return { response: `Employee draft created: ${JSON.stringify(result.output)}` };
-        }
-        if (!this.employeeDesignRuntime)
-          throw new Error('Employee creation tool is not configured');
-        const result = await this.employeeDesignRuntime.confirm(
-          state.input.runId,
+      .addNode('provision_automation', async (state) => {
+        // Approval has been granted by the human gate; create + provision now.
+        const blueprint = state.blueprint;
+        if (!blueprint) throw new Error('Approved automation blueprint is missing');
+        const scope = {
+          userId: state.input.userId,
+          organizationId: state.input.organizationId,
+        };
+        const created = await this.automations.createFromBlueprint(
           {
-            userId: state.input.userId,
-            organizationId: state.input.organizationId,
+            name: blueprint.name,
+            description: blueprint.description || blueprint.summary,
+            blueprint: blueprint as unknown as Record<string, unknown>,
           },
-          { blueprintRevision: state.session.blueprintRevision },
+          scope,
         );
-        return { response: result.response };
+        const provisioned = await this.automations.approve(created.id, scope);
+        if (provisioned.status === 'FAILED') {
+          throw new Error(
+            provisioned.lastError ?? 'Automation provisioning failed in the client n8n instance',
+          );
+        }
+        const session: AutomationDesignSession = {
+          ...(state.session ?? {
+            status: 'PROVISIONED',
+            approvalStatus: 'APPROVED',
+            missingRequirements: [],
+          }),
+          status: 'PROVISIONED',
+          approvalStatus: 'APPROVED',
+          automationId: provisioned.id,
+          connectionId: provisioned.connectionId,
+        };
+        await this.sessionService.persist({
+          runId: state.input.runId,
+          conversationId: state.input.conversationId,
+          session,
+        });
+        await this.runs.updateMetadata(state.input.runId, {
+          automationId: provisioned.id,
+          automationStatus: provisioned.status,
+          webhookPath: provisioned.webhookPath,
+        });
+        return {
+          session,
+          response: `Automation "${provisioned.name}" is now ACTIVE in your n8n instance (webhook: ${provisioned.webhookPath ?? 'n/a'}).`,
+        };
       })
       .addEdge(START, 'load_design_session')
       .addEdge('load_design_session', 'collect_requirements')
@@ -355,42 +381,31 @@ export class JaafarEmployeeDesignGraphService {
         (state) => (state.session.status === 'READY_FOR_REVIEW' ? 'approval' : 'complete'),
         { approval: 'await_approval', complete: END },
       )
-      .addEdge('await_approval', 'create_employee')
-      .addEdge('create_employee', END)
+      .addEdge('await_approval', 'provision_automation')
+      .addEdge('provision_automation', END)
       .compile({ checkpointer: this.checkpointer() });
   }
 
   graphConfig(
     runId: string,
-    scope?: Pick<JaafarEmployeeDesignGraphInput, 'userId' | 'organizationId'>,
+    scope?: Pick<JaafarAutomationDesignGraphInput, 'userId' | 'organizationId'>,
   ) {
     return {
       configurable: {
-        thread_id: `jaafar:employee-design:${scope?.organizationId ?? 'personal'}:${scope?.userId ?? 'anonymous'}:${runId}`,
+        thread_id: `jaafar:automation-design:${scope?.organizationId ?? 'personal'}:${scope?.userId ?? 'anonymous'}:${runId}`,
       },
     };
   }
 
-  private employeeCreationTool(): ToolDefinition {
-    return {
-      id: 'employee_create_draft',
-      name: 'Create employee draft',
-      slug: 'employee-create-draft',
-      description: 'Create an employee draft from an approved blueprint.',
-      executionMode: 'domain',
-      inputSchema: { type: 'object', required: ['blueprint'] },
-      outputSchema: { type: 'object' },
-      requiredPermissions: ['employee:create'],
-      requiredIntegrations: [],
-      requiresApproval: true,
-      sideEffect: true,
-      timeoutMs: 30_000,
-      maxRetries: 0,
-      retryPolicy: { maxAttempts: 1, retryableCodes: [] },
-      idempotent: true,
-      successCriteria: ['Employee draft is created'],
-      permissionScope: 'agent',
-    };
+  private validateBlueprint(blueprint: AutomationBlueprint): { valid: boolean; missing: string[] } {
+    const missing: string[] = [];
+    if (!blueprint.goal?.trim()) missing.push('A clear goal for the automation');
+    if (!blueprint.trigger?.type) missing.push('A trigger (webhook, schedule, manual, or chat)');
+    if (!blueprint.steps?.length) missing.push('At least one concrete step');
+    if (!blueprint.integrations?.length && !blueprint.steps.some((step) => step.integration)) {
+      missing.push('At least one integration the automation will use');
+    }
+    return { valid: missing.length === 0, missing };
   }
 
   private checkpointer() {
@@ -404,18 +419,18 @@ export class JaafarEmployeeDesignGraphService {
 
   private isInterrupted(
     result: unknown,
-  ): result is EmployeeDesignGraphState & { __interrupt__: unknown } {
+  ): result is AutomationDesignGraphState & { __interrupt__: unknown } {
     return Boolean(result && typeof result === 'object' && '__interrupt__' in result);
   }
 
   private result(
     runId: string,
-    result: EmployeeDesignGraphState,
+    result: AutomationDesignGraphState,
     status: 'WAITING' | 'COMPLETED',
   ): ExecuteResponse {
     return {
       runId,
-      mode: 'employee_design',
+      mode: 'automation_design',
       status,
       response: result.response ?? '',
       plan: result.blueprint
@@ -428,51 +443,42 @@ export class JaafarEmployeeDesignGraphService {
   private scopeFailure(runId: string, scope: 'user' | 'organization'): ExecuteResponse {
     return {
       runId,
-      mode: 'employee_design',
+      mode: 'automation_design',
       status: 'FAILED',
-      response: `This employee plan is not available in the current ${scope} scope.`,
+      response: `This automation design is not available in the current ${scope} scope.`,
       usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
     };
   }
 
-  private formatSummary(blueprint: EmployeeBlueprint, revision: string): string {
+  private formatSummary(blueprint: AutomationBlueprint, revision: string): string {
     if (!blueprint.ready) {
       return [
-        'I need a little more information before I can prepare the employee draft:',
+        'I need a little more information before I can prepare the automation design:',
         '',
         ...blueprint.missingRequirements.map((item) => `- ${item}`),
       ].join('\n');
     }
     return [
-      `Draft employee blueprint: ${blueprint.name}`,
+      `Draft automation blueprint: ${blueprint.name}`,
       '',
-      `Role: ${blueprint.role}`,
-      `Department: ${blueprint.department}`,
-      `Description: ${blueprint.description}`,
+      `Goal: ${blueprint.goal}`,
+      `Trigger: ${blueprint.trigger.type}`,
       '',
       blueprint.summary,
       '',
-      'Responsibilities:',
-      ...blueprint.responsibilities.map((item) => `- ${item}`),
+      'Steps:',
+      ...blueprint.steps.map(
+        (step, index) =>
+          `- ${index + 1}. ${step.name} — ${step.action}${step.integration ? ` (via ${step.integration})` : ''}`,
+      ),
       '',
-      'Goals:',
-      ...blueprint.goals.map((item) => `- ${item}`),
+      `Integrations: ${blueprint.integrations.join(', ') || 'None specified'}`,
       '',
-      'Knowledge:',
-      ...blueprint.knowledgeRequirements.map((item) => `- ${item}`),
-      '',
-      `Tools: ${blueprint.requiredTools.join(', ') || 'None specified'}`,
-      `Integrations: ${blueprint.requiredIntegrations.join(', ') || 'None specified'}`,
-      `Channels: ${blueprint.channels.join(', ') || 'None specified'}`,
-      '',
-      'Permissions and boundaries:',
-      ...blueprint.permissions.map((item) => `- ${item}`),
-      '',
-      `Memory policy: ${blueprint.memoryPolicy}`,
-      `Workflow: ${blueprint.workflow.join('; ') || 'None specified'}`,
-      '',
+      ...(blueprint.riskNotes.length
+        ? ['Risk notes:', ...blueprint.riskNotes.map((item) => `- ${item}`), '']
+        : []),
       `Blueprint revision: ${revision}`,
-      'This plan is ready for your review. The employee has not been created. Confirm this plan when you want me to create the employee draft.',
+      'This design is ready for your review. Nothing has been provisioned yet. Confirm this design when you want me to create the automation in your n8n instance.',
     ].join('\n');
   }
 }

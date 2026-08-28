@@ -15,7 +15,7 @@ export interface MissingInput {
 export interface Plan {
   intent:
     | 'brainstorming'
-    | 'employee_design'
+    | 'automation_design'
     | 'task_execution'
     | 'clarification'
     | 'general_question';

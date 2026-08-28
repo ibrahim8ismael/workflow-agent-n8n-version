@@ -128,21 +128,21 @@ export class RunsService {
     });
   }
 
-  async claimEmployeeCreation(id: string): Promise<boolean> {
+  async claimAutomationCreation(id: string): Promise<boolean> {
     const run = await this.findById(id);
     const currentMetadata = (run.metadata as Record<string, unknown> | null) ?? {};
-    const isEmployeeDesign =
-      currentMetadata.runtimeMode === 'employee_design' ||
-      Boolean(currentMetadata.employeeDesign) ||
+    const isAutomationDesign =
+      currentMetadata.runtimeMode === 'automation_design' ||
+      Boolean(currentMetadata.automationDesign) ||
       Boolean(currentMetadata.blueprint);
-    if (!isEmployeeDesign || currentMetadata.designStatus !== 'READY_FOR_REVIEW') {
+    if (!isAutomationDesign || currentMetadata.designStatus !== 'READY_FOR_REVIEW') {
       return false;
     }
 
-    return this.runsRepository.claimEmployeeCreation(id, run.version, {
+    return this.runsRepository.claimAutomationCreation(id, run.version, {
       ...currentMetadata,
-      runtimeMode: 'employee_design',
-      approvalStatus: 'CREATING',
+      runtimeMode: 'automation_design',
+      approvalStatus: 'PROVISIONING',
     });
   }
 

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const jaafarUnderstandingSchema = z.object({
-  intent: z.enum(['conversation', 'employee_design', 'task_execution', 'general_question']),
+  intent: z.enum(['conversation', 'automation_design', 'task_execution', 'general_question']),
   goal: z.string().min(1).max(500),
   businessContext: z.string().max(1000).default(''),
   requirements: z

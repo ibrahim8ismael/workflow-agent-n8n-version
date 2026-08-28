@@ -6,10 +6,8 @@
  */
 
 export {
-  BLUEPRINT_GENERATOR_SYSTEM_PROMPT,
-  EMPLOYEE_LEARNING_SYSTEM_PROMPT,
+  AUTOMATION_BLUEPRINT_SYSTEM_PROMPT,
   JAAFAR_IDENTITY_SYSTEM_PROMPT,
-  SKILL_DESIGN_SYSTEM_PROMPT,
 } from './modules/jaafar.prompt';
 export {
   PLATFORM_SYSTEM_PROMPT,
@@ -23,11 +21,7 @@ export {
   SKILL_SYSTEM_PROMPT,
 } from './modules/runtime.prompt';
 
-import {
-  EMPLOYEE_LEARNING_SYSTEM_PROMPT,
-  JAAFAR_IDENTITY_SYSTEM_PROMPT,
-  SKILL_DESIGN_SYSTEM_PROMPT,
-} from './modules/jaafar.prompt';
+import { JAAFAR_IDENTITY_SYSTEM_PROMPT } from './modules/jaafar.prompt';
 import { PLATFORM_SYSTEM_PROMPT, TOOL_USE_POLICY_SYSTEM_PROMPT } from './modules/platform.prompt';
 import {
   CONVERSATION_RESPONDER_SYSTEM_PROMPT,
@@ -126,7 +120,7 @@ export function buildPlannerUserPrompt(context: PlannerUserPromptContext): strin
     knowledge,
     history,
     `<current_user_message>\n${context.userMessage}\n</current_user_message>`,
-    'Continue helpfully. If the user is designing an employee, gather missing business requirements before proposing execution steps.',
+    'Continue helpfully. If the user is designing an automation, gather missing business requirements before proposing execution steps.',
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -192,18 +186,4 @@ export function buildSkillSystemPrompt(context: SkillPromptContext): string {
   ]
     .filter(Boolean)
     .join('\n\n');
-}
-
-export function buildEmployeeLearningSystemPrompt(): string {
-  return [
-    PLATFORM_SYSTEM_PROMPT,
-    TOOL_USE_POLICY_SYSTEM_PROMPT,
-    EMPLOYEE_LEARNING_SYSTEM_PROMPT,
-  ].join('\n\n');
-}
-
-export function buildSkillDesignSystemPrompt(): string {
-  return [PLATFORM_SYSTEM_PROMPT, TOOL_USE_POLICY_SYSTEM_PROMPT, SKILL_DESIGN_SYSTEM_PROMPT].join(
-    '\n\n',
-  );
 }

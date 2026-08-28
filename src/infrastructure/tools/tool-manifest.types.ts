@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
-export const toolModeSchema = z.enum(['conversation', 'planning', 'employee_design', 'execution']);
+export const toolModeSchema = z.enum([
+  'conversation',
+  'planning',
+  'automation_design',
+  'execution',
+]);
 
 export const toolManifestSchema = z.object({
   type: z.literal('function'),

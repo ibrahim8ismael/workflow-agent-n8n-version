@@ -1,4 +1,4 @@
-import type { EmployeeDesignSession } from '../employee-design/employee-design-session.types';
+import type { AutomationDesignSession } from '../services/automation-design-session.service';
 import type { JaafarModelCall } from '../types/jaafar-model.types';
 import type { JaafarPlan } from '../types/jaafar-plan.types';
 import type { JaafarUnderstanding } from '../types/jaafar-understanding.types';
@@ -47,7 +47,7 @@ export interface JaafarState {
     clarificationRequired?: boolean;
     clarificationQuestion?: string;
   };
-  employeeDesign?: EmployeeDesignSession;
+  automationDesign?: AutomationDesignSession;
   context: {
     skills: ToolDefinition[];
     memoryReferences: string[];

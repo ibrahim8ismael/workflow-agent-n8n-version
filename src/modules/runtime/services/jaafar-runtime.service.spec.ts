@@ -15,19 +15,19 @@ function createService() {
     fail: vi.fn(),
     complete: vi.fn().mockResolvedValue({ id: 'task-run' }),
   };
-  const employeeDesignGraph = {
+  const automationDesignGraph = {
     run: vi.fn().mockResolvedValue({ runId: 'task-run', status: 'WAITING', usage: {} }),
     resume: vi.fn().mockResolvedValue({ runId: 'task-run', status: 'COMPLETED', usage: {} }),
     build: vi.fn().mockReturnValue({
       invoke: vi
         .fn()
-        .mockResolvedValue({ route: 'completed', response: 'Employee created.', usage: {} }),
+        .mockResolvedValue({ route: 'completed', response: 'Automation provisioned.', usage: {} }),
       stream: vi.fn().mockReturnValue(
         (async function* () {
           yield {
             type: 'run.completed',
             runId: 'task-run',
-            response: 'Employee created.',
+            response: 'Automation provisioned.',
             usage: {},
           };
         })(),
@@ -98,16 +98,10 @@ function createService() {
       modelCalls: [],
     }),
   };
-  const employeeDesignRuntime = {
-    confirm: vi
-      .fn()
-      .mockResolvedValue({ runId: 'task-run', status: 'COMPLETED', response: 'Created.' }),
-  };
   const service = new JaafarRuntimeService(
     runtime as never,
     runs as never,
-    employeeDesignRuntime as never,
-    employeeDesignGraph as never,
+    automationDesignGraph as never,
     executionGraph as never,
     conversationGraph as never,
     jaafarGraph as never,
@@ -116,8 +110,7 @@ function createService() {
     service,
     runtime,
     runs,
-    employeeDesignRuntime,
-    employeeDesignGraph,
+    automationDesignGraph,
     understandingGraph,
     executionGraph,
     conversationGraph,
@@ -126,25 +119,25 @@ function createService() {
 }
 
 describe('JaafarRuntimeService', () => {
-  it('starts explicit employee-design requests on the graph branch', async () => {
-    const { service, employeeDesignGraph, jaafarGraph } = createService();
+  it('starts explicit automation-design requests on the graph branch', async () => {
+    const { service, automationDesignGraph, jaafarGraph } = createService();
     jaafarGraph.classify.mockResolvedValue({
-      route: 'employee_design',
-      understanding: { route: 'employee_design' },
+      route: 'automation_design',
+      understanding: { route: 'automation_design' },
     });
 
     const result = await service.start({
       agentId: 'agent-1',
-      userMessage: 'Design an HR employee',
-      mode: 'employee_design',
+      userMessage: 'Design an invoice automation',
+      mode: 'automation_design',
     });
 
     expect(result.runId).toBe('task-run');
-    expect(employeeDesignGraph.build().invoke).toHaveBeenCalled();
+    expect(automationDesignGraph.build().invoke).toHaveBeenCalled();
   });
 
   it('uses the conversation graph when classification is unavailable', async () => {
-    const { service, conversationGraph, employeeDesignGraph, jaafarGraph } = createService();
+    const { service, conversationGraph, automationDesignGraph, jaafarGraph } = createService();
     jaafarGraph.classify.mockRejectedValue(new Error('classifier unavailable'));
 
     const result = await service.start({ agentId: 'agent-1', userMessage: 'What is our policy?' });
@@ -153,7 +146,7 @@ describe('JaafarRuntimeService', () => {
     expect(conversationGraph.run).toHaveBeenCalledWith(
       expect.objectContaining({ mode: 'conversation' }),
     );
-    expect(employeeDesignGraph.run).not.toHaveBeenCalled();
+    expect(automationDesignGraph.run).not.toHaveBeenCalled();
   });
 
   it('classifies ordinary conversation and uses the conversation graph', async () => {
@@ -182,17 +175,17 @@ describe('JaafarRuntimeService', () => {
     ).rejects.toThrow('graph provider failed');
   });
 
-  it('resumes graph-owned employee designs through approval', async () => {
-    const { service, runs, employeeDesignGraph } = createService();
+  it('resumes graph-owned automation designs through approval', async () => {
+    const { service, runs, automationDesignGraph } = createService();
     runs.findById.mockResolvedValue({
       status: 'WAITING',
-      metadata: { runtimeMode: 'employee_design' },
+      metadata: { runtimeMode: 'automation_design' },
     });
 
     const result = await service.approve('task-run', { approved: true }, { userId: 'user-1' });
 
     expect(result.status).toBe('COMPLETED');
-    expect(employeeDesignGraph.resume).toHaveBeenCalledWith(
+    expect(automationDesignGraph.resume).toHaveBeenCalledWith(
       'task-run',
       { approved: true, blueprintRevision: '' },
       { userId: 'user-1' },
@@ -341,54 +334,49 @@ describe('JaafarRuntimeService', () => {
     expect(events.at(-1)?.type).toBe('run.failed');
   });
 
-  it('confirms graph employee design by resuming the graph when status is WAITING', async () => {
-    const { service, runs, employeeDesignGraph } = createService();
+  it('confirms graph automation design by resuming the graph when status is WAITING', async () => {
+    const { service, runs, automationDesignGraph } = createService();
     runs.findById.mockResolvedValue({
       status: 'WAITING',
-      metadata: { runtimeMode: 'employee_design', blueprintRevision: 'rev-1' },
+      metadata: { runtimeMode: 'automation_design', blueprintRevision: 'rev-1' },
     });
 
-    const result = await service.confirmEmployeeDesign(
+    const result = await service.confirmAutomationDesign(
       'task-run',
       { userId: 'user-1' },
       { blueprintRevision: 'rev-1' },
     );
 
     expect(result.status).toBe('COMPLETED');
-    expect(employeeDesignGraph.resume).toHaveBeenCalledWith(
+    expect(automationDesignGraph.resume).toHaveBeenCalledWith(
       'task-run',
       { approved: true, blueprintRevision: 'rev-1' },
       { userId: 'user-1' },
     );
   });
 
-  it('confirms employee design when metadata has employeeDesign even if runtimeMode was conversation', async () => {
-    const { service, runs, employeeDesignGraph } = createService();
+  it('confirms automation design when metadata has automationDesign even if runtimeMode was conversation', async () => {
+    const { service, runs, automationDesignGraph } = createService();
     runs.findById.mockResolvedValue({
       status: 'WAITING',
-      metadata: { runtimeMode: 'conversation', employeeDesign: { status: 'READY_FOR_REVIEW' } },
+      metadata: { runtimeMode: 'conversation', automationDesign: { status: 'READY_FOR_REVIEW' } },
     });
 
-    const result = await service.confirmEmployeeDesign('task-run', { userId: 'user-1' });
+    const result = await service.confirmAutomationDesign('task-run', { userId: 'user-1' });
 
     expect(result.status).toBe('COMPLETED');
-    expect(employeeDesignGraph.resume).toHaveBeenCalled();
+    expect(automationDesignGraph.resume).toHaveBeenCalled();
   });
 
-  it('falls back to employeeDesignRuntime when run is not waiting on graph', async () => {
-    const { service, runs, employeeDesignRuntime } = createService();
+  it('fails confirmation for completed non-graph runs', async () => {
+    const { service, runs } = createService();
     runs.findById.mockResolvedValue({
       status: 'COMPLETED',
       metadata: { blueprint: { name: 'Accountant' } },
     });
 
-    const result = await service.confirmEmployeeDesign('task-run', { userId: 'user-1' });
+    const result = await service.confirmAutomationDesign('task-run', { userId: 'user-1' });
 
-    expect(result.status).toBe('COMPLETED');
-    expect(employeeDesignRuntime.confirm).toHaveBeenCalledWith(
-      'task-run',
-      { userId: 'user-1' },
-      undefined,
-    );
+    expect(result.status).toBe('FAILED');
   });
 });

@@ -11,8 +11,6 @@ import { IntegrationsController } from '../../integrations/controllers/integrati
 import { IntegrationsService } from '../../integrations/services/integrations.service';
 import { MemoryController } from '../../memory/controllers/memory.controller';
 import { MemoryService } from '../../memory/services/memory.service';
-import { SkillsController } from '../../skills/controllers/skills.controller';
-import { SkillsService } from '../../skills/services/skills.service';
 
 describe('Multi-Tenant User Isolation & Authorization', () => {
   const userA = { id: 'user-a', activeContext: 'personal' };
@@ -264,38 +262,6 @@ describe('Multi-Tenant User Isolation & Authorization', () => {
       expect(mockIntegrationsService.findByOrganization).toHaveBeenCalledWith('org-a', {
         userId: 'user-a',
         organizationId: 'org-a',
-      });
-    });
-  });
-
-  describe('Skills Controller Isolation', () => {
-    const mockSkillsService = {
-      findById: vi.fn(),
-      update: vi.fn(),
-      softDelete: vi.fn(),
-      publish: vi.fn(),
-      archive: vi.fn(),
-    } as unknown as SkillsService;
-    const controller = new SkillsController(mockSkillsService);
-
-    it('scopes single-skill retrieval and mutations to the user', async () => {
-      await controller.findById('skill-1', userA);
-      expect(mockSkillsService.findById).toHaveBeenCalledWith('skill-1', {
-        userId: 'user-a',
-        organizationId: undefined,
-      });
-
-      await controller.update('skill-1', { description: 'New description' }, userA);
-      expect(mockSkillsService.update).toHaveBeenCalledWith(
-        'skill-1',
-        expect.objectContaining({ description: 'New description' }),
-        { userId: 'user-a', organizationId: undefined },
-      );
-
-      await controller.remove('skill-1', userA);
-      expect(mockSkillsService.softDelete).toHaveBeenCalledWith('skill-1', {
-        userId: 'user-a',
-        organizationId: undefined,
       });
     });
   });

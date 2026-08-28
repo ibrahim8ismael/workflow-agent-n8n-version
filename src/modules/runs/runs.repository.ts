@@ -46,7 +46,7 @@ export class RunsRepository {
     return this.db.run.update({ where: { id }, data });
   }
 
-  async claimEmployeeCreation(
+  async claimAutomationCreation(
     id: string,
     version: number,
     metadata: Record<string, unknown>,

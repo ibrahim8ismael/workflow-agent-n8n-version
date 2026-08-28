@@ -2,7 +2,7 @@ export type ExecutionMode = 'low' | 'medium' | 'high';
 
 export type RuntimeIntent =
   | 'conversation'
-  | 'employee_design'
+  | 'automation_design'
   | 'task_execution'
   | 'general_question';
 
@@ -60,7 +60,7 @@ export interface StartRunRequest extends RuntimeScope {
   agentId: string;
   conversationId?: string;
   effort?: ExecutionMode;
-  mode?: 'conversation' | 'employee_design' | 'execution';
+  mode?: 'conversation' | 'automation_design' | 'execution';
 }
 
 export interface RuntimeUsage {

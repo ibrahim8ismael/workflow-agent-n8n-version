@@ -2,15 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { JaafarRequestUnderstandingService } from './jaafar-request-understanding.service';
 
 const output = {
-  intent: 'employee_design' as const,
-  goal: 'Create a support employee',
+  intent: 'automation_design' as const,
+  goal: 'Create a support automation',
   businessContext: 'Customer support',
   requirements: [{ field: 'role', value: 'support', required: true, source: 'user' as const }],
   missingInputs: [
     {
       field: 'channels',
-      description: 'Channels the employee should use',
-      question: 'Which channels should the employee use?',
+      description: 'Channels the automation should use',
+      question: 'Which channels should the automation use?',
       required: true,
     },
   ],
@@ -27,14 +27,14 @@ describe('JaafarRequestUnderstandingService', () => {
 
     await expect(
       service.understand({
-        userMessage: 'Create a support employee',
+        userMessage: 'Create a support automation',
         history: [],
         effort: 'low',
       }),
     ).resolves.toMatchObject({
       route: 'clarification',
       clarificationRequired: true,
-      clarificationQuestion: 'Which channels should the employee use?',
+      clarificationQuestion: 'Which channels should the automation use?',
     });
 
     expect(llmRuntime.generateObject).toHaveBeenCalledWith(

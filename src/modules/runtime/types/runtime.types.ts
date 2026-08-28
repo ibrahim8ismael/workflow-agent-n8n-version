@@ -2,7 +2,7 @@ import type { ExecutionMode } from '../../../infrastructure/llm-runtime/interfac
 
 export enum RuntimeMode {
   CONVERSATION = 'conversation',
-  EMPLOYEE_DESIGN = 'employee_design',
+  AUTOMATION_DESIGN = 'automation_design',
   EXECUTION = 'execution',
 }
 

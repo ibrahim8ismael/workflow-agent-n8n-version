@@ -567,6 +567,7 @@ model Automation {
   externalWorkflowId String?
   webhookPath        String?
   lastSyncedAt       DateTime?
+  lastError          String?
   userId             String?
   organizationId     String? // exactly one populated (owner XOR)
   createdAt          DateTime  @default(now())
