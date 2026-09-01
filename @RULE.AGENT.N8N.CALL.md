@@ -9,10 +9,11 @@
 > ⚠️ **ADR-011 (2026-08):** Automations live in **client-provided n8n
 > instances** — Jaafar designs, the user approves, the platform provisions.
 > Per-client connections (`/api/v1/integrations/n8n`) with encrypted API keys
-> replace the platform-global n8n env configuration (deprecated, dual-read
-> until cutover). Canonical rules: [[@RULE.AUTOMATIONS.md]]. Sections below
-> describing platform-global n8n workflow mapping remain valid for the
-> deprecated fallback path only.
+> are the **only** way n8n is connected: each user supplies their own n8n
+> domain (`baseUrl`) and API key. The platform-global n8n env configuration
+> has been removed (cutover complete). Canonical rules:
+> [[@RULE.AUTOMATIONS.md]]. Sections below describing platform-global n8n
+> workflow mapping are historical.
 
 ---
 

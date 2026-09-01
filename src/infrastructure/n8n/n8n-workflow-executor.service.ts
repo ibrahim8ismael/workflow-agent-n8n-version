@@ -1,8 +1,7 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { JsonValue } from '../../modules/runtime/interfaces/tool.interface';
 import { computeHmacSignature } from '../auth/inter-service-crypto';
-import { N8nIntegrationRegistryService } from './n8n-integration-registry.service';
 
 export interface N8nWorkflowRequest {
   workflow: string;
@@ -17,10 +16,9 @@ export interface N8nWorkflowRequest {
   idempotencyKey?: string;
   metadata?: Record<string, unknown>;
   /**
-   * Per-automation binding into a CLIENT's n8n instance (PLAN Step 10).
-   * When present, execution targets {baseUrl}/webhook/{webhookPath} with
-   * the binding's HMAC secret. When absent, the deprecated platform-global
-   * env path is used (dual-read until Step 11 removes it).
+   * Per-automation binding into the CLIENT's n8n instance. Execution targets
+   * {baseUrl}/webhook/{webhookPath} with the binding's HMAC secret. Required —
+   * executions without a binding are rejected (client-managed n8n, ADR-011).
    */
   binding?: N8nWorkflowBinding;
 }
@@ -47,36 +45,19 @@ export class N8nWorkflowError extends Error {
 export class N8nWorkflowExecutorService {
   private readonly logger = new Logger(N8nWorkflowExecutorService.name);
 
-  constructor(
-    private readonly config: ConfigService,
-    @Optional() private readonly registry?: N8nIntegrationRegistryService,
-  ) {}
+  constructor(private readonly config: ConfigService) {}
 
   async execute(request: N8nWorkflowRequest): Promise<JsonValue> {
-    let webhookBase: string | undefined;
-    let targetPath: string;
-    let descriptor: { workflow: string; requiredIntegration?: string };
-
-    if (request.binding) {
-      webhookBase = `${request.binding.baseUrl.replace(/\/+$/, '')}/webhook`;
-      targetPath = `/${request.binding.webhookPath.replace(/^\/+/, '')}`;
-      descriptor = { workflow: request.binding.webhookPath };
-    } else {
-      // Deprecated platform-global path (dual-read). Removed at Step 11.
-      this.logger.warn({
-        event: 'n8n.legacy_env_binding',
-        workflow: request.workflow,
-        hint: 'Resolve automations into per-run bindings instead of platform n8n env globals',
-      });
-      webhookBase = this.config.get<string>('N8N_WEBHOOK_URL');
-      if (!webhookBase) {
-        throw new N8nWorkflowError('N8N_WEBHOOK_URL is not configured', false);
-      }
-      const resolved = this.registry?.resolve(request.workflow) ?? { workflow: request.workflow };
-      descriptor = resolved;
-      await this.registry?.assertAvailable(request.organizationId, descriptor.requiredIntegration);
-      targetPath = `/${descriptor.workflow.replace(/^\/+/, '')}`;
+    if (!request.binding) {
+      throw new N8nWorkflowError(
+        `Automation "${request.workflow}" is not bound to an ACTIVE n8n connection`,
+        false,
+      );
     }
+
+    const webhookBase = `${request.binding.baseUrl.replace(/\/+$/, '')}/webhook`;
+    const targetPath = `/${request.binding.webhookPath.replace(/^\/+/, '')}`;
+    const descriptor = { workflow: request.binding.webhookPath };
 
     const url = `${webhookBase.replace(/\/+$/, '')}${targetPath}`;
     const timeoutMs = request.timeoutMs ?? this.config.get<number>('N8N_TIMEOUT_MS') ?? 30_000;

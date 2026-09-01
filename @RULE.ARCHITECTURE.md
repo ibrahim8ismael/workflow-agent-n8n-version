@@ -797,8 +797,8 @@ automations. See [[@RULE.AUTOMATIONS.md]] and
 
 **Consequences:** client API keys are platform-held secrets (AES-256-GCM);
 the SSRF guard applies to every client `baseUrl`; provisioning is reachable
-only behind the approval gate; the legacy env-global n8n path is deprecated
-(dual-read until the cutover completes).
+only behind the approval gate; the legacy env-global n8n path is removed
+(cutover complete — per-client connections are the only n8n access path).
 
 ---
 

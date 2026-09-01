@@ -149,8 +149,8 @@ connection:
 - `N8nWorkflowExecutorService` targets `{baseUrl}/webhook/{webhookPath}` with
   the execution envelope (runId, input, metadata), `Idempotency-Key`, and
   HMAC-SHA256 signing. Per-binding shared secrets use the same signature
-  scheme; the deprecated platform-global env path remains as a dual-read
-  fallback until the cutover completes (boot warning logged).
+  scheme. Executions without a binding are rejected (non-retryable) — the
+  platform-global env path no longer exists (ADR-011 cutover complete).
 - Drift policy: `reprovision` re-pushes the stored blueprint to repair drift
   in the client instance.
 

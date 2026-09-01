@@ -7,7 +7,6 @@ describe('N8nWorkflowExecutorService', () => {
   const mockConfig = (overrides: Record<string, unknown> = {}) => ({
     get: vi.fn((key: string) => {
       if (key in overrides) return overrides[key];
-      if (key === 'N8N_WEBHOOK_URL') return 'https://n8n.example.com/webhook';
       if (key === 'WOOPS_INTER_SERVICE_SECRET') return secret;
       if (key === 'N8N_TIMEOUT_MS') return 1000;
       if (key === 'N8N_MAX_RETRIES') return 0;
@@ -28,6 +27,7 @@ describe('N8nWorkflowExecutorService', () => {
       service.execute({
         workflow: 'support',
         input: { query: 'hello' },
+        binding: { baseUrl: 'https://n8n.example.com', webhookPath: 'support' },
         userId: 'user-1',
         organizationId: 'org-1',
         timeoutMs: 1_000,
@@ -63,6 +63,7 @@ describe('N8nWorkflowExecutorService', () => {
     const result = await service.execute({
       workflow: 'search_customer',
       input: { email: 'alice@example.com' },
+      binding: { baseUrl: 'https://n8n.example.com', webhookPath: 'search_customer' },
       timeoutMs: 1_000,
     });
 
@@ -70,13 +71,21 @@ describe('N8nWorkflowExecutorService', () => {
     vi.unstubAllGlobals();
   });
 
-  it('classifies missing configuration without attempting a request', async () => {
+  it('rejects executions without a client binding without attempting a request', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
     const config = { get: vi.fn().mockReturnValue(undefined) };
     const service = new N8nWorkflowExecutorService(config as never);
 
     await expect(
       service.execute({ workflow: 'support', input: {}, timeoutMs: 1_000 }),
-    ).rejects.toMatchObject({ retryable: false, message: 'N8N_WEBHOOK_URL is not configured' });
+    ).rejects.toMatchObject({
+      retryable: false,
+      message: 'Automation "support" is not bound to an ACTIVE n8n connection',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 
   it('passes the stable idempotency key to n8n in headers', async () => {
@@ -91,6 +100,7 @@ describe('N8nWorkflowExecutorService', () => {
     await service.execute({
       workflow: 'support',
       input: {},
+      binding: { baseUrl: 'https://n8n.example.com', webhookPath: 'support' },
       timeoutMs: 1_000,
       idempotencyKey: 'run-1:plan-step-1:v1',
     });
@@ -127,7 +137,12 @@ describe('N8nWorkflowExecutorService', () => {
     const config = mockConfig({ N8N_MAX_RETRIES: 2 });
     const service = new N8nWorkflowExecutorService(config as never);
     await expect(
-      service.execute({ workflow: 'support', input: {}, timeoutMs: 1_000 }),
+      service.execute({
+        workflow: 'support',
+        input: {},
+        binding: { baseUrl: 'https://n8n.example.com', webhookPath: 'support' },
+        timeoutMs: 1_000,
+      }),
     ).resolves.toEqual({ result: 'ok' });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -148,7 +163,12 @@ describe('N8nWorkflowExecutorService', () => {
     const config = mockConfig({ N8N_MAX_RETRIES: 3 });
     const service = new N8nWorkflowExecutorService(config as never);
     await expect(
-      service.execute({ workflow: 'support', input: {}, timeoutMs: 1_000 }),
+      service.execute({
+        workflow: 'support',
+        input: {},
+        binding: { baseUrl: 'https://n8n.example.com', webhookPath: 'support' },
+        timeoutMs: 1_000,
+      }),
     ).rejects.toMatchObject({ retryable: false, statusCode: 400 });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -162,7 +182,12 @@ describe('N8nWorkflowExecutorService', () => {
     const config = mockConfig({ N8N_MAX_RETRIES: 2 });
     const service = new N8nWorkflowExecutorService(config as never);
     await expect(
-      service.execute({ workflow: 'support', input: {}, timeoutMs: 1_000 }),
+      service.execute({
+        workflow: 'support',
+        input: {},
+        binding: { baseUrl: 'https://n8n.example.com', webhookPath: 'support' },
+        timeoutMs: 1_000,
+      }),
     ).rejects.toMatchObject({
       name: 'N8nWorkflowError',
       message: expect.stringContaining('network down'),

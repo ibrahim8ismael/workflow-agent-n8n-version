@@ -1,5 +1,4 @@
 import { Injectable, Optional } from '@nestjs/common';
-import { N8nIntegrationRegistryService } from '../../../infrastructure/n8n/n8n-integration-registry.service';
 import { ToolManifestService } from '../../../infrastructure/tools/tool-manifest.service';
 import type { ToolManifest, ToolMode } from '../../../infrastructure/tools/tool-manifest.types';
 import type { JsonValue, ToolDefinition, ToolExecutionMode } from '../interfaces/tool.interface';
@@ -19,7 +18,6 @@ export interface ToolRegistryOptions {
 export class ToolRegistryService {
   constructor(
     private readonly manifests: ToolManifestService,
-    @Optional() private readonly n8nRegistry?: N8nIntegrationRegistryService,
     @Optional() private readonly automationResolver?: AutomationToolResolverService,
   ) {}
 
@@ -52,22 +50,7 @@ export class ToolRegistryService {
         })
       : [];
     const tools = this.mergeStableTools(staticTools, automationTools);
-    if (!this.n8nRegistry) return tools;
-    const available = await Promise.all(
-      tools.map(async (tool) => {
-        // Automation tools carry their own connection binding; availability
-        // is handled via unavailableReason, not the platform registry.
-        if (tool.executionMode !== 'n8n' || tool.binding || tool.unavailableReason) return true;
-        return (
-          await Promise.all(
-            tool.requiredIntegrations.map((integration) =>
-              this.n8nRegistry?.isAvailable(options?.organizationId, integration),
-            ),
-          )
-        ).every(Boolean);
-      }),
-    );
-    return tools.filter((_, index) => available[index]);
+    return tools;
   }
 
   private mergeStableTools(primary: ToolDefinition[], secondary: ToolDefinition[]) {

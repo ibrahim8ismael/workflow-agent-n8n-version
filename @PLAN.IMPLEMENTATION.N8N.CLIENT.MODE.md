@@ -21,7 +21,7 @@
 > - ✅ Step 13 DONE — mother doc [[@RULE.BUSINESS_MODEL.md]] v2.1 (automations replace Skills, ADR-011 runtime ownership, golden rule 9); [[@RULE.AGENT.Jaafar.md]] v2.0 vocabulary shift employee→automation (tone rules preserved); [[@RULE.ARCHITECTURE.md]] ADR-011 recorded; [[@RULE.AGENT.N8N.CALL.md]] v2.0 header note; new [[@RULE.AUTOMATIONS.md]] (canonical automation rules).
 > - ✅ Open Q1 RESOLVED — Inbound Channel Gateway ships as an installable template (`docs/workflows/inbound_channel_workflow.json`); `n8n-workflow-sync.service.*` deleted (boot-sync, default skills, platform-n8n auto-provisioning all removed). No platform-owned n8n remains anywhere.
 > - ✅ Drop migration prepared — `prisma/migrations/20260829000000_drop_skills_tables/migration.sql` (hand-written; ⚠️ apply ONLY after staging cutover verification, together with removing the deprecated models from `prisma/schema.prisma`). Models marked `@deprecated` in schema.
-> - ⏳ Post-cutover: apply migrations to live DB; executor env-fallback removal; run drop migration in the same release as the schema model removal.
+> - ✅ Post-cutover (env fallback) DONE — executor env-fallback removed (2026-09-01): no `binding` → non-retryable error; `N8nIntegrationRegistryService` deleted; deprecated `N8N_*` env keys removed from schema + `.env`/`.env.example`; boot fails if they are still set. Remaining: apply migrations to live DB; run drop migration in the same release as the schema model removal.
 
 ---
 

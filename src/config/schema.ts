@@ -73,18 +73,10 @@ export const configSchema = z.object({
   JAAFAR_RUNTIME_ENABLED: z.coerce.boolean().default(true),
   JAAFAR_RUNTIME_KILL_SWITCH: z.coerce.boolean().default(false),
   JAAFAR_RUNTIME_INTERNAL_ONLY: z.coerce.boolean().default(false),
-  /** @deprecated Platform-global n8n — superseded by client-provided connections (@PLAN.N8N.CLIENT.MODE.md). Warned at boot; removed after cutover. */
-  N8N_BASE_URL: z.string().url().optional(),
-  /** @deprecated Platform-global n8n — superseded by client-provided connections. Warned at boot; removed after cutover. */
-  N8N_WEBHOOK_URL: z.string().url().optional(),
-  /** @deprecated Platform-global n8n — superseded by client-provided connections. Warned at boot; removed after cutover. */
-  N8N_API_URL: z.string().url().optional(),
-  /** @deprecated Platform-global n8n — superseded by client-provided connections. Warned at boot; removed after cutover. */
-  N8N_API_KEY: z.string().optional(),
+  // Workflow engine tunables. n8n instances connect per-user (own domain +
+  // API key) via POST /api/v1/integrations/n8n — no platform-global config.
   N8N_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   N8N_MAX_RETRIES: z.coerce.number().int().min(0).default(3),
-  /** @deprecated Platform-global workflow map — superseded by ACTIVE Automation rows. Warned at boot; removed after cutover. */
-  N8N_WORKFLOW_MAP: z.string().optional(),
 
   /**
    * AES-256-GCM key (base64, 32 bytes) for encrypting client integration

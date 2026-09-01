@@ -134,7 +134,25 @@ Atomic unit — Jaafar never without a working design flow.
   (hand-written; apply ONLY after staging cutover verification, together with
   removing the deprecated `Skill`/`AgentSkill` models from `prisma/schema.prisma`)
 
+# Phase 6 — Runtime cutover (executor env-fallback removal)
+> 2026-09-01
+
+- `N8nWorkflowExecutorService`: executions without a client `binding` are
+  rejected with a non-retryable `N8nWorkflowError` — the platform-global env
+  path (`N8N_WEBHOOK_URL` dual-read) is gone. Per-user connections
+  (`POST /api/v1/integrations/n8n` with the user's own n8n domain + API key)
+  are the only n8n access path (ADR-011 cutover complete).
+- Deleted `n8n-integration-registry.service.*` (`N8N_WORKFLOW_MAP` registry)
+  + its no-op availability filter in `ToolRegistryService.listForAgent`.
+- Config: removed `N8N_BASE_URL/WEBHOOK_URL/API_URL/API_KEY/WORKFLOW_MAP`
+  from `schema.ts`; `validation.ts` now **fails boot** if any of these keys is
+  still set (kept `N8N_TIMEOUT_MS/MAX_RETRIES` as tunables). Purged the keys
+  (incl. the hardcoded API key) from `.env`/`.env.example`. ⚠️ Rotate any n8n
+  API key that lived in env files — treat it as exposed.
+- Tests: executor spec rewritten around bindings (legacy-env cases dropped,
+  no-binding rejection added); legacy env-path slice removed from
+  `n8n-vertical-slice.spec.ts` (client-managed slice retained).
+
 # Not done (post-cutover)
 - Apply migrations to a reachable Postgres (client n8n tables + drop migration)
-- Executor env-fallback removal (dual-read until staging cutover verified)
 - Skill/AgentSkill model removal from schema.prisma (same release as drop migration)
