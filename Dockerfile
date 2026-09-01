@@ -22,8 +22,8 @@ COPY --from=build /app/src/infrastructure/tools/tools.json ./dist/infrastructure
 RUN chown -R woops:woops /app
 USER woops
 
-EXPOSE 3000
+EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD wget -qO- http://localhost:3000/api/v1/health || exit 1
+  CMD wget -qO- http://127.0.0.1:4000/api/v1/health || exit 1
 
 CMD ["node", "dist/main.js"]

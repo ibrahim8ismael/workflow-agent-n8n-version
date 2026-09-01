@@ -86,7 +86,7 @@ services:
       SMTP_PASS: ''
 
     ports:
-      - ${PORT:-3000}:${PORT:-3000}
+      - ${PORT:-4000}:${PORT:-4000}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -97,7 +97,7 @@ services:
       mailpit:
         condition: service_healthy
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://localhost:${PORT:-3000}/api/v1/health || exit 1']
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:$${PORT:-4000}/api/v1/health || exit 1']
       interval: 10s
       timeout: 5s
       retries: 5
