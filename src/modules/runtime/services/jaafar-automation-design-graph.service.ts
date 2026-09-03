@@ -16,6 +16,7 @@ import {
 import { AutomationsService } from '../../automations/services/automations.service';
 import { ConversationsService } from '../../conversations/services/conversations.service';
 import { RunsService } from '../../runs/runs.service';
+import type { PendingQuestionContext } from '../types/runtime-contract.types';
 import {
   type AutomationDesignSession,
   AutomationDesignSessionService,
@@ -33,6 +34,8 @@ export interface JaafarAutomationDesignGraphInput {
   organizationId?: string;
   effort?: 'low' | 'medium' | 'high';
   mode?: string;
+  /** Prior-turn follow-up (previous request + unanswered question). */
+  pendingContext?: PendingQuestionContext;
 }
 
 export interface AutomationDesignApprovalDecision {
@@ -219,6 +222,21 @@ export class JaafarAutomationDesignGraphService {
       .addNode('collect_requirements', async (state) => {
         if (!state.context) throw new Error('Automation design context was not loaded');
         const history = state.context.history;
+        // The prior turn may live only in the previous WAITING run (clarification
+        // turns persist nothing). Surface it ephemerally so requirements already
+        // given (goal, trigger) are not asked for again.
+        const pending = state.input.pendingContext;
+        const priorExchange: Array<{ role: 'user' | 'assistant'; content: string }> =
+          pending?.priorUserMessage || pending?.question
+            ? [
+                ...(pending?.priorUserMessage
+                  ? [{ role: 'user' as const, content: pending.priorUserMessage }]
+                  : []),
+                ...(pending?.question
+                  ? [{ role: 'assistant' as const, content: pending.question }]
+                  : []),
+              ]
+            : [];
         const context = await this.contextBuilder.build({
           systemPrompt: [
             JAAFAR_IDENTITY_SYSTEM_PROMPT,
@@ -233,7 +251,7 @@ export class JaafarAutomationDesignGraphService {
           organizationId: state.input.organizationId,
           userId: state.input.userId,
           userMessage: state.input.userMessage,
-          conversationHistory: history,
+          conversationHistory: [...priorExchange, ...history],
         });
         const result = await this.llmRuntime.generateObject({
           mode: state.input.effort ?? 'medium',

@@ -5,6 +5,7 @@ import { LangGraphPostgresCheckpointerService } from '../../../infrastructure/la
 import type { JaafarModelCall } from '../types/jaafar-model.types';
 import type { JaafarPlan } from '../types/jaafar-plan.types';
 import { RuntimeMode, type RuntimeRequest } from '../types/runtime.types';
+import type { PendingQuestionContext } from '../types/runtime-contract.types';
 import { JaafarContextLoaderService } from './jaafar-context-loader.service';
 import { JaafarUnderstandingGraphService } from './jaafar-understanding-graph.service';
 
@@ -17,6 +18,8 @@ export type JaafarGraphRoute =
 
 export interface JaafarGraphInput extends RuntimeRequest {
   runId?: string;
+  /** Unanswered follow-up from a prior WAITING run in the conversation. */
+  pendingContext?: PendingQuestionContext;
 }
 
 export interface JaafarGraphOutput {
@@ -80,6 +83,7 @@ const JaafarGraphState = Annotation.Root({
     effort: 'low' | 'medium' | 'high';
     receivedAt: string;
     mode: RuntimeMode;
+    pendingContext?: PendingQuestionContext;
   }>({
     default: () => ({
       userMessage: '',
@@ -251,6 +255,9 @@ export class JaafarGraphService {
               userId: state.run.userId,
               organizationId: state.run.organizationId,
               effort: state.request.effort,
+              ...(state.request.pendingContext
+                ? { pendingContext: state.request.pendingContext }
+                : {}),
             },
           },
           state.run.runId
@@ -344,6 +351,7 @@ export class JaafarGraphService {
           effort: input.effort ?? 'medium',
           receivedAt: new Date().toISOString(),
           mode: input.mode ?? RuntimeMode.CONVERSATION,
+          ...(input.pendingContext ? { pendingContext: input.pendingContext } : {}),
         },
       },
       input.runId ? this.graphConfig(input.runId, input) : undefined,

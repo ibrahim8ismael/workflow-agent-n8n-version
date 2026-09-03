@@ -77,4 +77,28 @@ describe('JaafarRequestUnderstandingService', () => {
       clarificationQuestion: 'What outcome would you like Jaafar to help you achieve?',
     });
   });
+
+  it('includes the pending follow-up question in the prompt', async () => {
+    const llmRuntime = {
+      generateObject: vi.fn().mockResolvedValue({ object: output }),
+    };
+    const service = new JaafarRequestUnderstandingService(llmRuntime as never);
+
+    await service.understand({
+      userMessage: '+212600000000',
+      history: [],
+      pendingContext: {
+        question: 'Which number should receive the messages?',
+        priorUserMessage: 'build a WhatsApp automation',
+        intent: 'automation_design',
+      },
+    });
+
+    const prompt = vi.mocked(llmRuntime.generateObject).mock.calls[0]?.[0] as unknown as {
+      messages: Array<{ content: string }>;
+    };
+    const content = prompt.messages.map((m) => m.content).join('\n');
+    expect(content).toContain('Which number should receive the messages?');
+    expect(content).toContain('automation_design');
+  });
 });

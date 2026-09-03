@@ -8,6 +8,7 @@ function createService() {
   };
   const runs = {
     findById: vi.fn(),
+    findLatestWaitingInConversation: vi.fn().mockResolvedValue(null),
     cancel: vi.fn(),
     create: vi.fn().mockResolvedValue({ id: 'task-run' }),
     transitionStatus: vi.fn(),
@@ -160,6 +161,58 @@ describe('JaafarRuntimeService', () => {
     expect(result.runId).toBe('task-run');
     expect(conversationGraph.run).toHaveBeenCalledWith(
       expect.objectContaining({ mode: 'conversation' }),
+    );
+  });
+
+  it('attaches the pending follow-up question when a prior run is still WAITING', async () => {
+    const { service, runs, jaafarGraph } = createService();
+    runs.findLatestWaitingInConversation.mockResolvedValue({
+      id: 'prior-run',
+      userId: null,
+      organizationId: null,
+      metadata: {
+        userMessage: 'build a WhatsApp automation',
+        clarificationQuestion: 'Which number should receive the messages?',
+        intent: 'automation_design',
+      },
+    });
+    jaafarGraph.classify.mockResolvedValue({
+      understanding: { route: 'automation_design', intent: 'automation_design' },
+    });
+
+    await service.start({
+      agentId: 'agent-1',
+      userMessage: '+212600000000',
+      conversationId: 'conv-1',
+      userId: 'user-1',
+    });
+
+    expect(jaafarGraph.classify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pendingContext: expect.objectContaining({
+          question: 'Which number should receive the messages?',
+          intent: 'automation_design',
+        }),
+      }),
+    );
+  });
+
+  it('omits pending context when nothing is waiting', async () => {
+    const { service, runs, jaafarGraph } = createService();
+    runs.findLatestWaitingInConversation.mockResolvedValue(null);
+    jaafarGraph.classify.mockResolvedValue({
+      understanding: { route: 'general_question', intent: 'general_question' },
+    });
+
+    await service.start({
+      agentId: 'agent-1',
+      userMessage: 'hello',
+      conversationId: 'conv-1',
+      userId: 'user-1',
+    });
+
+    expect(jaafarGraph.classify).toHaveBeenCalledWith(
+      expect.not.objectContaining({ pendingContext: expect.anything() }),
     );
   });
 
@@ -378,5 +431,32 @@ describe('JaafarRuntimeService', () => {
     const result = await service.confirmAutomationDesign('task-run', { userId: 'user-1' });
 
     expect(result.status).toBe('FAILED');
+  });
+
+  it('explains that a conversation run has no blueprint to confirm', async () => {
+    const { service, runs } = createService();
+    runs.findById.mockResolvedValue({
+      status: 'COMPLETED',
+      metadata: { runtimeMode: 'conversation' },
+    });
+
+    const result = await service.confirmAutomationDesign('task-run', { userId: 'user-1' });
+
+    expect(result.status).toBe('FAILED');
+    expect(result.response).toContain('not an automation design');
+    expect(result.error?.code).toBe('INVALID_REQUEST');
+  });
+
+  it('points execution WAITING runs at the approve endpoint', async () => {
+    const { service, runs } = createService();
+    runs.findById.mockResolvedValue({
+      status: 'WAITING',
+      metadata: { runtimeMode: 'execution', executionGraphInput: { plan: {} } },
+    });
+
+    const result = await service.confirmAutomationDesign('task-run', { userId: 'user-1' });
+
+    expect(result.status).toBe('FAILED');
+    expect(result.response).toContain('/runs/:id/approve');
   });
 });

@@ -7,6 +7,7 @@ import type { JaafarRuntimeServiceContract } from '../interfaces/jaafar-runtime.
 import { RuntimeMode, type RuntimeRequest } from '../types/runtime.types';
 import type {
   ApprovalDecision,
+  PendingQuestionContext,
   RuntimeErrorCode,
   RuntimeEvent,
   RuntimeResult,
@@ -73,7 +74,12 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       await this.runs.transitionStatus(run.id, 'PREPARING');
       await this.runs.transitionStatus(run.id, 'PLANNING');
 
-      const graphInput = { ...runtimeRequest, runId: run.id };
+      const pendingContext = await this.loadPendingContext(runtimeRequest, run.id);
+      const graphInput = {
+        ...runtimeRequest,
+        runId: run.id,
+        ...(pendingContext ? { pendingContext } : {}),
+      };
       let understood: JaafarGraphOutput;
       try {
         understood = await this.jaafarGraph.classify(graphInput);
@@ -139,6 +145,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           userId: runtimeRequest.userId,
           organizationId: runtimeRequest.organizationId,
           effort: runtimeRequest.effort,
+          ...(pendingContext ? { pendingContext } : {}),
         };
         const result = (await this.automationDesignGraph
           .build()
@@ -338,7 +345,12 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       await this.runs.transitionStatus(run.id, 'PREPARING');
       await this.runs.transitionStatus(run.id, 'PLANNING');
 
-      const graphInput = { ...runtimeRequest, runId: run.id };
+      const pendingContext = await this.loadPendingContext(runtimeRequest, run.id);
+      const graphInput = {
+        ...runtimeRequest,
+        runId: run.id,
+        ...(pendingContext ? { pendingContext } : {}),
+      };
       let understood: JaafarGraphOutput;
       try {
         understood = await this.jaafarGraph.classify(graphInput);
@@ -375,6 +387,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           userId: runtimeRequest.userId,
           organizationId: runtimeRequest.organizationId,
           effort: runtimeRequest.effort,
+          ...(pendingContext ? { pendingContext } : {}),
         };
         const stream = await this.automationDesignGraph.build().stream(
           { input: automationInput },
@@ -687,7 +700,37 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       }
     }
 
-    return this.failure(runId, 'This run cannot be confirmed.');
+    if (!isAutomationDesign) {
+      const mode =
+        ((run.metadata as Record<string, unknown> | null)?.runtimeMode as string) ?? 'unknown';
+      return {
+        runId,
+        status: 'FAILED',
+        response:
+          `This run is a "${mode}" run, not an automation design — there is no blueprint to confirm. ` +
+          (run.status === 'WAITING' && mode === String(RuntimeMode.EXECUTION)
+            ? 'Use POST /runs/:id/approve to approve the pending execution instead.'
+            : 'Describe the automation you want to build and Jaafar will prepare a design for approval.'),
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        error: {
+          code: 'INVALID_REQUEST' as RuntimeErrorCode,
+          message: `Run ${runId} is not an automation design run (mode=${mode}, status=${run.status})`,
+          retryable: false,
+        },
+      };
+    }
+
+    return {
+      runId,
+      status: 'FAILED',
+      response: `This automation design is no longer waiting for approval (status=${run.status}). Send a new message to start another design.`,
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      error: {
+        code: 'INVALID_REQUEST' as RuntimeErrorCode,
+        message: `Run ${runId} cannot be confirmed from status ${run.status}`,
+        retryable: false,
+      },
+    };
   }
 
   private async executeGraphBranch(
@@ -1083,6 +1126,51 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       ((!run.userId || run.userId === scope.userId) &&
         (!run.organizationId || run.organizationId === scope.organizationId))
     );
+  }
+
+  /**
+   * Unanswered follow-up from the latest still-WAITING run in the same
+   * conversation (scope-checked). Short replies arrive with no conversation
+   * history when clarification turns persist nothing — this keeps the
+   * original intent across turns. Never throws: classification must proceed
+   * even when the lookup fails.
+   */
+  private async loadPendingContext(
+    request: RuntimeRequest,
+    currentRunId: string,
+  ): Promise<PendingQuestionContext | undefined> {
+    try {
+      if (!request.conversationId) return undefined;
+      const pending = await this.runs.findLatestWaitingInConversation(
+        request.conversationId,
+        currentRunId,
+      );
+      if (!pending) return undefined;
+      if (
+        !this.matchesScope(pending, {
+          userId: request.userId,
+          organizationId: request.organizationId,
+        })
+      ) {
+        return undefined;
+      }
+      const metadata = (pending.metadata as Record<string, unknown> | null) ?? {};
+      const question =
+        typeof metadata.clarificationQuestion === 'string' && metadata.clarificationQuestion
+          ? metadata.clarificationQuestion
+          : undefined;
+      if (!question) return undefined;
+      const priorUserMessage =
+        typeof metadata.userMessage === 'string' ? metadata.userMessage : undefined;
+      const intent = typeof metadata.intent === 'string' ? metadata.intent : undefined;
+      return {
+        question,
+        ...(priorUserMessage ? { priorUserMessage } : {}),
+        ...(intent ? { intent } : {}),
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   private isAutomationDesignRun(run: { metadata: unknown }): boolean {

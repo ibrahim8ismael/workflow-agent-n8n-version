@@ -55,6 +55,18 @@ export interface RuntimeScope {
   organizationId?: string;
 }
 
+/**
+ * Unanswered follow-up from a previous WAITING run in the same conversation.
+ * Short user replies ("+2126…", "hello from Jaafar") are classified in a
+ * vacuum when clarification turns leave no conversation history — attaching
+ * the pending question keeps the original intent across turns.
+ */
+export interface PendingQuestionContext {
+  question: string;
+  priorUserMessage?: string;
+  intent?: string;
+}
+
 export interface StartRunRequest extends RuntimeScope {
   userMessage: string;
   agentId: string;
