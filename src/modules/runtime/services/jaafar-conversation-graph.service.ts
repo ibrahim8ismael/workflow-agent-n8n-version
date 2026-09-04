@@ -8,6 +8,7 @@ import { buildConversationSystemPrompt } from '../../../infrastructure/prompts/s
 import { ConversationsService } from '../../conversations/services/conversations.service';
 import { RunsService } from '../../runs/runs.service';
 import { runtimeUserErrorMessage } from '../shared/runtime-user-message';
+import { stripThinkTags, ThinkTagFilter } from '../shared/think-tags';
 import { RuntimeMode, type RuntimeRequest } from '../types/runtime.types';
 import { ContextBuilderService } from './context-builder.service';
 import { JaafarContextLoaderService } from './jaafar-context-loader.service';
@@ -95,7 +96,7 @@ export class JaafarConversationGraphService {
         conversationId: request.conversationId,
         mode: 'conversation',
         status: 'COMPLETED',
-        response: result.response ?? '',
+        response: stripThinkTags(result.response ?? ''),
         usage: result.usage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
         execution: result.execution,
       };
@@ -156,6 +157,7 @@ export class JaafarConversationGraphService {
       let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
       const modelStartedAt = Date.now();
       let recordedFirstToken = false;
+      const thinkFilter = new ThinkTagFilter();
       const stream = this.llmRuntime.generateStream({
         mode: request.effort ?? 'medium',
         timeoutMs: 20_000,
@@ -169,15 +171,19 @@ export class JaafarConversationGraphService {
       });
       for await (const chunk of stream) {
         if (chunk.type === 'text' && chunk.content) {
-          if (!recordedFirstToken) {
+          const safe = thinkFilter.push(chunk.content);
+          if (!recordedFirstToken && safe) {
             this.observability?.recordFirstToken(Date.now() - modelStartedAt);
             recordedFirstToken = true;
           }
-          response += chunk.content;
-          yield { type: 'token', runId: run.id, content: chunk.content };
+          response += safe;
+          if (safe) {
+            yield { type: 'token', runId: run.id, content: safe };
+          }
         }
         if (chunk.type === 'finish') usage = chunk.usage ?? usage;
       }
+      response += thinkFilter.flush();
       if (typeof this.runs.recordModelUsage === 'function') {
         await this.runs.recordModelUsage(run.id, usage);
       } else {
@@ -244,7 +250,11 @@ export class JaafarConversationGraphService {
           temperature: 0.7,
           maxTokens: 1200,
         });
-        return { response: result.content, usage: result.usage, execution: result.execution };
+        return {
+          response: stripThinkTags(result.content),
+          usage: result.usage,
+          execution: result.execution,
+        };
       })
       .addNode('persist_response', async (state) => {
         if (!state.response) throw new Error('Conversation response was not generated');

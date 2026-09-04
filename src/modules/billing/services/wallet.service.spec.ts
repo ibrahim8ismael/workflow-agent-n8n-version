@@ -54,10 +54,11 @@ describe('WalletService', () => {
   });
 
   describe('getBalance', () => {
-    it('should return the wallet when found', async () => {
+    it('should return the wallet with BigInt fields serialized to numbers', async () => {
       const result = await service.getBalance('wallet-1');
 
-      expect(result).toMatchObject({ id: 'wallet-1', balanceCredits: 1000n });
+      expect(result).toMatchObject({ id: 'wallet-1', balanceCredits: 1000 });
+      expect(JSON.stringify(result)).toContain('"balanceCredits":1000');
     });
 
     it('should throw when the wallet does not exist', async () => {
@@ -206,6 +207,17 @@ describe('WalletService', () => {
       await service.getTransactions('wallet-1', 10, 5);
 
       expect(mockTxRepo.findByWalletId).toHaveBeenCalledWith('wallet-1', 10, 5);
+    });
+
+    it('should serialize BigInt fields in transactions', async () => {
+      vi.mocked(mockTxRepo.findByWalletId).mockResolvedValue([
+        { id: 'tx-1', amountCredits: -10n, balanceBefore: 1000n, balanceAfter: 990n },
+      ] as never);
+
+      const result = await service.getTransactions('wallet-1');
+
+      expect(JSON.stringify(result)).toContain('"amountCredits":-10');
+      expect(result[0]).toMatchObject({ id: 'tx-1', balanceAfter: 990 });
     });
 
     it('should delegate freeze and unfreeze', async () => {

@@ -99,9 +99,14 @@ function createService() {
       modelCalls: [],
     }),
   };
+  const conversations = {
+    addMessage: vi.fn().mockResolvedValue(undefined),
+    titleFromFirstMessage: vi.fn().mockResolvedValue(undefined),
+  };
   const service = new JaafarRuntimeService(
     runtime as never,
     runs as never,
+    conversations as never,
     automationDesignGraph as never,
     executionGraph as never,
     conversationGraph as never,
@@ -111,6 +116,7 @@ function createService() {
     service,
     runtime,
     runs,
+    conversations,
     automationDesignGraph,
     understandingGraph,
     executionGraph,
@@ -321,6 +327,86 @@ describe('JaafarRuntimeService', () => {
     expect(events[2]).toMatchObject({ payload: { content: 'Hello' } });
   });
 
+  it('streams the clarification question as content and persists the turn', async () => {
+    const { service, runs, conversations, conversationGraph, jaafarGraph } = createService();
+    jaafarGraph.classify.mockResolvedValue({
+      understanding: {
+        route: 'clarification',
+        intent: 'automation_design',
+        clarificationQuestion: 'Which number should receive the messages?',
+        missingInputs: [],
+      },
+    });
+
+    const events = [];
+    for await (const event of service.stream({
+      agentId: 'agent-1',
+      userMessage: 'yeah create it',
+      conversationId: 'conv-1',
+      userId: 'user-1',
+    })) {
+      events.push(event);
+    }
+
+    expect(events[0]).toMatchObject({
+      type: 'token',
+      payload: { content: 'Which number should receive the messages?' },
+    });
+    expect(events.at(-1)?.type).toBe('run.waiting');
+    expect(runs.updateMetadata).toHaveBeenCalledWith(
+      'task-run',
+      expect.objectContaining({
+        clarificationQuestion: 'Which number should receive the messages?',
+      }),
+    );
+    expect(runs.transitionStatus).toHaveBeenCalledWith('task-run', 'WAITING');
+    expect(conversations.addMessage).toHaveBeenCalledTimes(2);
+    expect(runs.cancel).not.toHaveBeenCalled();
+    expect(conversationGraph.stream).not.toHaveBeenCalled();
+  });
+
+  it('cancels the orchestration run when the classifier fails before degrading to conversation', async () => {
+    const { service, runs, conversationGraph, jaafarGraph } = createService();
+    jaafarGraph.classify.mockRejectedValue(new Error('provider down'));
+
+    const events = [];
+    for await (const event of service.stream({ agentId: 'agent-1', userMessage: 'hello' })) {
+      events.push(event);
+    }
+
+    expect(runs.cancel).toHaveBeenCalledWith('task-run');
+    expect(events.map((event) => event.type)).toContain('run.completed');
+    expect(conversationGraph.stream).toHaveBeenCalled();
+  });
+
+  it('parks automation design runs in WAITING when the design graph interrupts for approval', async () => {
+    const { service, runs, automationDesignGraph, jaafarGraph } = createService();
+    jaafarGraph.classify.mockResolvedValue({
+      understanding: { route: 'automation_design', intent: 'automation_design' },
+    });
+    automationDesignGraph.build.mockReturnValue({
+      invoke: vi.fn(),
+      stream: vi.fn().mockReturnValue(
+        (async function* () {
+          yield { await_approval: { __interrupt__: 'automation_design_approval' } };
+        })(),
+      ),
+    });
+
+    const events = [];
+    for await (const event of service.stream({
+      agentId: 'agent-1',
+      userMessage: 'build it',
+      conversationId: 'conv-1',
+      userId: 'user-1',
+    })) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => event.type)).toContain('run.waiting');
+    expect(runs.transitionStatus).toHaveBeenCalledWith('task-run', 'WAITING');
+  });
+
   it('streams explicit execution runs through the task graph', async () => {
     const { service, runs, jaafarGraph, executionGraph } = createService();
     jaafarGraph.classify.mockResolvedValue({
@@ -445,6 +531,41 @@ describe('JaafarRuntimeService', () => {
     expect(result.status).toBe('FAILED');
     expect(result.response).toContain('not an automation design');
     expect(result.error?.code).toBe('INVALID_REQUEST');
+  });
+
+  it('tells the user to keep chatting when the design is still gathering requirements', async () => {
+    const { service, runs } = createService();
+    runs.findById.mockResolvedValue({
+      status: 'COMPLETED',
+      metadata: {
+        runtimeMode: 'automation_design',
+        designStatus: 'GATHERING_REQUIREMENTS',
+        automationDesign: { status: 'GATHERING_REQUIREMENTS' },
+      },
+    });
+
+    const result = await service.confirmAutomationDesign('task-run', { userId: 'user-1' });
+
+    expect(result.status).toBe('FAILED');
+    expect(result.response).toContain('still gathering requirements');
+  });
+
+  it('reports already-provisioned designs as done instead of asking to re-confirm', async () => {
+    const { service, runs } = createService();
+    runs.findById.mockResolvedValue({
+      status: 'COMPLETED',
+      metadata: {
+        runtimeMode: 'automation_design',
+        designStatus: 'PROVISIONED',
+        automationDesign: { status: 'PROVISIONED', automationId: 'auto-1' },
+      },
+    });
+
+    const result = await service.confirmAutomationDesign('task-run', { userId: 'user-1' });
+
+    expect(result.status).toBe('FAILED');
+    expect(result.response).toContain('already approved and provisioned');
+    expect(result.response).toContain('auto-1');
   });
 
   it('points execution WAITING runs at the approve endpoint', async () => {

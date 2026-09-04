@@ -1,7 +1,8 @@
-import { Inject, Injectable, Optional } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { LangGraphCheckpointError } from '../../../infrastructure/langgraph/langgraph-postgres-checkpointer.service';
 import { QuotaEnforcerService } from '../../billing/services/quota-enforcer.service';
 import { SubscriptionService } from '../../billing/services/subscription.service';
+import { ConversationsService } from '../../conversations/services/conversations.service';
 import { RunsService } from '../../runs/runs.service';
 import type { JaafarRuntimeServiceContract } from '../interfaces/jaafar-runtime.interface';
 import { RuntimeMode, type RuntimeRequest } from '../types/runtime.types';
@@ -39,9 +40,11 @@ import { RuntimeObservabilityService } from './runtime-observability.service';
 
 @Injectable()
 export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
+  private readonly logger = new Logger(JaafarRuntimeService.name);
   constructor(
     @Optional() @Inject(RuntimeService) private readonly runtime: RuntimeService | undefined,
     private readonly runs: RunsService,
+    private readonly conversations: ConversationsService,
     private readonly automationDesignGraph: JaafarAutomationDesignGraphService,
     private readonly executionGraph: JaafarExecutionGraphService,
     private readonly conversationGraph: JaafarConversationGraphService,
@@ -354,7 +357,12 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       let understood: JaafarGraphOutput;
       try {
         understood = await this.jaafarGraph.classify(graphInput);
-      } catch {
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(
+          `Classification failed for run ${run.id} — degrading to conversation: ${message}`,
+        );
+        await this.abandonStreamingRun(run.id, 'classifier_unavailable');
         for await (const event of this.conversationGraph.stream(runtimeRequest)) {
           yield this.mapConversationStreamEvent(event);
         }
@@ -365,7 +373,31 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       const route = understanding?.route ?? 'clarification';
 
       if (route === 'clarification' || !understanding) {
+        const question =
+          understanding?.clarificationQuestion ??
+          'What outcome would you like Jaafar to help you achieve?';
+        await this.runs.updateMetadata(run.id, {
+          intent: understanding?.intent,
+          missingInputs: understanding?.missingInputs,
+          clarificationQuestion: question,
+        });
         await this.runs.transitionStatus(run.id, 'WAITING');
+        if (runtimeRequest.conversationId) {
+          await this.persistClarificationTurn(
+            runtimeRequest.conversationId,
+            runtimeRequest.userMessage,
+            question,
+          );
+        }
+        // Surface the question as content — the SSE client only renders
+        // token/run.completed payloads; a bare run.waiting would look like
+        // Jaafar froze mid-answer.
+        yield {
+          type: 'token',
+          runId: run.id,
+          occurredAt: new Date().toISOString(),
+          payload: { content: question },
+        };
         yield {
           type: 'run.waiting',
           runId: run.id,
@@ -404,6 +436,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
               event.type === 'run.waiting' ||
               event.type === 'run.failed' ||
               event.type === 'run.cancelled';
+            await this.applyTerminalStreamStatus(event);
             await this.recordEvent(event);
             if (terminal) await this.recordBilling(event.runId);
             yield event;
@@ -413,6 +446,9 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       }
 
       if (route === 'conversation' || route === 'general_question') {
+        // The conversation graph creates and streams through its OWN run —
+        // park ours as superseded so PLANNING rows don't pile up forever.
+        await this.abandonStreamingRun(run.id, 'superseded_by_conversation_run');
         for await (const event of this.conversationGraph.stream(runtimeRequest)) {
           const mapped = this.mapConversationStreamEvent(event);
           terminal =
@@ -453,6 +489,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           mapped.type === 'run.waiting' ||
           mapped.type === 'run.failed' ||
           mapped.type === 'run.cancelled';
+        await this.applyTerminalStreamStatus(mapped);
         await this.recordEvent(mapped);
         if (terminal) await this.recordBilling(mapped.runId);
         yield mapped;
@@ -720,14 +757,37 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       };
     }
 
+    const metadata = (run.metadata as Record<string, unknown> | null) ?? {};
+    const designSession = metadata.automationDesign as
+      | { status?: string; automationId?: string }
+      | undefined;
+    const designStatus =
+      (metadata.designStatus as string | undefined) ?? designSession?.status ?? undefined;
+
+    let reason: string;
+    if (designStatus === 'GATHERING_REQUIREMENTS') {
+      reason =
+        'Jaafar is still gathering requirements for this design — answer his questions in the chat and he will prepare the blueprint for approval.';
+    } else if (designStatus === 'PROVISIONED' || designSession?.automationId) {
+      reason = `This design was already approved and provisioned (automation ${designSession?.automationId ?? 'unknown'}). It is live in your n8n — nothing left to confirm.`;
+    } else if (
+      run.status === 'COMPLETED' ||
+      run.status === 'CANCELLED' ||
+      run.status === 'FAILED'
+    ) {
+      reason = `This automation design is no longer waiting for approval (status=${run.status}). Send a new message to start another design.`;
+    } else {
+      reason = `This automation design is not ready to confirm (status=${run.status}).`;
+    }
+
     return {
       runId,
       status: 'FAILED',
-      response: `This automation design is no longer waiting for approval (status=${run.status}). Send a new message to start another design.`,
+      response: reason,
       usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       error: {
         code: 'INVALID_REQUEST' as RuntimeErrorCode,
-        message: `Run ${runId} cannot be confirmed from status ${run.status}`,
+        message: `Run ${runId} cannot be confirmed from status ${run.status} (designStatus=${designStatus ?? 'none'})`,
         retryable: false,
       },
     };
@@ -974,6 +1034,23 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     const events: RuntimeEvent[] = [];
     const occurredAt = new Date().toISOString();
 
+    const pushApprovalWait = (): void => {
+      events.push({
+        type: 'approval.required',
+        runId,
+        occurredAt,
+        payload: { reason: 'Automation design requires approval before provisioning.' },
+      });
+      events.push({ type: 'run.waiting', runId, occurredAt, payload: { reason: 'approval' } });
+    };
+
+    // LangGraph surfaces interrupts as a top-level __interrupt__ entry in the
+    // updates stream (not always as the interrupting node's update).
+    if (this.isInterrupted(update)) {
+      pushApprovalWait();
+      return events;
+    }
+
     for (const [node, value] of Object.entries(update)) {
       const state = (value ?? {}) as Record<string, unknown> & { __interrupt__?: unknown };
 
@@ -981,13 +1058,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
         (node === 'await_approval' || node === 'provision_automation') &&
         (state.__interrupt__ || this.isInterrupted(state))
       ) {
-        events.push({
-          type: 'approval.required',
-          runId,
-          occurredAt,
-          payload: { reason: 'Automation design requires approval before provisioning.' },
-        });
-        events.push({ type: 'run.waiting', runId, occurredAt, payload: { reason: 'approval' } });
+        pushApprovalWait();
       } else if (node === 'provision_automation' && state.response) {
         events.push({
           type: 'run.completed',
@@ -1003,6 +1074,13 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           },
         });
       } else if (node === 'persist_design_turn' && state.response) {
+        const sessionStatus = (state.session as { status?: string } | undefined)?.status;
+        if (sessionStatus === 'READY_FOR_REVIEW') {
+          // Ready designs continue into await_approval — the interrupt event
+          // below carries the waiting state; emitting run.completed here would
+          // close the run before the user can approve.
+          continue;
+        }
         events.push({
           type: 'run.completed',
           runId,
@@ -1126,6 +1204,63 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       ((!run.userId || run.userId === scope.userId) &&
         (!run.organizationId || run.organizationId === scope.organizationId))
     );
+  }
+
+  /**
+   * Park a streaming run that will not drive its own lifecycle because the
+   * conversation graph streams through a run it creates itself (or the
+   * classifier failed and we degraded). Best-effort: the fallback must never
+   * be blocked by bookkeeping.
+   */
+  private async abandonStreamingRun(runId: string, reason: string): Promise<void> {
+    try {
+      await this.runs.updateMetadata(runId, { supersededReason: reason });
+      await this.runs.cancel(runId);
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** Mirrors terminal stream events onto the run row (SSE has no other writer). */
+  private async applyTerminalStreamStatus(event: RuntimeEvent): Promise<void> {
+    try {
+      if (event.type === 'run.waiting') {
+        await this.runs.transitionStatus(event.runId, 'WAITING');
+      } else if (event.type === 'run.completed') {
+        const response = (event.payload as { response?: string } | undefined)?.response;
+        await this.runs.complete(event.runId, response);
+      } else if (event.type === 'run.failed') {
+        const message =
+          (event.payload as { error?: { message?: string } } | undefined)?.error?.message ??
+          'Stream failed';
+        await this.runs.fail(event.runId, message);
+      } else if (event.type === 'run.cancelled') {
+        await this.runs.cancel(event.runId);
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** Persists a clarification turn so the UI history survives a refresh. */
+  private async persistClarificationTurn(
+    conversationId: string,
+    userMessage: string,
+    question: string,
+  ): Promise<void> {
+    try {
+      await this.conversations.addMessage(conversationId, {
+        role: 'user',
+        content: userMessage,
+      });
+      await this.conversations.titleFromFirstMessage(conversationId, userMessage);
+      await this.conversations.addMessage(conversationId, {
+        role: 'assistant',
+        content: question,
+      });
+    } catch {
+      /* best-effort */
+    }
   }
 
   /**

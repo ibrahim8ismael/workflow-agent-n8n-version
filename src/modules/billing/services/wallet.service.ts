@@ -5,6 +5,21 @@ import { WalletRepository } from '../repositories/wallet.repository';
 import { WalletTransactionRepository } from '../repositories/wallet-transaction.repository';
 import { BillingEventService } from './billing-event.service';
 
+type WalletRow = Record<string, unknown> & { id: string };
+
+/** BigInt columns are not JSON-serializable — map them to plain numbers. */
+function serializeWallet<T extends WalletRow>(row: T): T {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row)) {
+    out[key] = typeof value === 'bigint' ? Number(value) : value;
+  }
+  return out as T;
+}
+
+function serializeTransaction<T extends WalletRow>(tx: T): T {
+  return serializeWallet(tx);
+}
+
 @Injectable()
 export class WalletService {
   constructor(
@@ -16,7 +31,7 @@ export class WalletService {
   async getBalance(walletId: string) {
     const wallet = await this.walletRepo.findById(walletId);
     if (!wallet) throw new BadRequestException('Wallet not found');
-    return wallet;
+    return serializeWallet(wallet as unknown as WalletRow);
   }
 
   async getOrCreateWallet(entity: { userId?: string; organizationId?: string }) {
@@ -140,7 +155,8 @@ export class WalletService {
   }
 
   async getTransactions(walletId: string, limit = 50, offset = 0) {
-    return this.txRepo.findByWalletId(walletId, limit, offset);
+    const rows = (await this.txRepo.findByWalletId(walletId, limit, offset)) ?? [];
+    return rows.map((row) => serializeTransaction(row as unknown as WalletRow));
   }
 
   async freezeWallet(walletId: string) {
