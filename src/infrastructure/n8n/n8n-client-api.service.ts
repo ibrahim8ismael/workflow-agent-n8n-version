@@ -202,7 +202,13 @@ export class N8nClientApiService {
       url.hostname === 'localhost' ||
       url.hostname === '127.0.0.1' ||
       url.hostname === '::1' ||
-      url.hostname.endsWith('.localhost');
+      url.hostname.endsWith('.localhost') ||
+      // Docker Desktop host gateway — needed when the backend runs in a
+      // container and n8n runs on the host (e.g. host:7777 -> container:5678).
+      // Only bypasses the private-IP denylist outside production (see below).
+      url.hostname === 'host.docker.internal' ||
+      url.hostname === 'host.containers.internal' ||
+      this.devAllowedHosts().has(url.hostname);
     const allowPrivate = isLocalhost && !this.isProduction();
     if (url.protocol === 'http:' && !allowPrivate && this.isProduction()) {
       throw new N8nClientApiError(
@@ -234,5 +240,21 @@ export class N8nClientApiService {
 
   private isProduction(): boolean {
     return (this.config.get<string>('NODE_ENV') ?? 'development') === 'production';
+  }
+
+  /**
+   * Extra hostnames allowed to bypass the private-IP denylist outside
+   * production (e.g. Docker bridge IPs when testing). Comma-separated env
+   * `N8N_DEV_ALLOW_HOSTS`. Never consulted in production.
+   */
+  private devAllowedHosts(): Set<string> {
+    const raw = this.config.get<string>('N8N_DEV_ALLOW_HOSTS') ?? '';
+    if (typeof raw !== 'string') return new Set();
+    return new Set(
+      raw
+        .split(',')
+        .map((h) => h.trim().toLowerCase())
+        .filter(Boolean),
+    );
   }
 }

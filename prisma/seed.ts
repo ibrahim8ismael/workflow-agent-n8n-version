@@ -307,124 +307,140 @@ async function main() {
   });
   console.log('  ✓ Demo User Wallet created');
 
-  // MVP Skills
-  const searchCustomerSkill = await prisma.skill.upsert({
-    where: { slug: 'search_customer' },
-    update: {
-      executionMode: 'N8N_WORKFLOW',
-      status: 'PUBLISHED',
-      visibility: 'PUBLIC',
-    },
-    create: {
-      id: generateId(),
-      name: 'Search Customer',
-      slug: 'search_customer',
-      description: 'Search customer records, deals, and status from the CRM.',
-      category: 'CRM',
-      executionMode: 'N8N_WORKFLOW',
-      status: 'PUBLISHED',
-      visibility: 'PUBLIC',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: 'Customer name, email, or company' },
-          email: { type: 'string', description: 'Exact customer email address' },
-          customerId: { type: 'string', description: 'Unique customer identifier' },
-        },
+  // MVP Skills — guarded: skip if skills tables have been dropped (post-cutover)
+  let hasSkillsTable = false;
+  try {
+    const r = await prisma.$queryRaw<
+      Array<{ exists: boolean }>
+    >`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'skills') as exists`;
+    hasSkillsTable = Boolean(r[0]?.exists);
+  } catch {
+    hasSkillsTable = false;
+  }
+  let searchCustomerSkill: { id: string; name: string } | null = null;
+  let sendChannelMessageSkill: { id: string; name: string } | null = null;
+  let customerOrderInquirySkill: { id: string; name: string } | null = null;
+  if (hasSkillsTable) {
+    searchCustomerSkill = await prisma.skill.upsert({
+      where: { slug: 'search_customer' },
+      update: {
+        executionMode: 'N8N_WORKFLOW',
+        status: 'PUBLISHED',
+        visibility: 'PUBLIC',
       },
-      outputSchema: {
-        type: 'object',
-        properties: {
-          customerId: { type: 'string' },
-          name: { type: 'string' },
-          email: { type: 'string' },
-          plan: { type: 'string' },
-          status: { type: 'string' },
+      create: {
+        id: generateId(),
+        name: 'Search Customer',
+        slug: 'search_customer',
+        description: 'Search customer records, deals, and status from the CRM.',
+        category: 'CRM',
+        executionMode: 'N8N_WORKFLOW',
+        status: 'PUBLISHED',
+        visibility: 'PUBLIC',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Customer name, email, or company' },
+            email: { type: 'string', description: 'Exact customer email address' },
+            customerId: { type: 'string', description: 'Unique customer identifier' },
+          },
         },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            customerId: { type: 'string' },
+            name: { type: 'string' },
+            email: { type: 'string' },
+            plan: { type: 'string' },
+            status: { type: 'string' },
+          },
+        },
+        metadata: { requiredIntegrations: ['hubspot'], version: 1 },
+        organizationId: org.id,
+        userId: demoUser.id,
       },
-      metadata: { requiredIntegrations: ['hubspot'], version: 1 },
-      organizationId: org.id,
-      userId: demoUser.id,
-    },
-  });
+    });
 
-  const sendChannelMessageSkill = await prisma.skill.upsert({
-    where: { slug: 'send_channel_message' },
-    update: {
-      executionMode: 'N8N_WORKFLOW',
-      status: 'PUBLISHED',
-      visibility: 'PUBLIC',
-    },
-    create: {
-      id: generateId(),
-      name: 'Send Channel Message',
-      slug: 'send_channel_message',
-      description: 'Send outbound messaging reply to WhatsApp or Slack channel.',
-      category: 'COMMUNICATION',
-      executionMode: 'N8N_WORKFLOW',
-      status: 'PUBLISHED',
-      visibility: 'PUBLIC',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          channelType: { type: 'string' },
-          recipient: { type: 'string' },
-          content: { type: 'string' },
-        },
-        required: ['channelType', 'recipient', 'content'],
+    sendChannelMessageSkill = await prisma.skill.upsert({
+      where: { slug: 'send_channel_message' },
+      update: {
+        executionMode: 'N8N_WORKFLOW',
+        status: 'PUBLISHED',
+        visibility: 'PUBLIC',
       },
-      outputSchema: {
-        type: 'object',
-        properties: {
-          delivered: { type: 'boolean' },
-          messageId: { type: 'string' },
+      create: {
+        id: generateId(),
+        name: 'Send Channel Message',
+        slug: 'send_channel_message',
+        description: 'Send outbound messaging reply to WhatsApp or Slack channel.',
+        category: 'COMMUNICATION',
+        executionMode: 'N8N_WORKFLOW',
+        status: 'PUBLISHED',
+        visibility: 'PUBLIC',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            channelType: { type: 'string' },
+            recipient: { type: 'string' },
+            content: { type: 'string' },
+          },
+          required: ['channelType', 'recipient', 'content'],
         },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            delivered: { type: 'boolean' },
+            messageId: { type: 'string' },
+          },
+        },
+        metadata: { requiredIntegrations: ['whatsapp'], version: 1 },
+        organizationId: org.id,
+        userId: demoUser.id,
       },
-      metadata: { requiredIntegrations: ['whatsapp'], version: 1 },
-      organizationId: org.id,
-      userId: demoUser.id,
-    },
-  });
+    });
 
-  const customerOrderInquirySkill = await prisma.skill.upsert({
-    where: { slug: 'customer_order_inquiry' },
-    update: {
-      executionMode: 'N8N_WORKFLOW',
-      status: 'PUBLISHED',
-      visibility: 'PUBLIC',
-    },
-    create: {
-      id: generateId(),
-      name: 'Customer Order & Return Intelligence',
-      slug: 'customer_order_inquiry',
-      description:
-        'Look up customer CRM tier, active shipment tracking, and calculate return window eligibility.',
-      category: 'CRM',
-      executionMode: 'N8N_WORKFLOW',
-      status: 'PUBLISHED',
-      visibility: 'PUBLIC',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          email: { type: 'string', description: 'Customer email address' },
-          orderId: { type: 'string', description: 'Optional order identifier' },
-          query: { type: 'string', description: 'Customer inquiry' },
-        },
+    customerOrderInquirySkill = await prisma.skill.upsert({
+      where: { slug: 'customer_order_inquiry' },
+      update: {
+        executionMode: 'N8N_WORKFLOW',
+        status: 'PUBLISHED',
+        visibility: 'PUBLIC',
       },
-      outputSchema: {
-        type: 'object',
-        properties: {
-          customer: { type: 'object' },
-          activeOrder: { type: 'object' },
-          returnPolicy: { type: 'object' },
+      create: {
+        id: generateId(),
+        name: 'Customer Order & Return Intelligence',
+        slug: 'customer_order_inquiry',
+        description:
+          'Look up customer CRM tier, active shipment tracking, and calculate return window eligibility.',
+        category: 'CRM',
+        executionMode: 'N8N_WORKFLOW',
+        status: 'PUBLISHED',
+        visibility: 'PUBLIC',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            email: { type: 'string', description: 'Customer email address' },
+            orderId: { type: 'string', description: 'Optional order identifier' },
+            query: { type: 'string', description: 'Customer inquiry' },
+          },
         },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            customer: { type: 'object' },
+            activeOrder: { type: 'object' },
+            returnPolicy: { type: 'object' },
+          },
+        },
+        metadata: { requiredIntegrations: ['hubspot', 'shopify'], version: 1 },
+        organizationId: org.id,
+        userId: demoUser.id,
       },
-      metadata: { requiredIntegrations: ['hubspot', 'shopify'], version: 1 },
-      organizationId: org.id,
-      userId: demoUser.id,
-    },
-  });
-  console.log('  ✓ MVP Skills seeded');
+    });
+    console.log('  ✓ MVP Skills seeded');
+  } else {
+    console.log('  ⊘ skills table absent — skipping skill seed (post-cutover)');
+  }
 
   // MVP Customer Support Employee (Jaafar / Support Specialist)
   const supportEmployee = await prisma.agent.upsert({
@@ -445,46 +461,55 @@ async function main() {
     },
   });
 
-  await prisma.agentSkill.upsert({
-    where: { agentId_skillId: { agentId: supportEmployee.id, skillId: searchCustomerSkill.id } },
-    update: { enabled: true },
-    create: {
-      id: generateId(),
-      agentId: supportEmployee.id,
-      skillId: searchCustomerSkill.id,
-      name: searchCustomerSkill.name,
-      enabled: true,
-    },
-  });
+  if (
+    hasSkillsTable &&
+    searchCustomerSkill &&
+    sendChannelMessageSkill &&
+    customerOrderInquirySkill
+  ) {
+    await prisma.agentSkill.upsert({
+      where: { agentId_skillId: { agentId: supportEmployee.id, skillId: searchCustomerSkill.id } },
+      update: { enabled: true },
+      create: {
+        id: generateId(),
+        agentId: supportEmployee.id,
+        skillId: searchCustomerSkill.id,
+        name: searchCustomerSkill.name,
+        enabled: true,
+      },
+    });
 
-  await prisma.agentSkill.upsert({
-    where: {
-      agentId_skillId: { agentId: supportEmployee.id, skillId: sendChannelMessageSkill.id },
-    },
-    update: { enabled: true },
-    create: {
-      id: generateId(),
-      agentId: supportEmployee.id,
-      skillId: sendChannelMessageSkill.id,
-      name: sendChannelMessageSkill.name,
-      enabled: true,
-    },
-  });
+    await prisma.agentSkill.upsert({
+      where: {
+        agentId_skillId: { agentId: supportEmployee.id, skillId: sendChannelMessageSkill.id },
+      },
+      update: { enabled: true },
+      create: {
+        id: generateId(),
+        agentId: supportEmployee.id,
+        skillId: sendChannelMessageSkill.id,
+        name: sendChannelMessageSkill.name,
+        enabled: true,
+      },
+    });
 
-  await prisma.agentSkill.upsert({
-    where: {
-      agentId_skillId: { agentId: supportEmployee.id, skillId: customerOrderInquirySkill.id },
-    },
-    update: { enabled: true },
-    create: {
-      id: generateId(),
-      agentId: supportEmployee.id,
-      skillId: customerOrderInquirySkill.id,
-      name: customerOrderInquirySkill.name,
-      enabled: true,
-    },
-  });
-  console.log('  ✓ MVP Support AI Employee created & skills attached');
+    await prisma.agentSkill.upsert({
+      where: {
+        agentId_skillId: { agentId: supportEmployee.id, skillId: customerOrderInquirySkill.id },
+      },
+      update: { enabled: true },
+      create: {
+        id: generateId(),
+        agentId: supportEmployee.id,
+        skillId: customerOrderInquirySkill.id,
+        name: customerOrderInquirySkill.name,
+        enabled: true,
+      },
+    });
+    console.log('  ✓ MVP Support AI Employee created & skills attached');
+  } else {
+    console.log('  ✓ MVP Support AI Employee created (skills skipped)');
+  }
 
   console.log('\nSeed completed successfully!');
 }

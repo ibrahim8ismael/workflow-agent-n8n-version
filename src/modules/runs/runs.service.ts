@@ -40,6 +40,23 @@ export class RunsService {
     throw new NotFoundException(`Run with id "${id}" not found`);
   }
 
+  /**
+   * Latest still-WAITING run in a conversation (excluding one id) — used to
+   * carry an unanswered follow-up question into the next turn's
+   * classification. Returns null when nothing is pending.
+   */
+  async findLatestWaitingInConversation(
+    conversationId: string,
+    excludeRunId?: string,
+  ): Promise<Run | null> {
+    const waiting = await this.runsRepository.findMany({
+      where: { conversationId, status: 'WAITING' as never },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+    });
+    return waiting.find((run) => run.id !== excludeRunId) ?? null;
+  }
+
   async findByAgent(
     agentId: string,
     options?: { limit?: number; status?: string },
@@ -128,21 +145,21 @@ export class RunsService {
     });
   }
 
-  async claimEmployeeCreation(id: string): Promise<boolean> {
+  async claimAutomationCreation(id: string): Promise<boolean> {
     const run = await this.findById(id);
     const currentMetadata = (run.metadata as Record<string, unknown> | null) ?? {};
-    const isEmployeeDesign =
-      currentMetadata.runtimeMode === 'employee_design' ||
-      Boolean(currentMetadata.employeeDesign) ||
+    const isAutomationDesign =
+      currentMetadata.runtimeMode === 'automation_design' ||
+      Boolean(currentMetadata.automationDesign) ||
       Boolean(currentMetadata.blueprint);
-    if (!isEmployeeDesign || currentMetadata.designStatus !== 'READY_FOR_REVIEW') {
+    if (!isAutomationDesign || currentMetadata.designStatus !== 'READY_FOR_REVIEW') {
       return false;
     }
 
-    return this.runsRepository.claimEmployeeCreation(id, run.version, {
+    return this.runsRepository.claimAutomationCreation(id, run.version, {
       ...currentMetadata,
-      runtimeMode: 'employee_design',
-      approvalStatus: 'CREATING',
+      runtimeMode: 'automation_design',
+      approvalStatus: 'PROVISIONING',
     });
   }
 

@@ -2,7 +2,7 @@ export type ExecutionMode = 'low' | 'medium' | 'high';
 
 export type RuntimeIntent =
   | 'conversation'
-  | 'employee_design'
+  | 'automation_design'
   | 'task_execution'
   | 'general_question';
 
@@ -55,12 +55,24 @@ export interface RuntimeScope {
   organizationId?: string;
 }
 
+/**
+ * Unanswered follow-up from a previous WAITING run in the same conversation.
+ * Short user replies ("+2126…", "hello from Jaafar") are classified in a
+ * vacuum when clarification turns leave no conversation history — attaching
+ * the pending question keeps the original intent across turns.
+ */
+export interface PendingQuestionContext {
+  question: string;
+  priorUserMessage?: string;
+  intent?: string;
+}
+
 export interface StartRunRequest extends RuntimeScope {
   userMessage: string;
   agentId: string;
   conversationId?: string;
   effort?: ExecutionMode;
-  mode?: 'conversation' | 'employee_design' | 'execution';
+  mode?: 'conversation' | 'automation_design' | 'execution';
 }
 
 export interface RuntimeUsage {

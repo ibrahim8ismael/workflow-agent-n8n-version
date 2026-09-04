@@ -9,9 +9,18 @@ if (!databaseUrl) {
 const config = new ConfigService({ database: { url: databaseUrl } });
 const checkpointer = new LangGraphPostgresCheckpointerService(config);
 
-try {
-  await checkpointer.setup();
-  process.stdout.write('LangGraph PostgreSQL checkpoint schema is ready.\n');
-} finally {
-  await checkpointer.onModuleDestroy();
+async function main(): Promise<void> {
+  try {
+    await checkpointer.setup();
+    process.stdout.write('LangGraph PostgreSQL checkpoint schema is ready.\n');
+  } finally {
+    await checkpointer.onModuleDestroy();
+  }
 }
+
+void main().catch((error: unknown) => {
+  process.stderr.write(
+    `Checkpoint setup failed: ${error instanceof Error ? error.message : String(error)}\n`,
+  );
+  process.exitCode = 1;
+});

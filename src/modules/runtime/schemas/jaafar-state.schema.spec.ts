@@ -12,11 +12,11 @@ const state: JaafarState = {
   },
   conversation: { history: [{ role: 'user', content: 'Create a support employee' }] },
   understanding: {
-    intent: 'employee_design',
+    intent: 'automation_design',
     requirements: ['support role'],
     missingInputs: ['channels'],
     structured: {
-      intent: 'employee_design',
+      intent: 'automation_design',
       goal: 'Create a support employee',
       businessContext: '',
       requirements: [{ field: 'role', value: 'support', required: true, source: 'user' }],

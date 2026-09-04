@@ -257,84 +257,6 @@ describe('ToolExecutorService', () => {
     });
   });
 
-  it('creates employee drafts through AgentsService and the idempotency boundary', async () => {
-    const agents = {
-      create: vi.fn().mockResolvedValue({ id: 'employee-1', name: 'Support', status: 'DRAFT' }),
-    };
-    const idempotency = { begin: vi.fn().mockResolvedValue({ key: 'key', status: 'STARTED' }) };
-    const { service, memory } = setup({ agents, idempotency });
-
-    const result = await service.execute(
-      tool({
-        id: 'employee_create_draft',
-        executionMode: 'domain',
-        sideEffect: true,
-        inputSchema: { type: 'object', required: ['blueprint'] },
-        outputSchema: { type: 'object' },
-      }),
-      request({
-        blueprint: { name: 'Support', description: 'Support employee', instructions: 'Help users' },
-      }),
-    );
-
-    expect(result).toMatchObject({ success: true, output: { id: 'employee-1' } });
-    expect(agents.create).toHaveBeenCalledWith({
-      name: 'Support',
-      description: 'Support employee',
-      instructions: 'Help users',
-      model: 'gpt-4o',
-      status: 'DRAFT',
-      userId: 'user-1',
-      organizationId: 'org-1',
-    });
-    expect(idempotency.begin).toHaveBeenCalled();
-    expect(memory.upsert).toHaveBeenCalledWith(
-      'employee-1',
-      'employee-profile',
-      'AGENT',
-      expect.stringContaining('Support'),
-      { source: 'employee-create-tool', runId: 'run-1' },
-    );
-  });
-
-  it('prepares a structured employee blueprint through the model gateway', async () => {
-    const blueprint = {
-      ready: true,
-      missingRequirements: [],
-      name: 'Support',
-      role: 'Support specialist',
-      department: 'Customer success',
-      summary: 'Helps customers',
-      responsibilities: ['Answer questions'],
-      goals: ['Improve resolution time'],
-      knowledgeRequirements: [],
-      requiredTools: [],
-      requiredIntegrations: [],
-      channels: ['widget'],
-      memoryPolicy: 'Store confirmed preferences',
-      permissions: ['Read support knowledge'],
-      workflow: ['Review request'],
-      description: 'Support employee',
-      instructions: 'Help customers',
-    };
-    const { service, llm } = setup({
-      llm: { generateObject: vi.fn().mockResolvedValue({ object: blueprint }) },
-    });
-
-    const result = await service.execute(
-      tool({
-        id: 'employee_blueprint_prepare',
-        executionMode: 'domain',
-        inputSchema: { type: 'object', required: ['requirements'] },
-        outputSchema: { type: 'object' },
-      }),
-      request({ requirements: 'Create a support employee for the widget' }),
-    );
-
-    expect(result).toMatchObject({ success: true, output: blueprint });
-    expect(llm.generateObject).toHaveBeenCalled();
-  });
-
   it('returns scoped integration and channel readiness without exposing credentials', async () => {
     const integrations = { isConnected: vi.fn().mockResolvedValue(true) };
     const channels = { isAvailable: vi.fn().mockResolvedValue(false) };
@@ -413,5 +335,53 @@ describe('ToolExecutorService', () => {
 
     expect(result.success).toBe(false);
     expect(n8n.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes the automation binding through to the executor (PLAN Step 10)', async () => {
+    const n8n = {
+      execute: vi.fn().mockResolvedValue({ synced: true }),
+    };
+    const { service } = setup();
+    (service as unknown as { n8n: unknown }).n8n = n8n;
+
+    const result = await service.execute(
+      tool({
+        id: 'invoice-sync-b7e2c1aa',
+        slug: 'invoice-sync-b7e2c1aa',
+        executionMode: 'n8n' as const,
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        binding: { baseUrl: 'https://client.example.com', webhookPath: 'invoice-sync-b7e2c1aa' },
+      }),
+      request(),
+    );
+
+    expect(result).toMatchObject({ success: true, output: { synced: true } });
+    expect(n8n.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        binding: { baseUrl: 'https://client.example.com', webhookPath: 'invoice-sync-b7e2c1aa' },
+      }),
+    );
+  });
+
+  it('returns INTEGRATION_UNAVAILABLE without executing when the automation connection is unusable', async () => {
+    const n8n = { execute: vi.fn() };
+    const { service } = setup();
+    (service as unknown as { n8n: unknown }).n8n = n8n;
+
+    const result = await service.execute(
+      tool({
+        id: 'invoice-sync-b7e2c1aa',
+        executionMode: 'n8n' as const,
+        unavailableReason: 'INTEGRATION_UNAVAILABLE' as const,
+      }),
+      request(),
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { code: 'INTEGRATION_UNAVAILABLE', retryable: false },
+    });
+    expect(n8n.execute).not.toHaveBeenCalled();
   });
 });

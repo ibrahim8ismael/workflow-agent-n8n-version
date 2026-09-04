@@ -17,9 +17,9 @@ import { JwtAuthGuard } from '../auth/guards/auth.guard';
 import { ConversationsService } from '../conversations/services/conversations.service';
 import { RunsService } from '../runs/runs.service';
 import {
-  type ConfirmEmployeeDesignDto,
-  confirmEmployeeDesignSchema,
-} from './dto/confirm-employee-design.dto';
+  type ConfirmAutomationDesignDto,
+  confirmAutomationDesignSchema,
+} from './dto/confirm-automation-design.dto';
 import { type ExecuteRunDto, executeRunSchema } from './dto/execute-run.dto';
 import { JaafarRuntimeService } from './services/jaafar-runtime.service';
 import { RuntimeMode } from './types/runtime.types';
@@ -110,12 +110,12 @@ export class RuntimeController {
   @HttpCode(HttpStatus.ACCEPTED)
   async confirm(
     @Param('id') id: string,
-    @Body() dto: ConfirmEmployeeDesignDto,
+    @Body() dto: ConfirmAutomationDesignDto,
     @CurrentUser() user: RuntimeUser,
   ) {
     const run = await this.assertRunAccess(id, user);
-    const confirmation = confirmEmployeeDesignSchema.parse(dto);
-    return this.jaafarRuntime.confirmEmployeeDesign(
+    const confirmation = confirmAutomationDesignSchema.parse(dto);
+    return this.jaafarRuntime.confirmAutomationDesign(
       run.id,
       {
         userId: user.id,

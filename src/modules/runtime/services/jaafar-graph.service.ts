@@ -5,18 +5,21 @@ import { LangGraphPostgresCheckpointerService } from '../../../infrastructure/la
 import type { JaafarModelCall } from '../types/jaafar-model.types';
 import type { JaafarPlan } from '../types/jaafar-plan.types';
 import { RuntimeMode, type RuntimeRequest } from '../types/runtime.types';
+import type { PendingQuestionContext } from '../types/runtime-contract.types';
 import { JaafarContextLoaderService } from './jaafar-context-loader.service';
 import { JaafarUnderstandingGraphService } from './jaafar-understanding-graph.service';
 
 export type JaafarGraphRoute =
   | 'conversation'
-  | 'employee_design'
+  | 'automation_design'
   | 'task_execution'
   | 'general_question'
   | 'clarification';
 
 export interface JaafarGraphInput extends RuntimeRequest {
   runId?: string;
+  /** Unanswered follow-up from a prior WAITING run in the conversation. */
+  pendingContext?: PendingQuestionContext;
 }
 
 export interface JaafarGraphOutput {
@@ -24,7 +27,7 @@ export interface JaafarGraphOutput {
   route?: JaafarGraphRoute;
   understanding?: {
     route: JaafarGraphRoute;
-    intent: 'conversation' | 'employee_design' | 'task_execution' | 'general_question';
+    intent: 'conversation' | 'automation_design' | 'task_execution' | 'general_question';
     goal: string;
     businessContext: string;
     requirements: string[];
@@ -80,6 +83,7 @@ const JaafarGraphState = Annotation.Root({
     effort: 'low' | 'medium' | 'high';
     receivedAt: string;
     mode: RuntimeMode;
+    pendingContext?: PendingQuestionContext;
   }>({
     default: () => ({
       userMessage: '',
@@ -98,7 +102,7 @@ const JaafarGraphState = Annotation.Root({
   }),
   understanding: Annotation<{
     route?: JaafarGraphRoute;
-    intent?: 'conversation' | 'employee_design' | 'task_execution' | 'general_question';
+    intent?: 'conversation' | 'automation_design' | 'task_execution' | 'general_question';
     goal?: string;
     businessContext?: string;
     requirements: string[];
@@ -235,8 +239,11 @@ export class JaafarGraphService {
         };
       })
       .addNode('understand_request', async (state: typeof JaafarGraphState.State) => {
-        if (state.request.mode === RuntimeMode.EMPLOYEE_DESIGN) {
-          return { route: 'employee_design' as const, understanding: { route: 'employee_design' } };
+        if (state.request.mode === RuntimeMode.AUTOMATION_DESIGN) {
+          return {
+            route: 'automation_design' as const,
+            understanding: { route: 'automation_design' },
+          };
         }
         const result = await this.understandingGraph.build({ durable: options.durable }).invoke(
           {
@@ -248,6 +255,9 @@ export class JaafarGraphService {
               userId: state.run.userId,
               organizationId: state.run.organizationId,
               effort: state.request.effort,
+              ...(state.request.pendingContext
+                ? { pendingContext: state.request.pendingContext }
+                : {}),
             },
           },
           state.run.runId
@@ -316,7 +326,7 @@ export class JaafarGraphService {
         {
           clarification: END,
           conversation: END,
-          employee_design: END,
+          automation_design: END,
           task_execution: 'plan_task',
           general_question: END,
         },
@@ -341,6 +351,7 @@ export class JaafarGraphService {
           effort: input.effort ?? 'medium',
           receivedAt: new Date().toISOString(),
           mode: input.mode ?? RuntimeMode.CONVERSATION,
+          ...(input.pendingContext ? { pendingContext: input.pendingContext } : {}),
         },
       },
       input.runId ? this.graphConfig(input.runId, input) : undefined,

@@ -1,8 +1,7 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { JsonValue } from '../../modules/runtime/interfaces/tool.interface';
 import { computeHmacSignature } from '../auth/inter-service-crypto';
-import { N8nIntegrationRegistryService } from './n8n-integration-registry.service';
 
 export interface N8nWorkflowRequest {
   workflow: string;
@@ -16,6 +15,19 @@ export interface N8nWorkflowRequest {
   timeoutMs?: number;
   idempotencyKey?: string;
   metadata?: Record<string, unknown>;
+  /**
+   * Per-automation binding into the CLIENT's n8n instance. Execution targets
+   * {baseUrl}/webhook/{webhookPath} with the binding's HMAC secret. Required —
+   * executions without a binding are rejected (client-managed n8n, ADR-011).
+   */
+  binding?: N8nWorkflowBinding;
+}
+
+export interface N8nWorkflowBinding {
+  baseUrl: string;
+  webhookPath: string;
+  /** Optional per-binding HMAC shared secret (same signature scheme). */
+  secret?: string;
 }
 
 export class N8nWorkflowError extends Error {
@@ -33,25 +45,24 @@ export class N8nWorkflowError extends Error {
 export class N8nWorkflowExecutorService {
   private readonly logger = new Logger(N8nWorkflowExecutorService.name);
 
-  constructor(
-    private readonly config: ConfigService,
-    @Optional() private readonly registry?: N8nIntegrationRegistryService,
-  ) {}
+  constructor(private readonly config: ConfigService) {}
 
   async execute(request: N8nWorkflowRequest): Promise<JsonValue> {
-    const webhookBase = this.config.get<string>('N8N_WEBHOOK_URL');
-    if (!webhookBase) {
-      throw new N8nWorkflowError('N8N_WEBHOOK_URL is not configured', false);
+    if (!request.binding) {
+      throw new N8nWorkflowError(
+        `Automation "${request.workflow}" is not bound to an ACTIVE n8n connection`,
+        false,
+      );
     }
 
-    const descriptor = this.registry?.resolve(request.workflow) ?? { workflow: request.workflow };
-    await this.registry?.assertAvailable(request.organizationId, descriptor.requiredIntegration);
+    const webhookBase = `${request.binding.baseUrl.replace(/\/+$/, '')}/webhook`;
+    const targetPath = `/${request.binding.webhookPath.replace(/^\/+/, '')}`;
+    const descriptor = { workflow: request.binding.webhookPath };
 
-    const targetPath = `/${descriptor.workflow.replace(/^\/+/, '')}`;
     const url = `${webhookBase.replace(/\/+$/, '')}${targetPath}`;
     const timeoutMs = request.timeoutMs ?? this.config.get<number>('N8N_TIMEOUT_MS') ?? 30_000;
     const maxRetries = this.config.get<number>('N8N_MAX_RETRIES') ?? 2;
-    const secret = this.config.get<string>('WOOPS_INTER_SERVICE_SECRET');
+    const secret = request.binding?.secret ?? this.config.get<string>('WOOPS_INTER_SERVICE_SECRET');
 
     const envelope = {
       runId: request.runId,

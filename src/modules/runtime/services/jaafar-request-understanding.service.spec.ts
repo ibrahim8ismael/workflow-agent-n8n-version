@@ -2,15 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { JaafarRequestUnderstandingService } from './jaafar-request-understanding.service';
 
 const output = {
-  intent: 'employee_design' as const,
-  goal: 'Create a support employee',
+  intent: 'automation_design' as const,
+  goal: 'Create a support automation',
   businessContext: 'Customer support',
   requirements: [{ field: 'role', value: 'support', required: true, source: 'user' as const }],
   missingInputs: [
     {
       field: 'channels',
-      description: 'Channels the employee should use',
-      question: 'Which channels should the employee use?',
+      description: 'Channels the automation should use',
+      question: 'Which channels should the automation use?',
       required: true,
     },
   ],
@@ -27,14 +27,14 @@ describe('JaafarRequestUnderstandingService', () => {
 
     await expect(
       service.understand({
-        userMessage: 'Create a support employee',
+        userMessage: 'Create a support automation',
         history: [],
         effort: 'low',
       }),
     ).resolves.toMatchObject({
       route: 'clarification',
       clarificationRequired: true,
-      clarificationQuestion: 'Which channels should the employee use?',
+      clarificationQuestion: 'Which channels should the automation use?',
     });
 
     expect(llmRuntime.generateObject).toHaveBeenCalledWith(
@@ -76,5 +76,29 @@ describe('JaafarRequestUnderstandingService', () => {
       route: 'clarification',
       clarificationQuestion: 'What outcome would you like Jaafar to help you achieve?',
     });
+  });
+
+  it('includes the pending follow-up question in the prompt', async () => {
+    const llmRuntime = {
+      generateObject: vi.fn().mockResolvedValue({ object: output }),
+    };
+    const service = new JaafarRequestUnderstandingService(llmRuntime as never);
+
+    await service.understand({
+      userMessage: '+212600000000',
+      history: [],
+      pendingContext: {
+        question: 'Which number should receive the messages?',
+        priorUserMessage: 'build a WhatsApp automation',
+        intent: 'automation_design',
+      },
+    });
+
+    const prompt = vi.mocked(llmRuntime.generateObject).mock.calls[0]?.[0] as unknown as {
+      messages: Array<{ content: string }>;
+    };
+    const content = prompt.messages.map((m) => m.content).join('\n');
+    expect(content).toContain('Which number should receive the messages?');
+    expect(content).toContain('automation_design');
   });
 });

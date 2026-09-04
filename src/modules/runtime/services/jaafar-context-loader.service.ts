@@ -14,7 +14,7 @@ export interface JaafarContextLoadRequest {
   conversationId?: string;
   userId?: string;
   organizationId?: string;
-  mode?: 'conversation' | 'planning' | 'employee_design' | 'execution';
+  mode?: 'conversation' | 'planning' | 'automation_design' | 'execution';
   readiness?: string[];
 }
 

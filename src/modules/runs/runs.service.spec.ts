@@ -25,6 +25,7 @@ describe('RunsService', () => {
     create: vi.fn(),
     findById: vi.fn(),
     findByAgent: vi.fn(),
+    findMany: vi.fn(),
     update: vi.fn(),
   } as unknown as RunsRepository;
 
@@ -33,6 +34,7 @@ describe('RunsService', () => {
     vi.mocked(mockRepo.create).mockResolvedValue(run() as never);
     vi.mocked(mockRepo.findById).mockResolvedValue(run() as never);
     vi.mocked(mockRepo.findByAgent).mockResolvedValue([run()] as never);
+    vi.mocked(mockRepo.findMany).mockResolvedValue([] as never);
     vi.mocked(mockRepo.update).mockImplementation((_id, data) =>
       Promise.resolve(run(data as never) as never),
     );
@@ -87,6 +89,30 @@ describe('RunsService', () => {
         limit: 5,
         status: 'COMPLETED',
       });
+    });
+  });
+
+  describe('findLatestWaitingInConversation', () => {
+    it('returns the newest WAITING run excluding the current one', async () => {
+      vi.mocked(mockRepo.findMany).mockResolvedValue([
+        run({ id: 'new-waiting', status: 'WAITING' }),
+        run({ id: 'old-waiting', status: 'WAITING' }),
+      ] as never);
+
+      const result = await service.findLatestWaitingInConversation('conv-1', 'new-waiting');
+
+      expect(mockRepo.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ conversationId: 'conv-1' }),
+        }),
+      );
+      expect(result?.id).toBe('old-waiting');
+    });
+
+    it('returns null when nothing is waiting', async () => {
+      vi.mocked(mockRepo.findMany).mockResolvedValue([] as never);
+
+      await expect(service.findLatestWaitingInConversation('conv-1')).resolves.toBeNull();
     });
   });
 

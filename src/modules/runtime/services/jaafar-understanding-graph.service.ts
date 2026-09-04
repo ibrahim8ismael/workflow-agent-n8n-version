@@ -5,6 +5,7 @@ import { LangGraphPostgresCheckpointerService } from '../../../infrastructure/la
 import { RunsService } from '../../runs/runs.service';
 import type { JaafarModelCall } from '../types/jaafar-model.types';
 import type { JaafarPlan } from '../types/jaafar-plan.types';
+import type { PendingQuestionContext } from '../types/runtime-contract.types';
 import { JaafarContextLoaderService } from './jaafar-context-loader.service';
 import { JaafarPlanningService } from './jaafar-planning.service';
 import {
@@ -20,6 +21,8 @@ export interface JaafarUnderstandingGraphInput {
   userId?: string;
   organizationId?: string;
   effort?: 'low' | 'medium' | 'high';
+  /** Unanswered follow-up from a prior WAITING run in the conversation. */
+  pendingContext?: PendingQuestionContext;
 }
 
 const UnderstandingGraphState = Annotation.Root({
@@ -79,6 +82,7 @@ export class JaafarUnderstandingGraphService {
           memoryReferences: state.context.memoryReferences,
           knowledgeReferences: state.context.knowledgeReferences,
           effort: state.input.effort,
+          ...(state.input.pendingContext ? { pendingContext: state.input.pendingContext } : {}),
         });
         if (state.input.runId) {
           await this.runsService.recordModelUsage?.(
@@ -123,7 +127,7 @@ export class JaafarUnderstandingGraphService {
         {
           clarification: END,
           conversation: END,
-          employee_design: END,
+          automation_design: END,
           task_execution: 'plan_task',
           general_question: END,
         },

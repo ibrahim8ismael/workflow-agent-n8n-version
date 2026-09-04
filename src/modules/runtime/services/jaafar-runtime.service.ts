@@ -1,13 +1,14 @@
-import { Inject, Injectable, Optional } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { LangGraphCheckpointError } from '../../../infrastructure/langgraph/langgraph-postgres-checkpointer.service';
 import { QuotaEnforcerService } from '../../billing/services/quota-enforcer.service';
 import { SubscriptionService } from '../../billing/services/subscription.service';
+import { ConversationsService } from '../../conversations/services/conversations.service';
 import { RunsService } from '../../runs/runs.service';
-import { EmployeeDesignRuntimeService } from '../employee-design/employee-design-runtime.service';
 import type { JaafarRuntimeServiceContract } from '../interfaces/jaafar-runtime.interface';
 import { RuntimeMode, type RuntimeRequest } from '../types/runtime.types';
 import type {
   ApprovalDecision,
+  PendingQuestionContext,
   RuntimeErrorCode,
   RuntimeEvent,
   RuntimeResult,
@@ -16,10 +17,13 @@ import type {
   StartRunRequest,
 } from '../types/runtime-contract.types';
 import {
+  type JaafarAutomationDesignGraphInput,
+  JaafarAutomationDesignGraphService,
+} from './jaafar-automation-design-graph.service';
+import {
   type ConversationGraphStreamEvent,
   JaafarConversationGraphService,
 } from './jaafar-conversation-graph.service';
-import { JaafarEmployeeDesignGraphService } from './jaafar-employee-design-graph.service';
 import {
   type ExecutionGraphStreamEvent,
   JaafarExecutionGraphService,
@@ -36,13 +40,12 @@ import { RuntimeObservabilityService } from './runtime-observability.service';
 
 @Injectable()
 export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
+  private readonly logger = new Logger(JaafarRuntimeService.name);
   constructor(
     @Optional() @Inject(RuntimeService) private readonly runtime: RuntimeService | undefined,
     private readonly runs: RunsService,
-    @Optional()
-    @Inject(EmployeeDesignRuntimeService)
-    private readonly employeeDesignRuntime: EmployeeDesignRuntimeService | undefined,
-    private readonly employeeDesignGraph: JaafarEmployeeDesignGraphService,
+    private readonly conversations: ConversationsService,
+    private readonly automationDesignGraph: JaafarAutomationDesignGraphService,
     private readonly executionGraph: JaafarExecutionGraphService,
     private readonly conversationGraph: JaafarConversationGraphService,
     private readonly jaafarGraph: JaafarGraphService,
@@ -74,7 +77,12 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       await this.runs.transitionStatus(run.id, 'PREPARING');
       await this.runs.transitionStatus(run.id, 'PLANNING');
 
-      const graphInput = { ...runtimeRequest, runId: run.id };
+      const pendingContext = await this.loadPendingContext(runtimeRequest, run.id);
+      const graphInput = {
+        ...runtimeRequest,
+        runId: run.id,
+        ...(pendingContext ? { pendingContext } : {}),
+      };
       let understood: JaafarGraphOutput;
       try {
         understood = await this.jaafarGraph.classify(graphInput);
@@ -127,12 +135,12 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
         };
       }
 
-      if (route === 'employee_design') {
+      if (route === 'automation_design') {
         await this.runs.updateMetadata(run.id, {
-          runtimeMode: RuntimeMode.EMPLOYEE_DESIGN,
+          runtimeMode: RuntimeMode.AUTOMATION_DESIGN,
         });
         await this.runs.transitionStatus(run.id, 'EXECUTING');
-        const employeeInput = {
+        const automationInput = {
           runId: run.id,
           agentId: runtimeRequest.agentId,
           userMessage: runtimeRequest.userMessage,
@@ -140,14 +148,15 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           userId: runtimeRequest.userId,
           organizationId: runtimeRequest.organizationId,
           effort: runtimeRequest.effort,
+          ...(pendingContext ? { pendingContext } : {}),
         };
-        const result = (await this.employeeDesignGraph
+        const result = (await this.automationDesignGraph
           .build()
           .invoke(
-            { input: employeeInput },
-            this.employeeDesignGraph.graphConfig(run.id, runtimeRequest),
+            { input: automationInput },
+            this.automationDesignGraph.graphConfig(run.id, runtimeRequest),
           )) as Record<string, unknown>;
-        const mapped = this.mapEmployeeDesignResult(result);
+        const mapped = this.mapDesignGraphResult(result);
         if (mapped.route === 'waiting') {
           await this.runs.transitionStatus(run.id, 'WAITING');
           await this.recordEvent({
@@ -158,7 +167,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           });
           return this.normalize({
             runId: run.id,
-            mode: RuntimeMode.EMPLOYEE_DESIGN,
+            mode: RuntimeMode.AUTOMATION_DESIGN,
             status: 'WAITING',
             response: result.response as string | undefined,
             plan: result.blueprint as unknown as Record<string, unknown>,
@@ -187,7 +196,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
         await this.recordBilling(run.id);
         return this.normalize({
           runId: run.id,
-          mode: RuntimeMode.EMPLOYEE_DESIGN,
+          mode: RuntimeMode.AUTOMATION_DESIGN,
           status: 'COMPLETED',
           response: result.response as string | undefined,
           plan: result.blueprint as unknown as Record<string, unknown>,
@@ -339,11 +348,21 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       await this.runs.transitionStatus(run.id, 'PREPARING');
       await this.runs.transitionStatus(run.id, 'PLANNING');
 
-      const graphInput = { ...runtimeRequest, runId: run.id };
+      const pendingContext = await this.loadPendingContext(runtimeRequest, run.id);
+      const graphInput = {
+        ...runtimeRequest,
+        runId: run.id,
+        ...(pendingContext ? { pendingContext } : {}),
+      };
       let understood: JaafarGraphOutput;
       try {
         understood = await this.jaafarGraph.classify(graphInput);
-      } catch {
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(
+          `Classification failed for run ${run.id} — degrading to conversation: ${message}`,
+        );
+        await this.abandonStreamingRun(run.id, 'classifier_unavailable');
         for await (const event of this.conversationGraph.stream(runtimeRequest)) {
           yield this.mapConversationStreamEvent(event);
         }
@@ -354,7 +373,31 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       const route = understanding?.route ?? 'clarification';
 
       if (route === 'clarification' || !understanding) {
+        const question =
+          understanding?.clarificationQuestion ??
+          'What outcome would you like Jaafar to help you achieve?';
+        await this.runs.updateMetadata(run.id, {
+          intent: understanding?.intent,
+          missingInputs: understanding?.missingInputs,
+          clarificationQuestion: question,
+        });
         await this.runs.transitionStatus(run.id, 'WAITING');
+        if (runtimeRequest.conversationId) {
+          await this.persistClarificationTurn(
+            runtimeRequest.conversationId,
+            runtimeRequest.userMessage,
+            question,
+          );
+        }
+        // Surface the question as content — the SSE client only renders
+        // token/run.completed payloads; a bare run.waiting would look like
+        // Jaafar froze mid-answer.
+        yield {
+          type: 'token',
+          runId: run.id,
+          occurredAt: new Date().toISOString(),
+          payload: { content: question },
+        };
         yield {
           type: 'run.waiting',
           runId: run.id,
@@ -364,11 +407,11 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
         return;
       }
 
-      if (route === 'employee_design') {
+      if (route === 'automation_design') {
         await this.runs.updateMetadata(run.id, {
-          runtimeMode: RuntimeMode.EMPLOYEE_DESIGN,
+          runtimeMode: RuntimeMode.AUTOMATION_DESIGN,
         });
-        const employeeInput = {
+        const automationInput = {
           runId: run.id,
           agentId: runtimeRequest.agentId,
           userMessage: runtimeRequest.userMessage,
@@ -376,22 +419,24 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           userId: runtimeRequest.userId,
           organizationId: runtimeRequest.organizationId,
           effort: runtimeRequest.effort,
+          ...(pendingContext ? { pendingContext } : {}),
         };
-        const stream = await this.employeeDesignGraph.build().stream(
-          { input: employeeInput },
+        const stream = await this.automationDesignGraph.build().stream(
+          { input: automationInput },
           {
-            ...this.employeeDesignGraph.graphConfig(run.id, runtimeRequest),
+            ...this.automationDesignGraph.graphConfig(run.id, runtimeRequest),
             streamMode: 'updates',
           },
         );
         for await (const update of stream) {
-          const events = this.mapEmployeeDesignEvents(run.id, update as Record<string, unknown>);
+          const events = this.mapAutomationDesignEvents(run.id, update as Record<string, unknown>);
           for (const event of events) {
             terminal =
               event.type === 'run.completed' ||
               event.type === 'run.waiting' ||
               event.type === 'run.failed' ||
               event.type === 'run.cancelled';
+            await this.applyTerminalStreamStatus(event);
             await this.recordEvent(event);
             if (terminal) await this.recordBilling(event.runId);
             yield event;
@@ -401,6 +446,9 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       }
 
       if (route === 'conversation' || route === 'general_question') {
+        // The conversation graph creates and streams through its OWN run —
+        // park ours as superseded so PLANNING rows don't pile up forever.
+        await this.abandonStreamingRun(run.id, 'superseded_by_conversation_run');
         for await (const event of this.conversationGraph.stream(runtimeRequest)) {
           const mapped = this.mapConversationStreamEvent(event);
           terminal =
@@ -441,6 +489,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           mapped.type === 'run.waiting' ||
           mapped.type === 'run.failed' ||
           mapped.type === 'run.cancelled';
+        await this.applyTerminalStreamStatus(mapped);
         await this.recordEvent(mapped);
         if (terminal) await this.recordBilling(mapped.runId);
         yield mapped;
@@ -567,7 +616,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       };
     }
 
-    const isGraphRun = this.isGraphEmployeeDesign(run) || this.isGraphExecution(run);
+    const isGraphRun = this.isGraphDesign(run) || this.isGraphExecution(run);
     if (!isGraphRun && this.runtime) {
       const legacyResult = decision.approved
         ? await this.runtime.approve(runId)
@@ -604,7 +653,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     };
   }
 
-  async confirmEmployeeDesign(
+  async confirmAutomationDesign(
     runId: string,
     scope?: RuntimeScope,
     confirmation?: { blueprintRevision?: string },
@@ -612,9 +661,9 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     const run = await this.runs.findById(runId);
     if (!this.matchesScope(run, scope)) return this.failure(runId, 'Run scope does not match.');
 
-    const isEmployeeDesign = this.isEmployeeDesignRun(run);
+    const isAutomationDesign = this.isAutomationDesignRun(run);
 
-    if (isEmployeeDesign && run.status === 'WAITING') {
+    if (isAutomationDesign && run.status === 'WAITING') {
       try {
         const resumeResult = await this.resumeGraphBranch(
           runId,
@@ -624,7 +673,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
         );
         const normalized = this.normalize({
           runId,
-          mode: RuntimeMode.EMPLOYEE_DESIGN,
+          mode: RuntimeMode.AUTOMATION_DESIGN,
           status:
             resumeResult.route === 'failed'
               ? 'FAILED'
@@ -663,25 +712,85 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
         await this.recordBilling(runId);
         return normalized;
       } catch (error) {
-        if (!this.employeeDesignRuntime) {
-          throw error;
-        }
+        // Provisioning failure keeps the design recoverable in chat.
+        const message = error instanceof Error ? error.message : 'Automation provisioning failed';
+        await this.recordEvent({
+          type: 'run.failed',
+          runId,
+          occurredAt: new Date().toISOString(),
+          payload: {
+            error: {
+              code: 'UNKNOWN_RUNTIME_FAILURE' as RuntimeErrorCode,
+              message,
+              retryable: false,
+            },
+          },
+        });
+        await this.recordBilling(runId);
+        return this.normalize({
+          runId,
+          mode: RuntimeMode.AUTOMATION_DESIGN,
+          status: 'FAILED',
+          response: message,
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        });
       }
     }
 
-    if (this.employeeDesignRuntime) {
-      const legacyResult = await this.employeeDesignRuntime.confirm(runId, scope, confirmation);
-      return this.normalize({
-        runId: legacyResult.runId,
-        mode: RuntimeMode.EMPLOYEE_DESIGN,
-        status: legacyResult.status ?? 'COMPLETED',
-        response: legacyResult.response,
-        usage: legacyResult.usage,
-        plan: legacyResult.plan as Record<string, unknown> | undefined,
-      });
+    if (!isAutomationDesign) {
+      const mode =
+        ((run.metadata as Record<string, unknown> | null)?.runtimeMode as string) ?? 'unknown';
+      return {
+        runId,
+        status: 'FAILED',
+        response:
+          `This run is a "${mode}" run, not an automation design — there is no blueprint to confirm. ` +
+          (run.status === 'WAITING' && mode === String(RuntimeMode.EXECUTION)
+            ? 'Use POST /runs/:id/approve to approve the pending execution instead.'
+            : 'Describe the automation you want to build and Jaafar will prepare a design for approval.'),
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        error: {
+          code: 'INVALID_REQUEST' as RuntimeErrorCode,
+          message: `Run ${runId} is not an automation design run (mode=${mode}, status=${run.status})`,
+          retryable: false,
+        },
+      };
     }
 
-    return this.failure(runId, 'This legacy run cannot be confirmed.');
+    const metadata = (run.metadata as Record<string, unknown> | null) ?? {};
+    const designSession = metadata.automationDesign as
+      | { status?: string; automationId?: string }
+      | undefined;
+    const designStatus =
+      (metadata.designStatus as string | undefined) ?? designSession?.status ?? undefined;
+
+    let reason: string;
+    if (designStatus === 'GATHERING_REQUIREMENTS') {
+      reason =
+        'Jaafar is still gathering requirements for this design — answer his questions in the chat and he will prepare the blueprint for approval.';
+    } else if (designStatus === 'PROVISIONED' || designSession?.automationId) {
+      reason = `This design was already approved and provisioned (automation ${designSession?.automationId ?? 'unknown'}). It is live in your n8n — nothing left to confirm.`;
+    } else if (
+      run.status === 'COMPLETED' ||
+      run.status === 'CANCELLED' ||
+      run.status === 'FAILED'
+    ) {
+      reason = `This automation design is no longer waiting for approval (status=${run.status}). Send a new message to start another design.`;
+    } else {
+      reason = `This automation design is not ready to confirm (status=${run.status}).`;
+    }
+
+    return {
+      runId,
+      status: 'FAILED',
+      response: reason,
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      error: {
+        code: 'INVALID_REQUEST' as RuntimeErrorCode,
+        message: `Run ${runId} cannot be confirmed from status ${run.status} (designStatus=${designStatus ?? 'none'})`,
+        retryable: false,
+      },
+    };
   }
 
   private async executeGraphBranch(
@@ -696,18 +805,17 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     usage?: RuntimeUsage;
     error?: { code: string; message: string; retryable: boolean };
   }> {
-    if (route === 'employee_design') {
-      const result = await this.employeeDesignGraph.build().invoke(
+    if (route === 'automation_design') {
+      const result = await this.automationDesignGraph.build().invoke(
         {
-          input:
-            executionInput as import('./jaafar-employee-design-graph.service').JaafarEmployeeDesignGraphInput,
+          input: executionInput as JaafarAutomationDesignGraphInput,
         },
-        this.employeeDesignGraph.graphConfig(
+        this.automationDesignGraph.graphConfig(
           runId,
           executionInput as { userId?: string; organizationId?: string },
         ),
       );
-      return this.mapEmployeeDesignResult(result);
+      return this.mapDesignGraphResult(result);
     }
 
     const result = await this.executionGraph.build({ durable: true }).invoke(
@@ -730,10 +838,10 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     blueprintRevision?: string,
   ): Promise<Record<string, unknown>> {
     const run = await this.runs.findById(runId);
-    const isEmployeeDesign = this.isEmployeeDesignRun(run);
+    const isAutomationDesign = this.isAutomationDesignRun(run);
 
-    if (isEmployeeDesign) {
-      const result = await this.employeeDesignGraph.resume(
+    if (isAutomationDesign) {
+      const result = await this.automationDesignGraph.resume(
         runId,
         { approved, blueprintRevision: blueprintRevision ?? '' },
         scope,
@@ -764,7 +872,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     };
   }
 
-  private mapEmployeeDesignResult(result: Record<string, unknown>): {
+  private mapDesignGraphResult(result: Record<string, unknown>): {
     route: string;
     response?: string;
     modelCalls?: unknown[];
@@ -919,25 +1027,39 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     }
   }
 
-  private mapEmployeeDesignEvents(runId: string, update: Record<string, unknown>): RuntimeEvent[] {
+  private mapAutomationDesignEvents(
+    runId: string,
+    update: Record<string, unknown>,
+  ): RuntimeEvent[] {
     const events: RuntimeEvent[] = [];
     const occurredAt = new Date().toISOString();
+
+    const pushApprovalWait = (): void => {
+      events.push({
+        type: 'approval.required',
+        runId,
+        occurredAt,
+        payload: { reason: 'Automation design requires approval before provisioning.' },
+      });
+      events.push({ type: 'run.waiting', runId, occurredAt, payload: { reason: 'approval' } });
+    };
+
+    // LangGraph surfaces interrupts as a top-level __interrupt__ entry in the
+    // updates stream (not always as the interrupting node's update).
+    if (this.isInterrupted(update)) {
+      pushApprovalWait();
+      return events;
+    }
 
     for (const [node, value] of Object.entries(update)) {
       const state = (value ?? {}) as Record<string, unknown> & { __interrupt__?: unknown };
 
       if (
-        (node === 'await_approval' || node === 'create_employee') &&
+        (node === 'await_approval' || node === 'provision_automation') &&
         (state.__interrupt__ || this.isInterrupted(state))
       ) {
-        events.push({
-          type: 'approval.required',
-          runId,
-          occurredAt,
-          payload: { reason: 'Employee design requires approval before creation.' },
-        });
-        events.push({ type: 'run.waiting', runId, occurredAt, payload: { reason: 'approval' } });
-      } else if (node === 'create_employee' && state.response) {
+        pushApprovalWait();
+      } else if (node === 'provision_automation' && state.response) {
         events.push({
           type: 'run.completed',
           runId,
@@ -952,6 +1074,13 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           },
         });
       } else if (node === 'persist_design_turn' && state.response) {
+        const sessionStatus = (state.session as { status?: string } | undefined)?.status;
+        if (sessionStatus === 'READY_FOR_REVIEW') {
+          // Ready designs continue into await_approval — the interrupt event
+          // below carries the waiting state; emitting run.completed here would
+          // close the run before the user can approve.
+          continue;
+        }
         events.push({
           type: 'run.completed',
           runId,
@@ -1077,18 +1206,120 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     );
   }
 
-  private isEmployeeDesignRun(run: { metadata: unknown }): boolean {
+  /**
+   * Park a streaming run that will not drive its own lifecycle because the
+   * conversation graph streams through a run it creates itself (or the
+   * classifier failed and we degraded). Best-effort: the fallback must never
+   * be blocked by bookkeeping.
+   */
+  private async abandonStreamingRun(runId: string, reason: string): Promise<void> {
+    try {
+      await this.runs.updateMetadata(runId, { supersededReason: reason });
+      await this.runs.cancel(runId);
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** Mirrors terminal stream events onto the run row (SSE has no other writer). */
+  private async applyTerminalStreamStatus(event: RuntimeEvent): Promise<void> {
+    try {
+      if (event.type === 'run.waiting') {
+        await this.runs.transitionStatus(event.runId, 'WAITING');
+      } else if (event.type === 'run.completed') {
+        const response = (event.payload as { response?: string } | undefined)?.response;
+        await this.runs.complete(event.runId, response);
+      } else if (event.type === 'run.failed') {
+        const message =
+          (event.payload as { error?: { message?: string } } | undefined)?.error?.message ??
+          'Stream failed';
+        await this.runs.fail(event.runId, message);
+      } else if (event.type === 'run.cancelled') {
+        await this.runs.cancel(event.runId);
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** Persists a clarification turn so the UI history survives a refresh. */
+  private async persistClarificationTurn(
+    conversationId: string,
+    userMessage: string,
+    question: string,
+  ): Promise<void> {
+    try {
+      await this.conversations.addMessage(conversationId, {
+        role: 'user',
+        content: userMessage,
+      });
+      await this.conversations.titleFromFirstMessage(conversationId, userMessage);
+      await this.conversations.addMessage(conversationId, {
+        role: 'assistant',
+        content: question,
+      });
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /**
+   * Unanswered follow-up from the latest still-WAITING run in the same
+   * conversation (scope-checked). Short replies arrive with no conversation
+   * history when clarification turns persist nothing — this keeps the
+   * original intent across turns. Never throws: classification must proceed
+   * even when the lookup fails.
+   */
+  private async loadPendingContext(
+    request: RuntimeRequest,
+    currentRunId: string,
+  ): Promise<PendingQuestionContext | undefined> {
+    try {
+      if (!request.conversationId) return undefined;
+      const pending = await this.runs.findLatestWaitingInConversation(
+        request.conversationId,
+        currentRunId,
+      );
+      if (!pending) return undefined;
+      if (
+        !this.matchesScope(pending, {
+          userId: request.userId,
+          organizationId: request.organizationId,
+        })
+      ) {
+        return undefined;
+      }
+      const metadata = (pending.metadata as Record<string, unknown> | null) ?? {};
+      const question =
+        typeof metadata.clarificationQuestion === 'string' && metadata.clarificationQuestion
+          ? metadata.clarificationQuestion
+          : undefined;
+      if (!question) return undefined;
+      const priorUserMessage =
+        typeof metadata.userMessage === 'string' ? metadata.userMessage : undefined;
+      const intent = typeof metadata.intent === 'string' ? metadata.intent : undefined;
+      return {
+        question,
+        ...(priorUserMessage ? { priorUserMessage } : {}),
+        ...(intent ? { intent } : {}),
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private isAutomationDesignRun(run: { metadata: unknown }): boolean {
     const metadata = (run.metadata as Record<string, unknown> | null) ?? {};
     return (
-      metadata.runtimeMode === RuntimeMode.EMPLOYEE_DESIGN ||
-      Boolean(metadata.employeeDesign) ||
+      metadata.runtimeMode === RuntimeMode.AUTOMATION_DESIGN ||
+      Boolean(metadata.automationDesign) ||
       Boolean(metadata.blueprint) ||
       Boolean(metadata.designStatus)
     );
   }
 
-  private isGraphEmployeeDesign(run: { metadata: unknown; status: string }): boolean {
-    return this.isEmployeeDesignRun(run) && run.status === 'WAITING';
+  private isGraphDesign(run: { metadata: unknown; status: string }): boolean {
+    return this.isAutomationDesignRun(run) && run.status === 'WAITING';
   }
 
   private isGraphExecution(run: { metadata: unknown; status: string }): boolean {

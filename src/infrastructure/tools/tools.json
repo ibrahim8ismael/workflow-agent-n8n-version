@@ -31,7 +31,7 @@
       "sideEffect": "none",
       "approval": "not_required",
       "scope": "user_or_organization",
-      "availableIn": ["conversation", "planning", "employee_design", "execution"]
+      "availableIn": ["conversation", "planning", "automation_design", "execution"]
     }
   },
   {
@@ -62,7 +62,7 @@
       "sideEffect": "none",
       "approval": "not_required",
       "scope": "employee",
-      "availableIn": ["conversation", "planning", "employee_design", "execution"]
+      "availableIn": ["conversation", "planning", "automation_design", "execution"]
     }
   },
   {
@@ -87,7 +87,7 @@
       "sideEffect": "none",
       "approval": "not_required",
       "scope": "user_or_organization",
-      "availableIn": ["conversation", "planning", "employee_design", "execution"]
+      "availableIn": ["conversation", "planning", "automation_design", "execution"]
     }
   },
   {
@@ -112,116 +112,7 @@
       "sideEffect": "none",
       "approval": "not_required",
       "scope": "user_or_organization",
-      "availableIn": ["conversation", "planning", "employee_design", "execution"]
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "employee_blueprint_prepare",
-      "description": "Prepare a reviewable employee blueprint from the user's business requirements. This does not create, publish, or activate an employee.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "requirements": {
-            "type": "string",
-            "description": "The confirmed business requirements for the employee."
-          }
-        },
-        "required": ["requirements"]
-      }
-    },
-    "woops": {
-      "kind": "draft",
-      "implemented": true,
-      "sideEffect": "none",
-      "approval": "not_required",
-      "scope": "user_or_organization",
-      "availableIn": ["planning", "employee_design"]
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "employee_learning_outcome_prepare",
-      "description": "Convert an approved employee-design discussion into a structured learning outcome. Store the outcome, not the raw conversation transcript. This does not write Knowledge.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "designRunId": {
-            "type": "string",
-            "description": "The approved employee-design run identifier."
-          }
-        },
-        "required": ["designRunId"]
-      }
-    },
-    "woops": {
-      "kind": "draft",
-      "implemented": false,
-      "sideEffect": "none",
-      "approval": "not_required",
-      "scope": "user_or_organization",
-      "availableIn": ["employee_design"]
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "employee_create_draft",
-      "description": "Create an employee draft from an approved blueprint. This operation never publishes or activates an employee and requires an explicit approval record for the exact blueprint.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "designRunId": {
-            "type": "string",
-            "description": "The approved employee-design run identifier."
-          }
-        },
-        "required": ["designRunId"]
-      }
-    },
-    "woops": {
-      "kind": "mutate",
-      "implemented": true,
-      "sideEffect": "record_creation",
-      "approval": "required",
-      "scope": "user_or_organization",
-      "availableIn": ["employee_design"],
-      "idempotencyKey": "designRunId"
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "skill_proposal_prepare",
-      "description": "Prepare single-capability skill proposals from an approved employee learning outcome. Generated skills remain drafts and are not attached or executable.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "employeeId": {
-            "type": "string",
-            "description": "The employee that will review the proposed capabilities."
-          },
-          "learningOutcomeId": {
-            "type": "string",
-            "description": "The approved employee learning outcome identifier."
-          },
-          "requirement": {
-            "type": "string",
-            "description": "The specific business requirement to turn into one capability."
-          }
-        },
-        "required": ["employeeId", "learningOutcomeId", "requirement"]
-      }
-    },
-    "woops": {
-      "kind": "draft",
-      "implemented": false,
-      "sideEffect": "none",
-      "approval": "not_required",
-      "scope": "user_or_organization",
-      "availableIn": ["employee_design"]
+      "availableIn": ["conversation", "planning", "automation_design", "execution"]
     }
   },
   {
@@ -246,57 +137,7 @@
       "sideEffect": "none",
       "approval": "not_required",
       "scope": "organization",
-      "availableIn": ["planning", "employee_design", "execution"]
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "employee_publish",
-      "description": "Publish an approved employee draft after readiness checks. Publishing makes the employee available for production use but does not activate it.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "employeeId": {
-            "type": "string",
-            "description": "The employee draft to publish."
-          }
-        },
-        "required": ["employeeId"]
-      }
-    },
-    "woops": {
-      "kind": "external",
-      "implemented": false,
-      "sideEffect": "production_visibility",
-      "approval": "required",
-      "scope": "user_or_organization",
-      "availableIn": ["execution"]
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "employee_activate",
-      "description": "Activate a published employee after integrations, Knowledge, skills, and approval checks succeed.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "employeeId": {
-            "type": "string",
-            "description": "The published employee to activate."
-          }
-        },
-        "required": ["employeeId"]
-      }
-    },
-    "woops": {
-      "kind": "external",
-      "implemented": false,
-      "sideEffect": "production_activation",
-      "approval": "required",
-      "scope": "user_or_organization",
-      "availableIn": ["execution"]
+      "availableIn": ["planning", "automation_design", "execution"]
     }
   },
   {
@@ -325,7 +166,7 @@
       "sideEffect": "none",
       "approval": "required",
       "scope": "user_or_organization",
-      "availableIn": ["conversation", "planning", "employee_design", "execution"]
+      "availableIn": ["conversation", "planning", "automation_design", "execution"]
     }
   }
 ]

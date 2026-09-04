@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { blueprintSchema } from '../employee-design/employee-blueprint.schema';
+import { automationBlueprintSchema } from '../../automations/schemas/automation-blueprint.schema';
 import {
   JAAFAR_STATE_SCHEMA_VERSION,
   type JaafarState,
@@ -84,7 +84,7 @@ const toolResultSchema = z.object({
 });
 
 const understandingSchema: z.ZodType<JaafarUnderstanding> = z.object({
-  intent: z.enum(['conversation', 'employee_design', 'task_execution', 'general_question']),
+  intent: z.enum(['conversation', 'automation_design', 'task_execution', 'general_question']),
   goal: z.string().min(1),
   businessContext: z.string(),
   requirements: z.array(
@@ -140,7 +140,7 @@ export const jaafarStateSchema = z.object({
   }),
   understanding: z.object({
     intent: z
-      .enum(['conversation', 'employee_design', 'task_execution', 'general_question'])
+      .enum(['conversation', 'automation_design', 'task_execution', 'general_question'])
       .optional(),
     goal: z.string().optional(),
     businessContext: z.string().optional(),
@@ -151,14 +151,15 @@ export const jaafarStateSchema = z.object({
     clarificationRequired: z.boolean().optional(),
     clarificationQuestion: z.string().optional(),
   }),
-  employeeDesign: z
+  automationDesign: z
     .object({
-      status: z.enum(['GATHERING_REQUIREMENTS', 'READY_FOR_REVIEW', 'CREATED']),
-      approvalStatus: z.enum(['NOT_READY', 'READY', 'APPROVED']),
-      blueprint: blueprintSchema.optional(),
+      status: z.enum(['GATHERING_REQUIREMENTS', 'READY_FOR_REVIEW', 'PROVISIONED']),
+      approvalStatus: z.enum(['NOT_READY', 'READY', 'APPROVED', 'REJECTED']),
+      blueprint: automationBlueprintSchema.optional(),
       missingRequirements: z.array(z.string()),
       blueprintRevision: z.string().optional(),
-      createdEmployeeId: z.string().optional(),
+      automationId: z.string().optional(),
+      connectionId: z.string().optional(),
       sourceConversationId: z.string().optional(),
       sourceDesignRunId: z.string().optional(),
     })

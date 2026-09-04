@@ -63,7 +63,13 @@ export class MockDatabaseService {
     let results = Array.from(col.values());
     if (args.where) {
       results = results.filter((item: any) =>
-        Object.entries(args.where!).every(([k, v]) => (item as any)[k] === v),
+        Object.entries(args.where!).every(([k, v]) =>
+          k === 'OR'
+            ? (v as Array<Record<string, unknown>>).some((condition) =>
+                Object.entries(condition).every(([field, value]) => item[field] === value),
+              )
+            : item[k] === v,
+        ),
       );
     }
     return Promise.resolve(results);
@@ -96,6 +102,19 @@ export class MockDatabaseService {
     if (args.data.conversation && typeof args.data.conversation === 'object') {
       const connection = (args.data.conversation as { connect?: { id?: string } }).connect;
       if (connection?.id) record.conversationId = connection.id;
+    }
+    // Generic relation flattening (n8n connections & automations, PLAN Step 12)
+    const relationFields: Array<[string, string]> = [
+      ['user', 'userId'],
+      ['organization', 'organizationId'],
+      ['connection', 'connectionId'],
+    ];
+    for (const [key, field] of relationFields) {
+      const relation = args.data[key];
+      if (relation && typeof relation === 'object' && !Array.isArray(relation)) {
+        const connect = (relation as { connect?: { id?: string } }).connect;
+        if (connect?.id) record[field] = connect.id;
+      }
     }
     col.set(id as string, record);
 
@@ -153,6 +172,39 @@ export class MockDatabaseService {
       }
     }
     return Promise.resolve({ count });
+  }
+
+  upsert(
+    model: string,
+    args: {
+      where: Record<string, unknown>;
+      create: Record<string, unknown>;
+      update: Record<string, unknown>;
+    },
+  ) {
+    const col = this.collection(model);
+    const existing = Array.from(col.values()).find((item: any) =>
+      Object.entries(args.where).every(([k, v]) => item[k] === v),
+    );
+    if (existing) {
+      Object.assign(existing as object, args.update, { updatedAt: new Date() });
+      return Promise.resolve(existing);
+    }
+    const id =
+      (args.create.id as string | undefined) ??
+      `mock-${model}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const record = {
+      id,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      deletedAt: null,
+      ...args.create,
+    } as Record<string, unknown>;
+    for (const [key, value] of Object.entries(args.where)) {
+      if (!(key in record)) record[key] = value;
+    }
+    col.set(id, record);
+    return Promise.resolve(record);
   }
 
   delete(model: string, args: { where: { id: string } }) {
@@ -308,6 +360,15 @@ export class MockDatabaseService {
   }
   get plan() {
     return this.modelProxy('plan');
+  }
+  get n8nConnection() {
+    return this.modelProxy('n8nConnection');
+  }
+  get n8nConnectionCredential() {
+    return this.modelProxy('n8nConnectionCredential');
+  }
+  get automation() {
+    return this.modelProxy('automation');
   }
 }
 

@@ -41,6 +41,7 @@ CREATE TABLE "automations" (
     "externalWorkflowId" TEXT,
     "webhookPath" TEXT,
     "lastSyncedAt" TIMESTAMP(3),
+    "lastError" TEXT,
     "userId" TEXT,
     "organizationId" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -7,10 +7,8 @@ import {
 } from '../../../../infrastructure/n8n/n8n-client-api.service';
 import { N8N_CONNECTION_STATUS } from '../constants/n8n-connection.constants';
 import type { CreateN8nConnectionDto, UpdateN8nConnectionDto } from '../dto/n8n-connection.dto';
-import type {
-  N8nConnectionsRepository,
-  OwnerScope,
-} from '../repositories/n8n-connections.repository';
+import type { OwnerScope } from '../repositories/n8n-connections.repository';
+import { N8nConnectionsRepository } from '../repositories/n8n-connections.repository';
 
 /** Connection as exposed by the API — never includes the API key. */
 export interface N8nConnectionView {

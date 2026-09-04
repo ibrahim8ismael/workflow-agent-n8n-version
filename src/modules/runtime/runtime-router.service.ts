@@ -6,8 +6,8 @@ import {
   ConversationRuntimeService,
   type ConversationStreamEvent,
 } from './conversation/conversation-runtime.service';
-import type { ConfirmEmployeeDesignDto } from './dto/confirm-employee-design.dto';
-import { EmployeeDesignRuntimeService } from './employee-design/employee-design-runtime.service';
+import type { ConfirmAutomationDesignDto } from './dto/confirm-automation-design.dto';
+import { JaafarAutomationDesignGraphService } from './services/jaafar-automation-design-graph.service';
 import type { ExecuteRequest, ExecuteResponse } from './services/runtime.service';
 import { RuntimeService } from './services/runtime.service';
 import { RuntimeMode, type RuntimeRequest } from './types/runtime.types';
@@ -16,7 +16,7 @@ import { RuntimeMode, type RuntimeRequest } from './types/runtime.types';
 export class RuntimeRouterService {
   constructor(
     private readonly conversationRuntime: ConversationRuntimeService,
-    private readonly employeeDesignRuntime: EmployeeDesignRuntimeService,
+    private readonly automationDesignGraph: JaafarAutomationDesignGraphService,
     private readonly executionRuntime: RuntimeService,
     private readonly plannerService: PlannerService,
     private readonly agentsService: AgentsService,
@@ -32,8 +32,8 @@ export class RuntimeRouterService {
           this.executionRuntime.execute(request as ExecuteRequest),
           request.mode,
         );
-      case RuntimeMode.EMPLOYEE_DESIGN:
-        return this.employeeDesignRuntime.run(request);
+      case RuntimeMode.AUTOMATION_DESIGN:
+        return this.automationDesignGraph.run(request);
       default:
         throw new BadRequestException(`Unsupported runtime mode: ${String(request.mode)}`);
     }
@@ -60,8 +60,11 @@ export class RuntimeRouterService {
       effort: request.effort ?? 'medium',
     });
 
-    if (plan.intent === 'employee_design') {
-      return this.employeeDesignRuntime.run({ ...request, mode: RuntimeMode.EMPLOYEE_DESIGN });
+    if (plan.intent === 'automation_design') {
+      return this.automationDesignGraph.run({
+        ...request,
+        mode: RuntimeMode.AUTOMATION_DESIGN,
+      });
     }
     return this.conversationRuntime.run(request);
   }
@@ -73,12 +76,19 @@ export class RuntimeRouterService {
     return this.conversationRuntime.stream(request);
   }
 
-  confirmEmployeeDesign(
+  confirmAutomationDesign(
     runId: string,
     scope?: { userId?: string; organizationId?: string },
-    confirmation?: ConfirmEmployeeDesignDto,
+    confirmation?: ConfirmAutomationDesignDto,
   ): Promise<ExecuteResponse> {
-    return this.employeeDesignRuntime.confirm(runId, scope, confirmation);
+    return this.automationDesignGraph.resume(
+      runId,
+      {
+        approved: true,
+        blueprintRevision: confirmation?.blueprintRevision,
+      },
+      scope,
+    );
   }
 
   private async withMode(

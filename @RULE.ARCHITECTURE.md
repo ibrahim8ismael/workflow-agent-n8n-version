@@ -785,6 +785,21 @@ The following decisions are considered permanent unless explicitly replaced by a
 - Runtime implementations are replaceable.
 - The Platform remains runtime-agnostic.
 
+## ADR-011 — Automations live in client-provided n8n instances
+
+**Decision (2026-08):** Jaafar designs automations; the user explicitly
+approves; the platform provisions the workflow into the **client's own n8n
+instance** (API-key connected, encrypted at rest). Agent runs execute through
+the client's webhooks. The Employee Design flow and the Skills system are
+removed; the platform does not require a platform-owned n8n for customer
+automations. See [[@RULE.AUTOMATIONS.md]] and
+@PLAN.N8N.CLIENT.MODE.md.
+
+**Consequences:** client API keys are platform-held secrets (AES-256-GCM);
+the SSRF guard applies to every client `baseUrl`; provisioning is reachable
+only behind the approval gate; the legacy env-global n8n path is removed
+(cutover complete — per-client connections are the only n8n access path).
+
 ---
 
 ---

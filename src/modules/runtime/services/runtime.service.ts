@@ -18,13 +18,8 @@ import { MemoryService } from '../../memory/services/memory.service';
 import { type Plan } from '../../planner/interfaces/plan.interface';
 import { PlannerService } from '../../planner/planner.service';
 import { RunsService } from '../../runs/runs.service';
-import { SkillsService } from '../../skills/services/skills.service';
 import { RuntimeCacheService } from '../shared/runtime-cache.service';
 import { runtimeUserErrorMessage } from '../shared/runtime-user-message';
-import {
-  SkillEmployeeRuntimeService,
-  type SkillManifest,
-} from '../skill/skill-employee-runtime.service';
 import { generateWorkflow, type WorkflowDefinition } from '../types/workflow.types';
 import { ContextBuilderService } from './context-builder.service';
 export interface ExecuteRequest {
@@ -53,8 +48,6 @@ export interface ExecuteResponse {
   execution?: LLMExecutionMetadata;
 }
 
-type SkillContext = SkillManifest;
-
 @Injectable()
 export class RuntimeService {
   private readonly logger = new Logger(RuntimeService.name);
@@ -67,10 +60,8 @@ export class RuntimeService {
     private readonly contextBuilder: ContextBuilderService,
     private readonly conversationsService: ConversationsService,
     private readonly memoryService: MemoryService,
-    private readonly skillsService: SkillsService,
     readonly _knowledgeService: KnowledgeService,
     readonly _configService: ConfigService,
-    private readonly skillRuntime: SkillEmployeeRuntimeService,
     private readonly runtimeCache: RuntimeCacheService,
   ) {}
 
@@ -92,34 +83,7 @@ export class RuntimeService {
 
       await this.runsService.transitionStatus(run.id, 'PLANNING');
 
-      const agentSkills = await this.loadAgentSkills(request.agentId);
-      const availableSkills = (
-        await Promise.all(
-          agentSkills
-            .filter((s) => s.enabled)
-            .map(async (s) => {
-              try {
-                const skill = await this.loadSkill(s.skillId);
-                return {
-                  id: s.id,
-                  skillId: s.skillId,
-                  name: skill.name,
-                  slug: skill.slug,
-                  description: skill.description ?? undefined,
-                  executionMode: skill.executionMode,
-                  status: skill.status,
-                  instructions: skill.instructions ?? undefined,
-                  timeout: skill.timeout ?? undefined,
-                  inputSchema: (skill.inputSchema as Record<string, unknown> | null) ?? undefined,
-                  outputSchema: (skill.outputSchema as Record<string, unknown> | null) ?? undefined,
-                  retryPolicy: (skill.retryPolicy as Record<string, unknown> | null) ?? undefined,
-                };
-              } catch {
-                return null;
-              }
-            }),
-        )
-      ).filter(Boolean) as SkillContext[];
+      const availableSkills: never[] = [];
 
       const conversationHistory = request.conversationId
         ? (await this.conversationsService.getMessages(request.conversationId)).map((m) => ({
@@ -321,34 +285,6 @@ export class RuntimeService {
         userId: request.userId,
         organizationId: request.organizationId,
       });
-      const agentSkills = await this.loadAgentSkills(request.agentId);
-      const availableSkills = (
-        await Promise.all(
-          agentSkills
-            .filter((s) => s.enabled)
-            .map(async (s) => {
-              try {
-                const skill = await this.loadSkill(s.skillId);
-                return {
-                  id: s.id,
-                  skillId: s.skillId,
-                  name: skill.name,
-                  slug: skill.slug,
-                  description: skill.description ?? undefined,
-                  executionMode: skill.executionMode,
-                  status: skill.status,
-                  instructions: skill.instructions ?? undefined,
-                  timeout: skill.timeout ?? undefined,
-                  inputSchema: (skill.inputSchema as Record<string, unknown> | null) ?? undefined,
-                  outputSchema: (skill.outputSchema as Record<string, unknown> | null) ?? undefined,
-                  retryPolicy: (skill.retryPolicy as Record<string, unknown> | null) ?? undefined,
-                };
-              } catch {
-                return null;
-              }
-            }),
-        )
-      ).filter(Boolean) as SkillContext[];
 
       const conversationHistory = request.conversationId
         ? (await this.conversationsService.getMessages(request.conversationId)).map((m) => ({
@@ -375,18 +311,20 @@ export class RuntimeService {
         conversationHistory,
       });
 
-      const skillsById = new Map(availableSkills.map((skill) => [skill.skillId, skill]));
       const tools: ToolSet = Object.fromEntries(
         plan.steps.map((step) => {
-          const skill = skillsById.get(step.skillId);
-          const executor: (args: Record<string, unknown>) => Promise<unknown> = (args) =>
-            this.executeSkill(step, skill, args, { ...request, runId });
+          const executor: (args: Record<string, unknown>) => Promise<unknown> = () =>
+            Promise.resolve({
+              success: false,
+              error: {
+                code: 'TOOL_UNAVAILABLE',
+                message: `Capability "${step.skillName}" is migrating to automations and is temporarily unavailable.`,
+              },
+            });
           return [
             step.skillName,
             tool({
-              description: `Execute the "${step.skillName}" skill${
-                skill?.description ? `: ${skill.description}` : ''
-              }.`,
+              description: `Execute the "${step.skillName}" step.`,
               inputSchema: jsonSchema({
                 type: 'object',
                 additionalProperties: true,
@@ -472,36 +410,6 @@ export class RuntimeService {
     const agent = await this.agentsService.findById(agentId, includeSkills, scope);
     void this.runtimeCache.set(key, agent, 60);
     return agent;
-  }
-
-  private async loadAgentSkills(agentId: string) {
-    const key = `agent-skills:${agentId}`;
-    const cached =
-      await this.runtimeCache.get<Awaited<ReturnType<AgentsService['getSkills']>>>(key);
-    if (cached) return cached;
-    const skills = await this.agentsService.getSkills(agentId);
-    void this.runtimeCache.set(key, skills, 60);
-    return skills;
-  }
-
-  private async loadSkill(skillId: string) {
-    const key = `skill:${skillId}`;
-    const cached = await this.runtimeCache.get<Awaited<ReturnType<SkillsService['findById']>>>(key);
-    if (cached) return cached;
-    const skill = await this.skillsService.findById(skillId);
-    void this.runtimeCache.set(key, skill, 300);
-    return skill;
-  }
-
-  private executeSkill(
-    step: import('../../planner/interfaces/plan.interface').PlanStep,
-    skill: SkillContext | undefined,
-    args: Record<string, unknown>,
-    requestOrLegacyModel: ExecuteRequest | string,
-    legacyRequest?: ExecuteRequest,
-  ): Promise<unknown> {
-    const request = legacyRequest ?? (requestOrLegacyModel as ExecuteRequest);
-    return this.skillRuntime.execute(step, skill, args, request);
   }
 
   private async waitingRun(runId: string, response: string, plan: Plan): Promise<ExecuteResponse> {

@@ -1,10 +1,19 @@
 ````md
 # Woops AI Agent Domain Architecture
-> Version: 1.0 (Draft)
+> Version: 2.0
 > Status: Architecture Specification
 > Domain: AI Agent Core
 > Owner: Woops Engineering
-> Last Updated: 2026-07-30
+> Last Updated: 2026-08-28
+>
+> ⚠️ **ADR-011 (2026-08):** Automations live in **client-provided n8n
+> instances** — Jaafar designs, the user approves, the platform provisions.
+> Per-client connections (`/api/v1/integrations/n8n`) with encrypted API keys
+> are the **only** way n8n is connected: each user supplies their own n8n
+> domain (`baseUrl`) and API key. The platform-global n8n env configuration
+> has been removed (cutover complete). Canonical rules:
+> [[@RULE.AUTOMATIONS.md]]. Sections below describing platform-global n8n
+> workflow mapping are historical.
 
 ---
 

@@ -5,6 +5,7 @@ import { LLMRuntimeModule } from '../../infrastructure/llm-runtime/llm-runtime.m
 import { N8nModule } from '../../infrastructure/n8n/n8n.module';
 import { ToolManifestService } from '../../infrastructure/tools/tool-manifest.service';
 import { AgentsModule } from '../agents/agents.module';
+import { AutomationsModule } from '../automations/automations.module';
 import { BillingModule } from '../billing/billing.module';
 import { ChannelsModule } from '../channels/channels.module';
 import { ConversationsModule } from '../conversations/conversations.module';
@@ -13,18 +14,17 @@ import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { MemoryModule } from '../memory/memory.module';
 import { PlannerModule } from '../planner/planner.module';
 import { RunsModule } from '../runs/runs.module';
-import { SkillsModule } from '../skills/skills.module';
 import { ConversationRuntimeService } from './conversation/conversation-runtime.service';
-import { EmployeeDesignRuntimeService } from './employee-design/employee-design-runtime.service';
 import { IdempotencyRepository } from './repositories/idempotency.repository';
 import { RuntimeRepository } from './repositories/runtime.repository';
 import { RuntimeController } from './runtime.controller';
+import { AutomationDesignSessionService } from './services/automation-design-session.service';
+import { AutomationToolResolverService } from './services/automation-tool-resolver.service';
 import { ContextBuilderService } from './services/context-builder.service';
-import { EmployeeDesignSessionService } from './services/employee-design-session.service';
 import { JaafarApprovalService } from './services/jaafar-approval.service';
+import { JaafarAutomationDesignGraphService } from './services/jaafar-automation-design-graph.service';
 import { JaafarContextLoaderService } from './services/jaafar-context-loader.service';
 import { JaafarConversationGraphService } from './services/jaafar-conversation-graph.service';
-import { JaafarEmployeeDesignGraphService } from './services/jaafar-employee-design-graph.service';
 import { JaafarEventNormalizerService } from './services/jaafar-event-normalizer.service';
 import { JaafarExecutionGraphService } from './services/jaafar-execution-graph.service';
 import { JaafarFinalResponseService } from './services/jaafar-final-response.service';
@@ -45,7 +45,6 @@ import { ToolExecutorService } from './services/tool-executor.service';
 import { ToolPermissionService } from './services/tool-permission.service';
 import { ToolRegistryService } from './services/tool-registry.service';
 import { RuntimeCacheService } from './shared/runtime-cache.service';
-import { SkillEmployeeRuntimeService } from './skill/skill-employee-runtime.service';
 
 @Module({
   imports: [
@@ -55,6 +54,7 @@ import { SkillEmployeeRuntimeService } from './skill/skill-employee-runtime.serv
     N8nModule,
     LangGraphModule,
     AgentsModule,
+    AutomationsModule,
     RunsModule,
     ConversationsModule,
     ChannelsModule,
@@ -62,7 +62,6 @@ import { SkillEmployeeRuntimeService } from './skill/skill-employee-runtime.serv
     KnowledgeModule,
     MemoryModule,
     PlannerModule,
-    SkillsModule,
   ],
   controllers: [RuntimeController],
   providers: [
@@ -71,8 +70,6 @@ import { SkillEmployeeRuntimeService } from './skill/skill-employee-runtime.serv
     RuntimeBillingAccountingService,
     RuntimeCacheService,
     ConversationRuntimeService,
-    EmployeeDesignRuntimeService,
-    SkillEmployeeRuntimeService,
     RuntimeService,
     ToolManifestService,
     ContextBuilderService,
@@ -90,10 +87,11 @@ import { SkillEmployeeRuntimeService } from './skill/skill-employee-runtime.serv
     JaafarUnderstandingGraphService,
     JaafarExecutionGraphService,
     JaafarConversationGraphService,
-    JaafarEmployeeDesignGraphService,
+    JaafarAutomationDesignGraphService,
     JaafarFinalResponseService,
     JaafarGraphService,
-    EmployeeDesignSessionService,
+    AutomationDesignSessionService,
+    AutomationToolResolverService,
     ToolAuditService,
     ToolPermissionService,
     RuntimeRepository,
