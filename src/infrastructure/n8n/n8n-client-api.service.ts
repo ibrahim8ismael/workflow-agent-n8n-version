@@ -21,7 +21,20 @@ export interface N8nWebhookNode {
 }
 
 export interface N8nWorkflowDetail extends N8nWorkflowSummary {
-  nodes?: Array<{ type: string; parameters?: Record<string, unknown> }>;
+  nodes?: Array<{
+    type: string;
+    typeVersion?: number;
+    parameters?: Record<string, unknown>;
+    credentials?: Record<string, unknown>;
+  }>;
+}
+
+/** A data table in the client's n8n instance (n8n 1.100+). */
+export interface N8nDataTable {
+  id: string;
+  name: string;
+  projectId?: string;
+  columns?: Array<{ name: string; type: string }>;
 }
 
 export type N8nClientErrorCode = 'INVALID_CREDENTIALS' | 'UNREACHABLE' | 'API_ERROR';
@@ -95,6 +108,17 @@ export class N8nClientApiService {
     return Array.isArray(data) ? data : (data.data ?? []);
   }
 
+  /** Full workflow list including node arrays — used by node-type inventory. */
+  async listWorkflowDetails(connection: N8nClientConnection): Promise<N8nWorkflowDetail[]> {
+    const url = new URL(`${this.apiBase(connection.baseUrl)}/workflows`);
+    url.searchParams.set('limit', '100');
+    const data = await this.request<N8nWorkflowDetail[] | { data: N8nWorkflowDetail[] }>(
+      connection,
+      url,
+    );
+    return Array.isArray(data) ? data : (data.data ?? []);
+  }
+
   async getWorkflow(connection: N8nClientConnection, id: string): Promise<N8nWorkflowDetail> {
     return this.request<N8nWorkflowDetail>(
       connection,
@@ -118,6 +142,29 @@ export class N8nClientApiService {
       connection,
       new URL(`${this.apiBase(connection.baseUrl)}/workflows/${encodeURIComponent(id)}/activate`),
       { method: 'POST' },
+    );
+  }
+
+  // ── data tables ────────────────────────────────────────────
+
+  /** Lists the client instance's data tables (n8n 1.100+; empty on older instances). */
+  async listDataTables(connection: N8nClientConnection): Promise<N8nDataTable[]> {
+    const data = await this.request<N8nDataTable[] | { data: N8nDataTable[] }>(
+      connection,
+      new URL(`${this.apiBase(connection.baseUrl)}/data-tables`),
+    );
+    return Array.isArray(data) ? data : (data.data ?? []);
+  }
+
+  /** Creates a data table with the given columns. Requires n8n 1.100+. */
+  async createDataTable(
+    connection: N8nClientConnection,
+    payload: { name: string; columns: Array<{ name: string; type: string }>; projectId?: string },
+  ): Promise<{ id: string; name: string }> {
+    return this.request<{ id: string; name: string }>(
+      connection,
+      new URL(`${this.apiBase(connection.baseUrl)}/data-tables`),
+      { method: 'POST', body: JSON.stringify(payload) },
     );
   }
 

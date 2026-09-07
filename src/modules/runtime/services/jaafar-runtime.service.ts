@@ -86,7 +86,11 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       let understood: JaafarGraphOutput;
       try {
         understood = await this.jaafarGraph.classify(graphInput);
-      } catch {
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(
+          `Classification failed for run ${run.id} — degrading to conversation: ${message}`,
+        );
         const result = await this.conversationGraph.run(runtimeRequest);
         await this.handleGraphCompletion(run.id, {
           route: 'completed',

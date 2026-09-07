@@ -159,17 +159,28 @@ export class LLMRuntimeService implements ILLMRuntime {
           return result;
         } catch (error) {
           lastError = error;
-          if (!this.isRetryable(error)) throw error;
-          if (retry < retries) {
+          if (this.isFatal(error)) throw error;
+          if (retry < retries && this.isRetryable(error)) {
             await this.delay(this.retryDelay(retry));
             continue;
           }
+          // Transient failures retry the same candidate; any other failure
+          // (provider/model-specific, e.g. unsupported structured output)
+          // moves on to the next fallback candidate.
           this.logger.warn(`LLM provider failed: ${candidate.provider}:${candidate.model}`);
+          break;
         }
       }
     }
 
     throw lastError instanceof Error ? lastError : new Error('LLM execution failed');
+  }
+
+  /** Auth-level failures are the same across candidates of a provider key. */
+  private isFatal(error: unknown): boolean {
+    const message =
+      error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+    return /(authentication|unauthorized|forbidden|permission)/.test(message);
   }
 
   private resolveCandidates(mode: ExecutionMode): ModelCandidate[] {
@@ -252,7 +263,7 @@ export class LLMRuntimeService implements ILLMRuntime {
       !/(authentication|unauthorized|forbidden|invalid|validation|permission|schema)/.test(
         message,
       ) &&
-      /(timeout|timed out|network|rate limit|429|500|502|503|504|temporar|unavailable|fetch)/.test(
+      /(timeout|timed out|network|rate limit|429|500|502|503|504|temporar|unavailable|fetch|no object generated|unexpected end of json|did not return a response)/.test(
         message,
       )
     );

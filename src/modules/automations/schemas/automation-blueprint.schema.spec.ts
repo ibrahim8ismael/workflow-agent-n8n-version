@@ -34,6 +34,62 @@ describe('automationBlueprintSchema', () => {
     expect(parsed.steps).toHaveLength(1);
   });
 
+  it('parses nodeHint steps with real n8n node types (free-form, no allowlist)', () => {
+    const parsed = automationBlueprintSchema.parse({
+      ...validBlueprint,
+      steps: [
+        {
+          ...validBlueprint.steps[0],
+          nodeHint: {
+            type: 'n8n-nodes-base.whatsApp',
+            typeVersion: 1,
+            parameters: { operation: 'send', textBody: 'hello from Jaafar' },
+          },
+        },
+      ],
+    });
+    expect(parsed.steps[0]?.nodeHint).toMatchObject({ type: 'n8n-nodes-base.whatsApp' });
+  });
+
+  it('accepts non-base packages (langchain, community nodes)', () => {
+    const parsed = automationBlueprintSchema.parse({
+      ...validBlueprint,
+      steps: [
+        {
+          ...validBlueprint.steps[0],
+          nodeHint: { type: '@n8n/n8n-nodes-langchain.agent', parameters: {} },
+        },
+      ],
+    });
+    expect(parsed.steps[0]?.nodeHint?.type).toBe('@n8n/n8n-nodes-langchain.agent');
+  });
+
+  it('rejects node types that are not package.TypeName shapes', () => {
+    expect(
+      automationBlueprintSchema.safeParse({
+        ...validBlueprint,
+        steps: [{ ...validBlueprint.steps[0], nodeHint: { type: 'whatsApp', parameters: {} } }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('parses declared data tables with typed columns', () => {
+    const parsed = automationBlueprintSchema.parse({
+      ...validBlueprint,
+      dataTables: [
+        {
+          name: 'sent_log',
+          columns: [
+            { name: 'text', type: 'string' },
+            { name: 'sent_at', type: 'date' },
+          ],
+        },
+      ],
+    });
+    expect(parsed.dataTables?.[0]?.name).toBe('sent_log');
+    expect(parsed.dataTables?.[0]?.columns[1]).toEqual({ name: 'sent_at', type: 'date' });
+  });
+
   it('rejects blueprints with an unknown trigger type', () => {
     expect(
       automationBlueprintSchema.safeParse({

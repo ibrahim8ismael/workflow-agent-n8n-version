@@ -40,7 +40,28 @@ describe('MVP Vertical Slice (client-managed n8n, PLAN Step 12)', () => {
         const headers = (init?.headers ?? {}) as Record<string, string>;
 
         // Client n8n REST API (provisioning / verification)
-        if (url === `${CLIENT_BASE}/api/v1/workflows?limit=1`) {
+        if (
+          url === `${CLIENT_BASE}/api/v1/workflows?limit=1` ||
+          url === `${CLIENT_BASE}/api/v1/workflows?limit=100`
+        ) {
+          return {
+            ok: true,
+            status: 200,
+            headers: { get: () => 'application/json' },
+            json: async () => ({ data: [] }),
+          };
+        }
+        if (url === `${CLIENT_BASE}/api/v1/data-tables` && init?.method === 'POST') {
+          expect(headers['X-N8N-API-KEY']).toBeTruthy();
+          const payload = JSON.parse(init.body as string) as { name: string };
+          return {
+            ok: true,
+            status: 200,
+            headers: { get: () => 'application/json' },
+            json: async () => ({ id: 'dt-1', name: payload.name, columns: [] }),
+          };
+        }
+        if (url === `${CLIENT_BASE}/api/v1/data-tables`) {
           return {
             ok: true,
             status: 200,
@@ -223,7 +244,7 @@ describe('MVP Vertical Slice (client-managed n8n, PLAN Step 12)', () => {
       goal: 'Sync paid invoices into the ledger',
       summary: 'Fetches paid invoices daily and records them.',
       description: 'Daily invoice ledger sync',
-      trigger: { type: 'webhook' as const, config: {} },
+      trigger: { type: 'schedule' as const, config: { every: 10, unit: 'minutes' } },
       steps: [
         {
           name: 'Fetch invoices',
@@ -231,7 +252,19 @@ describe('MVP Vertical Slice (client-managed n8n, PLAN Step 12)', () => {
           integration: 'stripe',
           config: {},
         },
+        {
+          name: 'Log row',
+          action: 'Record the sync in the log table',
+          integration: 'dataTable',
+          config: {},
+          nodeHint: {
+            type: 'n8n-nodes-base.dataTable',
+            typeVersion: 1,
+            parameters: { operation: 'insert', tableName: 'sent_log' },
+          },
+        },
       ],
+      dataTables: [{ name: 'sent_log', columns: [{ name: 'text', type: 'string' }] }],
       integrations: ['stripe'],
       inputContract: { type: 'object', required: ['invoiceId'] },
       outputContract: { type: 'object' },
@@ -339,6 +372,26 @@ describe('MVP Vertical Slice (client-managed n8n, PLAN Step 12)', () => {
     expect(automation.externalWorkflowId).toBe('wf-1');
     expect(automation.webhookPath).toBe(WEBHOOK_PATH);
     expect((provisionedWorkflows.get('wf-1') as { active: boolean }).active).toBe(true);
+
+    // Native node provisioning: dual trigger + real data table id injected.
+    const provisionedNodes = (
+      provisionedWorkflows.get('wf-1') as {
+        nodes: Array<{ type: string; parameters?: Record<string, unknown> }>;
+      }
+    ).nodes;
+    const nodeTypes = provisionedNodes.map((node) => node.type);
+    expect(nodeTypes).toContain('n8n-nodes-base.scheduleTrigger');
+    expect(nodeTypes).toContain('n8n-nodes-base.webhook');
+    expect(nodeTypes).toContain('n8n-nodes-base.dataTable');
+    expect(
+      provisionedNodes.find((node) => node.type === 'n8n-nodes-base.scheduleTrigger')?.parameters,
+    ).toMatchObject({ rule: { interval: [{ field: 'minutes', minutesInterval: 10 }] } });
+    expect(
+      provisionedNodes.find((node) => node.type === 'n8n-nodes-base.dataTable')?.parameters,
+    ).toMatchObject({
+      operation: 'insert',
+      dataTableId: { __rl: true, mode: 'id', value: 'dt-1' },
+    });
 
     // ── 4. Agent run executes the automation through the client webhook ──
     const resolver = new AutomationToolResolverService(automations);

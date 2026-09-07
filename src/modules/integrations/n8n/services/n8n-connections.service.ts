@@ -120,6 +120,30 @@ export class N8nConnectionsService {
     }
   }
 
+  /**
+   * Credentials of the owner's first ACTIVE connection in the given scope —
+   * used by the design graph to read the client instance (node inventory).
+   */
+  async resolveActiveForScope(
+    scope: OwnerScope,
+  ): Promise<{ connectionId: string; baseUrl: string; apiKey: string } | null> {
+    const connections = await this.repository.list(scope);
+    const active = connections.find((c) => c.status === N8N_CONNECTION_STATUS.ACTIVE);
+    if (!active) return null;
+    const credential = await this.repository.getCredential(active.id);
+    if (!credential) return null;
+    try {
+      return {
+        connectionId: active.id,
+        baseUrl: active.baseUrl,
+        apiKey: this.secretBox.decrypt(credential.encryptedData),
+      };
+    } catch {
+      this.logger.error({ event: 'n8n.credential_decrypt_failed', connectionId: active.id });
+      return null;
+    }
+  }
+
   // ── internals ──────────────────────────────────────────────
 
   private async getOwned(id: string, scope: OwnerScope): Promise<N8nConnection> {
