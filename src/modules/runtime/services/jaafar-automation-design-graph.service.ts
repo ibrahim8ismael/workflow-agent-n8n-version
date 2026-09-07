@@ -4,6 +4,10 @@ import { Injectable, Logger, Optional } from '@nestjs/common';
 import { LangGraphPostgresCheckpointerService } from '../../../infrastructure/langgraph/langgraph-postgres-checkpointer.service';
 import { LLMRuntimeService } from '../../../infrastructure/llm-runtime/llm-runtime.service';
 import {
+  type N8nInstanceInventory,
+  N8nNodeInventoryService,
+} from '../../../infrastructure/n8n/n8n-node-inventory.service';
+import {
   AUTOMATION_BLUEPRINT_SYSTEM_PROMPT,
   JAAFAR_IDENTITY_SYSTEM_PROMPT,
   TOOL_USE_POLICY_SYSTEM_PROMPT,
@@ -15,6 +19,7 @@ import {
 } from '../../automations/schemas/automation-blueprint.schema';
 import { AutomationsService } from '../../automations/services/automations.service';
 import { ConversationsService } from '../../conversations/services/conversations.service';
+import { N8nConnectionsService } from '../../integrations/n8n/services/n8n-connections.service';
 import { RunsService } from '../../runs/runs.service';
 import type { PendingQuestionContext } from '../types/runtime-contract.types';
 import {
@@ -49,6 +54,8 @@ interface AutomationDesignGraphState {
   context?: Awaited<ReturnType<JaafarContextLoaderService['load']>>;
   session: AutomationDesignSession;
   blueprint?: AutomationBlueprint;
+  /** What the client's n8n can actually do — harvested, not hardcoded. */
+  instance?: N8nInstanceInventory | null;
   response?: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
   execution?: { durationMs?: number; estimatedCost?: number };
@@ -69,6 +76,10 @@ const AutomationDesignGraphState = Annotation.Root({
       approvalStatus: 'NOT_READY',
       missingRequirements: [],
     }),
+    reducer: (_left, right) => right,
+  }),
+  instance: Annotation<N8nInstanceInventory | null | undefined>({
+    default: () => undefined,
     reducer: (_left, right) => right,
   }),
   blueprint: Annotation<AutomationBlueprint | undefined>({
@@ -108,6 +119,8 @@ export class JaafarAutomationDesignGraphService {
     private readonly sessionService: AutomationDesignSessionService,
     private readonly llmRuntime: LLMRuntimeService,
     private readonly automations: AutomationsService,
+    @Optional() private readonly n8nConnections?: N8nConnectionsService,
+    @Optional() private readonly nodeInventory?: N8nNodeInventoryService,
     @Optional() private readonly postgresCheckpointer?: LangGraphPostgresCheckpointerService,
   ) {}
 
@@ -217,7 +230,24 @@ export class JaafarAutomationDesignGraphService {
           userId: state.input.userId,
           organizationId: state.input.organizationId,
         });
-        return { context, session };
+        // Best-effort: what the client's n8n can actually do. Design
+        // proceeds even when there is no connection or the read fails.
+        let instance: N8nInstanceInventory | null = null;
+        try {
+          const credentials = await this.n8nConnections?.resolveActiveForScope({
+            userId: state.input.userId,
+            organizationId: state.input.organizationId,
+          });
+          if (credentials && this.nodeInventory) {
+            instance = await this.nodeInventory.inventory({
+              baseUrl: credentials.baseUrl,
+              apiKey: credentials.apiKey,
+            });
+          }
+        } catch {
+          instance = null;
+        }
+        return { context, session, instance };
       })
       .addNode('collect_requirements', async (state) => {
         if (!state.context) throw new Error('Automation design context was not loaded');
@@ -243,6 +273,7 @@ export class JaafarAutomationDesignGraphService {
             TOOL_USE_POLICY_SYSTEM_PROMPT,
             AUTOMATION_BLUEPRINT_SYSTEM_PROMPT,
             'Continue the existing automation design session. Ask only for requirements that materially affect a safe, useful automation. Never guess missing requirements.',
+            ...(state.instance ? [this.formatInstanceInventory(state.instance)] : []),
             `Current structured session:\n${JSON.stringify(state.session)}`,
             `Automation policies:\n${state.context.agent.instructions ?? ''}`,
           ].join('\n\n'),
@@ -413,6 +444,47 @@ export class JaafarAutomationDesignGraphService {
         thread_id: `jaafar:automation-design:${scope?.organizationId ?? 'personal'}:${scope?.userId ?? 'anonymous'}:${runId}`,
       },
     };
+  }
+
+  /**
+   * Renders the harvested client-instance capabilities for the design LLM.
+   * Everything here comes from the client's own n8n — no platform-side
+   * node allowlist.
+   */
+  private formatInstanceInventory(instance: N8nInstanceInventory): string {
+    const nodeLines = instance.nodeTypes.slice(0, 60).map((node) => {
+      const version = node.typeVersion !== undefined ? ` v${node.typeVersion}` : '';
+      const creds = node.credentials
+        ? ` [credentials: ${Object.keys(node.credentials).join(', ')}]`
+        : '';
+      const sample = node.sampleParameters
+        ? ` params=${JSON.stringify(node.sampleParameters).slice(0, 160)}`
+        : '';
+      return `- ${node.type}${version}${creds}${node.inUse ? '' : ' (structural, may not be configured yet)'}${sample}`;
+    });
+    const tableLines = instance.dataTables.map((table) => {
+      const columns = (table.columns ?? [])
+        .map((c) => `${c.name}:${c.type ?? 'string'}`)
+        .join(', ');
+      return `- "${table.name}" (id: ${table.id}${columns ? `; columns: ${columns}` : ''})`;
+    });
+    return [
+      '<client_n8n_instance_capabilities>',
+      'The client connected their OWN n8n instance. Below is what it actually contains (harvested live, not a fixed list).',
+      'Design steps with steps[].nodeHint = { type, typeVersion?, parameters } using these REAL node types, and put the concrete business values (message text, recipient, interval, urls, column values…) into parameters.',
+      'Use other node types the client has installed even when not listed; unknown types are validated at provisioning and errors come back to you for correction.',
+      'For persistence inside their n8n (logs, dedupe markers, lookup data), prefer their data tables via node type n8n-nodes-base.dataTable with parameters.tableName set to one of the tables below; if a new table is needed, declare it in blueprint.dataTables (name + columns) instead of asking the user to create it manually.',
+      'Never invent credential names or ids — credential wiring is handled at provisioning.',
+      ...(nodeLines.length ? ['Node types:', ...nodeLines] : []),
+      ...(instance.dataTablesSupported
+        ? tableLines.length
+          ? ['Data tables:', ...tableLines]
+          : [
+              'Data tables: none yet — declare new ones in blueprint.dataTables when the design needs storage.',
+            ]
+        : []),
+      '</client_n8n_instance_capabilities>',
+    ].join('\n');
   }
 
   private validateBlueprint(blueprint: AutomationBlueprint): { valid: boolean; missing: string[] } {

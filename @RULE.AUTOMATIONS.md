@@ -122,10 +122,34 @@ SUSPENDED (connection lost/deleted) — repairable via reprovision
 
 # 5. Provisioning (client n8n)
 
-`N8nProvisionerService` converts the blueprint into workflow JSON:
+`N8nProvisionerService` converts the blueprint into workflow JSON using
+**native n8n nodes** — no generic Code skeletons when a real node fits:
 
-- webhook node (path = automation slug) → one Code-node skeleton per step
-  (TODO markers from the blueprint) → respondToWebhook node
+- **Instance-driven node visibility** — `N8nNodeInventoryService` harvests the
+  client instance live (workflows' node types/versions/parameters/credentials
+  + `GET /data-tables`). Jaafar designs against `steps[].nodeHint = {type,
+  typeVersion?, parameters}` using REAL node types from that inventory. There
+  is **no platform-side node allowlist**; a small structural seed (webhook,
+  scheduleTrigger, manualTrigger, respondToWebhook, code, set, httpRequest,
+  dataTable) covers workflow plumbing only. Unknown node types are validated
+  by n8n at `createWorkflow` — failures become `FAILED` + `lastError` and flow
+  back into Jaafar chat for self-correction.
+- **Dual trigger** — `schedule` automations get a `scheduleTrigger` AND a
+  webhook node (interval from `trigger.config`: `every`/`unit` or `cron`),
+  both feeding the first step: n8n fires autonomously AND the agent can
+  invoke on demand via `{baseUrl}/webhook/{webhookPath}` (binding unchanged).
+- **Data tables** — persistence inside the client's n8n uses
+  `n8n-nodes-base.dataTable` nodes. Tables declared in `blueprint.dataTables`
+  that don't exist are auto-created via `POST /api/v1/data-tables` before
+  workflow creation; real `tableId`s are injected into the nodes. ⚠️ Upstream
+  n8n bug (2.x): API-created tables land in the user's Personal project
+  regardless of `projectId`.
+- **Credential auto-reuse** — when the instance already uses a node type with
+  credentials, the first observed credential `{id, name}` is attached to the
+  generated node (no API-side credential creation exists; users can swap the
+  credential in the editor; `reprovision` resets manual attachments).
+- Steps without a `nodeHint`: generic `httpRequest` when a `config.url`
+  exists, else the conservative Code skeleton with TODO markers.
 - `createWorkflow` + `activateWorkflow` against the CLIENT's connection
   (decrypted `X-N8N-API-KEY`)
 - Read-back captures `externalWorkflowId` + effective `webhookPath` into the

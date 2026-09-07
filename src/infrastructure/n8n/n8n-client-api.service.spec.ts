@@ -65,6 +65,52 @@ describe('N8nClientApiService', () => {
     );
   });
 
+  it('lists workflow details with node arrays for inventory', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockReset().mockResolvedValueOnce(
+      okJson({
+        data: [
+          { id: 'wf_1', name: 'Flow', active: true, nodes: [{ type: 'n8n-nodes-base.webhook' }] },
+        ],
+      }),
+    );
+
+    const service = new N8nClientApiService(mockConfig() as never);
+    const details = await service.listWorkflowDetails(connection);
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/v1/workflows?limit=100');
+    expect(details[0]?.nodes?.[0]?.type).toBe('n8n-nodes-base.webhook');
+  });
+
+  it('lists and creates data tables', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock
+      .mockReset()
+      .mockResolvedValueOnce(okJson({ data: [{ id: 'dt-1', name: 'log', columns: [] }] }))
+      .mockResolvedValueOnce(okJson({ id: 'dt-2', name: 'log2' }));
+
+    const service = new N8nClientApiService(mockConfig() as never);
+    const tables = await service.listDataTables(connection);
+    const created = await service.createDataTable(connection, {
+      name: 'log2',
+      columns: [{ name: 'text', type: 'string' }],
+    });
+
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      'https://n8n.client.example.com/api/v1/data-tables',
+    );
+    expect(tables).toEqual([{ id: 'dt-1', name: 'log', columns: [] }]);
+    expect(String(fetchMock.mock.calls[1][0])).toBe(
+      'https://n8n.client.example.com/api/v1/data-tables',
+    );
+    expect(fetchMock.mock.calls[1][1].method).toBe('POST');
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      name: 'log2',
+      columns: [{ name: 'text', type: 'string' }],
+    });
+    expect(created).toEqual({ id: 'dt-2', name: 'log2' });
+  });
+
   it('maps unresolvable hosts to UNREACHABLE before any request', async () => {
     lookupMock.mockRejectedValue(new Error('ENOTFOUND'));
     const service = new N8nClientApiService(mockConfig() as never);

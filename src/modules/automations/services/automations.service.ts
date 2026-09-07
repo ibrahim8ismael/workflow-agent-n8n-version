@@ -1,5 +1,6 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { N8nClientApiError } from '../../../infrastructure/n8n/n8n-client-api.service';
+import { N8nNodeInventoryService } from '../../../infrastructure/n8n/n8n-node-inventory.service';
 import { N8nProvisionerService } from '../../../infrastructure/n8n/n8n-provisioner.service';
 import { N8nConnectionsService } from '../../integrations/n8n/services/n8n-connections.service';
 import { AUTOMATION_STATUS, type AutomationStatus } from '../constants/automation-status.constants';
@@ -41,6 +42,7 @@ export class AutomationsService {
     private readonly repository: AutomationsRepository,
     private readonly provisioner: N8nProvisionerService,
     private readonly connections: N8nConnectionsService,
+    @Optional() private readonly nodeInventory?: N8nNodeInventoryService,
   ) {}
 
   /**
@@ -142,10 +144,19 @@ export class AutomationsService {
     }
 
     try {
+      // Best-effort instance inventory: enables native node choice, credential
+      // reuse and data-table id mapping. Provisioning works without it.
+      let instance: Awaited<ReturnType<N8nNodeInventoryService['inventory']>> | undefined;
+      try {
+        instance = this.nodeInventory ? await this.nodeInventory.inventory(credentials) : undefined;
+      } catch {
+        instance = undefined;
+      }
       const result = await this.provisioner.provision({
         automationId: automation.id,
         blueprint,
         connection: credentials,
+        instance,
       });
       const active = await this.repository.update(automation.id, {
         status: AUTOMATION_STATUS.ACTIVE,

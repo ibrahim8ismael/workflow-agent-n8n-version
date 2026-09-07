@@ -10,6 +10,7 @@ import { BillingModule } from '../billing/billing.module';
 import { ChannelsModule } from '../channels/channels.module';
 import { ConversationsModule } from '../conversations/conversations.module';
 import { IntegrationsModule } from '../integrations/integrations.module';
+import { N8nConnectionsModule } from '../integrations/n8n/n8n-connections.module';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { MemoryModule } from '../memory/memory.module';
 import { PlannerModule } from '../planner/planner.module';
@@ -59,6 +60,7 @@ import { RuntimeCacheService } from './shared/runtime-cache.service';
     ConversationsModule,
     ChannelsModule,
     IntegrationsModule,
+    N8nConnectionsModule,
     KnowledgeModule,
     MemoryModule,
     PlannerModule,
