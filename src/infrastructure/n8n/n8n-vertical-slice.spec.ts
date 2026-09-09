@@ -9,15 +9,19 @@ import { AutomationsRepository } from '../../modules/automations/repositories/au
 import { AutomationsService } from '../../modules/automations/services/automations.service';
 import { N8nConnectionsRepository } from '../../modules/integrations/n8n/repositories/n8n-connections.repository';
 import { N8nConnectionsService } from '../../modules/integrations/n8n/services/n8n-connections.service';
-import { AutomationDesignSessionService } from '../../modules/runtime/services/automation-design-session.service';
+import { AutomationErrorClassifierService } from '../../modules/runtime/services/automation-error-classifier.service';
+import { AutomationPlanReviewService } from '../../modules/runtime/services/automation-plan-review.service';
+import { AutomationRepairService } from '../../modules/runtime/services/automation-repair.service';
+import { AutomationRuntimeValidatorService } from '../../modules/runtime/services/automation-runtime-validator.service';
 import { AutomationToolResolverService } from '../../modules/runtime/services/automation-tool-resolver.service';
-import { ContextBuilderService } from '../../modules/runtime/services/context-builder.service';
-import { JaafarAutomationDesignGraphService } from '../../modules/runtime/services/jaafar-automation-design-graph.service';
+import { AutomationWorkflowBuilderService } from '../../modules/runtime/services/automation-workflow-builder.service';
+import { JaafarAutomationGraphService } from '../../modules/runtime/services/jaafar-automation-graph.service';
 import { JaafarContextLoaderService } from '../../modules/runtime/services/jaafar-context-loader.service';
 import { ToolExecutorService } from '../../modules/runtime/services/tool-executor.service';
 import { SecretBoxService } from '../crypto/secret-box.service';
 import { LLMRuntimeService } from '../llm-runtime/llm-runtime.service';
 import { N8nClientApiService } from './n8n-client-api.service';
+import { N8nNodeInventoryService } from './n8n-node-inventory.service';
 import { N8nProvisionerService } from './n8n-provisioner.service';
 import { N8nWorkflowExecutorService } from './n8n-workflow-executor.service';
 
@@ -231,7 +235,7 @@ describe('MVP Vertical Slice (client-managed n8n, PLAN Step 12)', () => {
         readiness: [],
       }),
     };
-    const contextBuilder = {
+    const _contextBuilder = {
       build: vi.fn().mockResolvedValue({
         system: 'design prompt',
         messages: [{ role: 'user', content: 'Design an invoice sync automation' }],
@@ -250,12 +254,14 @@ describe('MVP Vertical Slice (client-managed n8n, PLAN Step 12)', () => {
           name: 'Fetch invoices',
           action: 'Fetch paid invoices',
           integration: 'stripe',
+          requirementIds: ['R1'],
           config: {},
         },
         {
           name: 'Log row',
           action: 'Record the sync in the log table',
           integration: 'dataTable',
+          requirementIds: ['R2'],
           config: {},
           nodeHint: {
             type: 'n8n-nodes-base.dataTable',
@@ -329,43 +335,116 @@ describe('MVP Vertical Slice (client-managed n8n, PLAN Step 12)', () => {
     const provisioner = new N8nProvisionerService(clientApi);
     const automations = new AutomationsService(automationsRepo, provisioner, connections);
 
-    const sessionService = new AutomationDesignSessionService(
-      conversations as never,
-      runs as never,
+    // ── 2. Jaafar designs an automation (mock LLM, real V2 graph) ──────────
+    const agentRuns = {
+      createAgentRun: vi.fn().mockImplementation(async () => run),
+      advance: vi.fn().mockImplementation(async (_id: string, change: Record<string, unknown>) => {
+        if (typeof change.toStatus === 'string') run.status = change.toStatus;
+        return run;
+      }),
+      recordArtifacts: vi.fn().mockResolvedValue(run),
+      snapshot: vi.fn().mockImplementation(async () => ({ run, transitions: [] })),
+    };
+    const contextManager = {
+      buildForStage: vi
+        .fn()
+        .mockResolvedValue({ stage: 'PLANNING', agentId: 'agent-1', sections: {} }),
+      renderToPromptText: vi.fn().mockReturnValue('automation context'),
+    };
+    const understandingService = {
+      understand: vi.fn().mockResolvedValue({
+        route: 'automation_design',
+        intent: 'automation_design',
+        goal: 'Sync paid invoices into the ledger',
+        businessContext: '',
+        trigger: { kind: 'schedule', event: '', schedule: 'every 10 minutes' },
+        actions: ['fetch invoices', 'log sync'],
+        entities: ['stripe'],
+        conditions: [],
+        constraints: [],
+        desiredOutcome: 'ledger synced daily',
+        requirements: [
+          { id: 'R1', field: 'fetch', value: 'paid invoices', required: true, source: 'user' },
+          { id: 'R2', field: 'log', value: 'sync log', required: true, source: 'user' },
+        ],
+        assumptions: [],
+        missingInputs: [],
+        confidence: 0.95,
+        clarificationRequired: false,
+        modelCall: {
+          purpose: 'understanding',
+          execution: {},
+          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        },
+      }),
+    };
+    const registry = {
+      capabilitiesForScope: vi.fn().mockResolvedValue([
+        {
+          provider: 'stripe',
+          displayName: 'Stripe',
+          source: 'n8n',
+          connectionStatus: 'CONNECTED',
+          credentialsAvailable: true,
+        },
+        {
+          provider: 'datatable',
+          displayName: 'Datatable',
+          source: 'n8n',
+          connectionStatus: 'CONNECTED',
+          credentialsAvailable: false,
+        },
+      ]),
+    };
+    const nodeInventory = new N8nNodeInventoryService(clientApi);
+    const validator = new AutomationRuntimeValidatorService(
+      new N8nWorkflowExecutorService(baseConfig as never),
+      new AutomationErrorClassifierService(),
     );
-    const designGraph = new JaafarAutomationDesignGraphService(
+    const repair = new AutomationRepairService(llmRuntime as unknown as LLMRuntimeService);
+    const builder = new AutomationWorkflowBuilderService(
+      new AutomationPlanReviewService(),
+      automations,
+      agentRuns as never,
+      connections,
+      nodeInventory,
+    );
+    const automationGraph = new JaafarAutomationGraphService(
+      agentRuns as never,
       runs as never,
       conversations as never,
+      contextManager as never,
       contextLoader as unknown as JaafarContextLoaderService,
-      contextBuilder as unknown as ContextBuilderService,
-      sessionService,
+      understandingService as never,
+      registry as never,
+      new AutomationPlanReviewService(),
+      builder,
+      validator,
+      repair,
+      new AutomationErrorClassifierService(),
       llmRuntime as unknown as LLMRuntimeService,
-      automations,
+      clientApi,
+      connections,
+      nodeInventory,
     );
 
-    const designInput = {
+    const designResult = await automationGraph.run({
       runId: run.id,
       agentId: 'agent-1',
       userMessage: 'Design an invoice sync automation',
       userId: 'user-1',
       effort: 'low' as const,
-    };
-    const designResult = (await designGraph
-      .build()
-      .invoke(
-        { input: designInput },
-        designGraph.graphConfig(run.id, { userId: 'user-1' }),
-      )) as Record<string, unknown>;
-    expect(designResult.__interrupt__).toBeTruthy(); // approval gate
-    expect(run.metadata.automationDesign).toMatchObject({
-      status: 'READY_FOR_REVIEW',
-      approvalStatus: 'READY',
     });
+    expect(designResult.status).toBe('WAITING'); // approval gate
+    expect(run.metadata.automationV2).toBe(true);
 
     // ── 3. User approves → provisioning into the CLIENT's n8n ───────────
-    const approved = await designGraph.resume(run.id, { approved: true }, { userId: 'user-1' });
+    const approved = await automationGraph.resume(run.id, { approved: true }, { userId: 'user-1' });
     expect(approved.status).toBe('COMPLETED');
     expect(approved.response).toContain('ACTIVE');
+    // Completion requires the full pipeline — static validation, test
+    // execution against the webhook, and live verification.
+    expect(approved.response).toContain('executed against test data');
 
     const automation = await automations.findById('auto-1', { userId: 'user-1' });
     expect(automation.status).toBe('ACTIVE');

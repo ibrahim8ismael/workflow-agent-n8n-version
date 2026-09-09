@@ -34,6 +34,8 @@ const automationRow = (overrides: Record<string, unknown> = {}) => ({
   webhookPath: null,
   lastSyncedAt: null,
   lastError: null,
+  version: 1,
+  blueprintHistory: [],
   userId: 'user-1',
   organizationId: null,
   createdAt: new Date(),
@@ -156,5 +158,90 @@ describe('AutomationsService', () => {
     await expect(service.findById('auto-1', { userId: 'user-2' })).rejects.toThrow(
       NotFoundException,
     );
+  });
+
+  it('bumps the version and journals history on every successful provision', async () => {
+    repository.findById = vi
+      .fn()
+      .mockResolvedValue(automationRow({ version: 2, blueprintHistory: [] }));
+
+    const result = await service.approve('auto-1', { userId: 'user-1' });
+
+    expect(result.version).toBe(3);
+    expect(repository.update).toHaveBeenCalledWith(
+      'auto-1',
+      expect.objectContaining({
+        version: 3,
+        blueprintHistory: [expect.objectContaining({ version: 3, externalWorkflowId: 'wf-1' })],
+      }),
+    );
+  });
+
+  it('rolls back to a history version by re-provisioning it as a new version', async () => {
+    const oldBlueprint = { ...blueprint, name: 'Invoice sync v1' };
+    const stored = automationRow({
+      status: AUTOMATION_STATUS.ACTIVE,
+      version: 2,
+      externalWorkflowId: 'wf-2',
+      blueprintHistory: [
+        {
+          version: 1,
+          blueprint: oldBlueprint,
+          externalWorkflowId: 'wf-1',
+          provisionedAt: new Date().toISOString(),
+        },
+      ],
+    });
+    repository.findById = vi.fn().mockResolvedValue(stored);
+    repository.update = vi.fn().mockImplementation(async (_id, data) => {
+      Object.assign(stored, data);
+      return stored;
+    });
+
+    const result = await service.rollbackToVersion('auto-1', 1, { userId: 'user-1' });
+
+    expect(repository.update).toHaveBeenCalledWith(
+      'auto-1',
+      expect.objectContaining({
+        blueprint: oldBlueprint,
+        status: AUTOMATION_STATUS.PENDING_APPROVAL,
+      }),
+    );
+    expect(provisioner.provision).toHaveBeenCalled();
+    expect(result.version).toBe(3);
+  });
+
+  it('rejects rollback to an unknown version', async () => {
+    repository.findById = vi
+      .fn()
+      .mockResolvedValue(automationRow({ status: AUTOMATION_STATUS.ACTIVE, blueprintHistory: [] }));
+
+    await expect(service.rollbackToVersion('auto-1', 9, { userId: 'user-1' })).rejects.toThrow(
+      'no provisioned version 9',
+    );
+    expect(provisioner.provision).not.toHaveBeenCalled();
+  });
+
+  it('replaces the blueprint and returns the row to PENDING_APPROVAL', async () => {
+    const next = { ...blueprint, name: 'Invoice sync v2' };
+
+    const result = await service.updateBlueprint(
+      'auto-1',
+      next as unknown as Record<string, unknown>,
+      { userId: 'user-1' },
+    );
+
+    expect(repository.update).toHaveBeenCalledWith(
+      'auto-1',
+      expect.objectContaining({ status: AUTOMATION_STATUS.PENDING_APPROVAL, lastError: null }),
+    );
+    expect(result.status).toBe(AUTOMATION_STATUS.PENDING_APPROVAL);
+  });
+
+  it('rejects invalid blueprints on update', async () => {
+    await expect(
+      service.updateBlueprint('auto-1', { name: '' } as never, { userId: 'user-1' }),
+    ).rejects.toThrow();
+    expect(repository.update).not.toHaveBeenCalled();
   });
 });

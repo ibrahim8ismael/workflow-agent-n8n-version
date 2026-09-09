@@ -12,6 +12,14 @@ import {
   blueprintRevision,
 } from '../schemas/automation-blueprint.schema';
 
+/** One entry of an automation's provision history (rollback source). */
+export interface AutomationVersionEntry {
+  version: number;
+  blueprint: unknown;
+  externalWorkflowId: string | null;
+  provisionedAt: string;
+}
+
 /** Automation as exposed by the API. */
 export interface AutomationView {
   id: string;
@@ -25,6 +33,8 @@ export interface AutomationView {
   lastSyncedAt: Date | null;
   blueprintRevision: string | null;
   lastError: string | null;
+  /** Incremented on every successful provision (§28). */
+  version: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -103,6 +113,55 @@ export class AutomationsService {
     return this.provision(automation);
   }
 
+  /**
+   * Replaces the stored blueprint (repair flow) and returns the row to
+   * PENDING_APPROVAL — provisioning stays reachable only via approve().
+   */
+  async updateBlueprint(
+    id: string,
+    blueprint: Record<string, unknown>,
+    scope: OwnerScope,
+  ): Promise<AutomationView> {
+    const automation = await this.getOwned(id, scope);
+    const parsed = automationBlueprintSchema.parse(blueprint);
+    const updated = await this.repository.update(automation.id, {
+      blueprint: parsed as never,
+      status: AUTOMATION_STATUS.PENDING_APPROVAL,
+      lastError: null,
+    });
+    return this.toView(updated);
+  }
+
+  /**
+   * Roll back to a previous provisioned version (§28): the history entry's
+   * blueprint is restored and re-provisioned as a NEW version (history is
+   * append-only — rollback never rewrites the past).
+   */
+  async rollbackToVersion(id: string, version: number, scope: OwnerScope): Promise<AutomationView> {
+    const automation = await this.getOwned(id, scope);
+    const history = this.readHistory(automation.blueprintHistory);
+    const entry = history.find((item) => item.version === version);
+    if (!entry) {
+      const available = history.map((item) => item.version).join(', ') || 'none';
+      throw new NotFoundException(
+        `Automation "${id}" has no provisioned version ${version} (available: ${available})`,
+      );
+    }
+    const restored = await this.repository.update(automation.id, {
+      blueprint: entry.blueprint as never,
+      status: AUTOMATION_STATUS.PENDING_APPROVAL,
+      lastError: null,
+    });
+    return this.provision(restored);
+  }
+
+  /** Provision history (oldest first), tolerant of legacy rows. */
+  history(id: string, scope: OwnerScope): Promise<AutomationVersionEntry[]> {
+    return this.getOwned(id, scope).then((automation) =>
+      this.readHistory(automation.blueprintHistory),
+    );
+  }
+
   async softDelete(id: string, scope: OwnerScope): Promise<AutomationView> {
     await this.getOwned(id, scope);
     return this.toView(await this.repository.softDelete(id));
@@ -158,12 +217,23 @@ export class AutomationsService {
         connection: credentials,
         instance,
       });
+      const nextVersion = (automation.version ?? 0) + 1;
       const active = await this.repository.update(automation.id, {
         status: AUTOMATION_STATUS.ACTIVE,
         externalWorkflowId: result.externalWorkflowId,
         webhookPath: result.webhookPath,
         lastSyncedAt: new Date(),
         lastError: null,
+        version: nextVersion,
+        blueprintHistory: [
+          ...this.readHistory(automation.blueprintHistory),
+          {
+            version: nextVersion,
+            blueprint: automation.blueprint,
+            externalWorkflowId: result.externalWorkflowId,
+            provisionedAt: new Date().toISOString(),
+          },
+        ] as never,
       });
       return this.toView(active);
     } catch (error) {
@@ -211,6 +281,7 @@ export class AutomationsService {
     webhookPath: string | null;
     lastSyncedAt: Date | null;
     lastError: string | null;
+    version?: number | null;
     createdAt: Date;
     updatedAt: Date;
   }): AutomationView {
@@ -227,9 +298,20 @@ export class AutomationsService {
       lastSyncedAt: automation.lastSyncedAt,
       blueprintRevision: revision,
       lastError: automation.lastError,
+      version: automation.version ?? 1,
       createdAt: automation.createdAt,
       updatedAt: automation.updatedAt,
     };
+  }
+
+  private readHistory(value: unknown): AutomationVersionEntry[] {
+    if (!Array.isArray(value)) return [];
+    return value.filter(
+      (entry): entry is AutomationVersionEntry =>
+        Boolean(entry) &&
+        typeof entry === 'object' &&
+        typeof (entry as { version?: unknown }).version === 'number',
+    );
   }
 
   private safeRevision(blueprint: unknown): string | null {

@@ -145,6 +145,43 @@ export class AIAdapterService implements IAIAdapter {
       .trim()
       .replace(/^```(?:json)?\s*/i, '')
       .replace(/\s*```$/, '');
-    return JSON.parse(withoutFences);
+    const withoutReasoning = this.stripReasoningBlocks(withoutFences).trim();
+    try {
+      return JSON.parse(withoutReasoning);
+    } catch {
+      // Last resort: first balanced {...} substring (prose-wrapped JSON).
+      const start = withoutReasoning.indexOf('{');
+      if (start === -1) throw new Error('No JSON object found in model response');
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let i = start; i < withoutReasoning.length; i++) {
+        const char = withoutReasoning[i];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (char === '\\') escaped = true;
+          else if (char === '"') inString = false;
+          continue;
+        }
+        if (char === '"') inString = true;
+        else if (char === '{') depth += 1;
+        else if (char === '}') {
+          depth -= 1;
+          if (depth === 0) return JSON.parse(withoutReasoning.slice(start, i + 1));
+        }
+      }
+      throw new Error('No balanced JSON object found in model response');
+    }
+  }
+
+  /**
+   * Reasoning models (e.g. minimax via OpenRouter) wrap answers in
+   * <think>/<reasoning> blocks. Kept local to the adapter — the runtime
+   * has its own streaming variant (think-tags.ts).
+   */
+  private stripReasoningBlocks(text: string): string {
+    return text
+      .replace(/<(think|mm:think|reasoning)\s*>[\s\S]*?<\/(think|mm:think|reasoning)\s*>/gi, '')
+      .replace(/<\/?(think|mm:think|reasoning)\s*>/gi, '');
   }
 }

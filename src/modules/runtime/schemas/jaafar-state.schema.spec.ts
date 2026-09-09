@@ -19,7 +19,14 @@ const state: JaafarState = {
       intent: 'automation_design',
       goal: 'Create a support employee',
       businessContext: '',
+      trigger: { kind: 'none', event: '', schedule: '' },
+      actions: [],
+      entities: [],
+      conditions: [],
+      constraints: [],
+      desiredOutcome: '',
       requirements: [{ field: 'role', value: 'support', required: true, source: 'user' }],
+      assumptions: [],
       missingInputs: [
         {
           field: 'channels',

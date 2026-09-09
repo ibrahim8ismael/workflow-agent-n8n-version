@@ -37,6 +37,18 @@ export interface N8nDataTable {
   columns?: Array<{ name: string; type: string }>;
 }
 
+/**
+ * A credential stored in the client's n8n instance. The public API never
+ * returns secret material here — only identity + type, which is exactly
+ * what the integration registry needs to map capabilities.
+ */
+export interface N8nCredentialSummary {
+  id: string;
+  name: string;
+  /** Credential type, e.g. `slackOAuth2Api`, `whatsAppCloudApi`. */
+  type: string;
+}
+
 export type N8nClientErrorCode = 'INVALID_CREDENTIALS' | 'UNREACHABLE' | 'API_ERROR';
 
 export class N8nClientApiError extends Error {
@@ -166,6 +178,28 @@ export class N8nClientApiService {
       new URL(`${this.apiBase(connection.baseUrl)}/data-tables`),
       { method: 'POST', body: JSON.stringify(payload) },
     );
+  }
+
+  /**
+   * Lists credential identities in the client instance. Returns id/name/type
+   * only — the n8n public API never exposes secret material on this route,
+   * which makes it safe input for the integration capability registry.
+   */
+  async listCredentials(connection: N8nClientConnection): Promise<N8nCredentialSummary[]> {
+    const data = await this.request<N8nCredentialSummary[] | { data: N8nCredentialSummary[] }>(
+      connection,
+      new URL(`${this.apiBase(connection.baseUrl)}/credentials`),
+    );
+    const rows = Array.isArray(data) ? data : (data.data ?? []);
+    return rows
+      .filter(
+        (row) =>
+          row &&
+          typeof row.id === 'string' &&
+          typeof row.name === 'string' &&
+          typeof row.type === 'string',
+      )
+      .map((row) => ({ id: row.id, name: row.name, type: row.type }));
   }
 
   /**

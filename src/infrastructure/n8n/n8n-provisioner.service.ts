@@ -41,6 +41,26 @@ interface BuiltNode {
 
 const NODE_TYPE_PATTERN = /^[a-z0-9][a-z0-9-]*\.[a-zA-Z0-9.@_-]+$/;
 
+/** Credential identity for first-use fallback (no secrets — id/name/type only). */
+export interface CredentialFallbackEntry {
+  id: string;
+  name: string;
+  type: string;
+}
+
+/** Nodes that never take fallback credentials (plumbing, no provider auth). */
+const NO_CREDENTIAL_FALLBACK_TYPES = new Set([
+  'n8n-nodes-base.webhook',
+  'n8n-nodes-base.scheduleTrigger',
+  'n8n-nodes-base.manualTrigger',
+  'n8n-nodes-base.respondToWebhook',
+  'n8n-nodes-base.code',
+  'n8n-nodes-base.set',
+  'n8n-nodes-base.httpRequest',
+  'n8n-nodes-base.if',
+  'n8n-nodes-base.dataTable',
+]);
+
 /**
  * Provisions Jaafar-designed automations into a CLIENT's n8n instance.
  * Steps carrying a `nodeHint` become the real n8n nodes Jaafar chose from
@@ -60,6 +80,7 @@ export class N8nProvisionerService {
     const webhookPath = automationWebhookSlug(automationId, blueprint.name);
 
     const dataTableIds = await this.ensureDataTables(blueprint, instance, connection);
+    const credentialFallback = await this.loadCredentialFallback(connection);
 
     const workflow = this.toWorkflowJson({
       automationId,
@@ -67,6 +88,7 @@ export class N8nProvisionerService {
       webhookPath,
       dataTableIds,
       instance,
+      credentialFallback,
     });
 
     const created = await this.clientApi.createWorkflow(connection, workflow);
@@ -173,8 +195,10 @@ export class N8nProvisionerService {
     webhookPath: string;
     dataTableIds: Record<string, string>;
     instance?: N8nInstanceInventory;
+    credentialFallback?: CredentialFallbackEntry[];
   }): Record<string, unknown> {
-    const { automationId, blueprint, webhookPath, dataTableIds, instance } = input;
+    const { automationId, blueprint, webhookPath, dataTableIds, instance, credentialFallback } =
+      input;
     const isSchedule = blueprint.trigger.type === 'schedule';
     const isManual = blueprint.trigger.type === 'manual';
 
@@ -207,13 +231,13 @@ export class N8nProvisionerService {
     const entryNodes: BuiltNode[] = [
       ...triggerNodes,
       ...hintedTriggerSteps.map(({ step, index }) =>
-        this.stepNode(step, index, automationId, dataTableIds, instance),
+        this.stepNode(step, index, automationId, dataTableIds, instance, credentialFallback),
       ),
       webhookNode,
     ];
 
     const stepNodes = actionSteps.map(({ step, index }) =>
-      this.stepNode(step, index, automationId, dataTableIds, instance),
+      this.stepNode(step, index, automationId, dataTableIds, instance, credentialFallback),
     );
 
     const respondNode = this.respondNode(automationId, stepNodes.length);
@@ -313,6 +337,7 @@ export class N8nProvisionerService {
     automationId: string,
     dataTableIds: Record<string, string>,
     instance?: N8nInstanceInventory,
+    credentialFallback?: CredentialFallbackEntry[],
   ): BuiltNode {
     const id = `step-${index + 1}-${automationId.slice(0, 8)}`;
     const name = `Step ${index + 1}: ${step.name}`;
@@ -348,7 +373,7 @@ export class N8nProvisionerService {
         type: hint.type,
         typeVersion: hint.typeVersion ?? 1,
         parameters,
-        credentials: this.reuseCredentials(hint.type, instance),
+        credentials: this.reuseCredentials(hint.type, instance, credentialFallback),
       };
       return node;
     }
@@ -393,16 +418,58 @@ export class N8nProvisionerService {
   }
 
   /**
+   * Available credential identities for first-use fallback (id/name/type
+   * only — the public API never returns secrets). Loaded best-effort once
+   * per provisioning.
+   */
+  private async loadCredentialFallback(
+    connection: N8nClientConnection,
+  ): Promise<CredentialFallbackEntry[]> {
+    try {
+      return await this.clientApi.listCredentials(connection);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * When the client's instance already uses this node type with credentials,
    * attach the first observed credential reference so the provisioned node
-   * works without manual wiring. Users can swap it in the n8n editor.
+   * works without manual wiring. First-use fallback: when the node type was
+   * never used but the instance holds a uniquely matching credential (by
+   * normalized credential-type ↔ node-suffix similarity), attach it.
+   * Structural/plumbing nodes never take fallback credentials. Ambiguous
+   * matches throw a clear resolution error instead of provisioning an
+   * unauthenticated native node. Users can swap credentials in the n8n editor.
    */
   private reuseCredentials(
     nodeType: string,
     instance?: N8nInstanceInventory,
+    credentialFallback?: CredentialFallbackEntry[],
   ): Record<string, { id: string; name: string }> | undefined {
     const observed = instance?.nodeTypes.find((n) => n.type === nodeType);
-    if (!observed?.credentials) return undefined;
-    return observed.credentials;
+    if (observed?.credentials && Object.keys(observed.credentials).length > 0) {
+      return observed.credentials;
+    }
+    if (!credentialFallback || credentialFallback.length === 0) return undefined;
+    if (NO_CREDENTIAL_FALLBACK_TYPES.has(nodeType)) return undefined;
+    const normalize = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const dot = nodeType.lastIndexOf('.');
+    const suffix = normalize(dot >= 0 ? nodeType.slice(dot + 1) : nodeType);
+    if (!suffix) return undefined;
+    const matches = credentialFallback.filter((credential) => {
+      const credNorm = normalize(credential.type);
+      return credNorm === suffix || credNorm.startsWith(suffix) || suffix.startsWith(credNorm);
+    });
+    if (matches.length === 1) {
+      const match = matches[0] as CredentialFallbackEntry;
+      return { [match.type]: { id: match.id, name: match.name } };
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `Cannot uniquely resolve a credential for node "${nodeType}": found ${matches.map((m) => `"${m.name}" (${m.type})`).join(', ')}. Keep a single matching credential or wire it explicitly in n8n.`,
+      );
+    }
+    return undefined;
   }
 }

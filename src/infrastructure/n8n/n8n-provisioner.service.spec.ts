@@ -53,6 +53,7 @@ describe('N8nProvisionerService', () => {
     }),
     listDataTables: vi.fn().mockResolvedValue([]),
     createDataTable: vi.fn().mockResolvedValue({ id: 'dt-1', name: 'ledger' }),
+    listCredentials: vi.fn().mockResolvedValue([]),
   } as unknown as N8nClientApiService;
 
   it('creates and activates a workflow, binding the webhook path', async () => {
@@ -350,5 +351,76 @@ describe('N8nProvisionerService', () => {
     const payload = vi.mocked(clientApi.createWorkflow).mock.calls.at(-1)![1] as WorkflowPayload;
     const http = findNode(payload, 'n8n-nodes-base.httpRequest')[0]!;
     expect(http.parameters).toMatchObject({ method: 'POST', url: 'https://crm.example.com/api' });
+  });
+
+  it('attaches a matching credential on first use of a native node', async () => {
+    const service = new N8nProvisionerService(clientApi);
+    vi.mocked(clientApi.listCredentials).mockResolvedValueOnce([
+      { id: 'cred-7', name: 'HubSpot prod', type: 'hubspotOAuth2Api' },
+    ]);
+    const instance: N8nInstanceInventory = {
+      // HubSpot node never used here — no observed credentials.
+      nodeTypes: [{ type: 'n8n-nodes-base.hubSpot', typeVersion: 4, inUse: false }],
+      dataTables: [],
+      dataTablesSupported: false,
+    };
+
+    await service.provision({
+      automationId: 'b7e2c1aa-1234-5678',
+      blueprint: {
+        ...blueprint,
+        trigger: { type: 'webhook', config: {} },
+        steps: [
+          {
+            name: 'Create contact',
+            action: 'Create the HubSpot contact',
+            integration: 'hubspot',
+            config: {},
+            nodeHint: { type: 'n8n-nodes-base.hubSpot', typeVersion: 4, parameters: {} },
+          },
+        ],
+      },
+      connection: { baseUrl: 'https://client.example.com', apiKey: 'key' },
+      instance,
+    });
+
+    const payload = vi.mocked(clientApi.createWorkflow).mock.calls.at(-1)![1] as WorkflowPayload;
+    expect(findNode(payload, 'n8n-nodes-base.hubSpot')[0]?.credentials).toEqual({
+      hubspotOAuth2Api: { id: 'cred-7', name: 'HubSpot prod' },
+    });
+  });
+
+  it('fails clearly when first-use credentials are ambiguous', async () => {
+    const service = new N8nProvisionerService(clientApi);
+    vi.mocked(clientApi.listCredentials).mockResolvedValueOnce([
+      { id: 'cred-1', name: 'WA one', type: 'whatsAppCloudApi' },
+      { id: 'cred-2', name: 'WA two', type: 'whatsAppTriggerApi' },
+    ]);
+    const instance: N8nInstanceInventory = {
+      nodeTypes: [{ type: 'n8n-nodes-base.whatsApp', typeVersion: 1, inUse: false }],
+      dataTables: [],
+      dataTablesSupported: false,
+    };
+
+    await expect(
+      service.provision({
+        automationId: 'b7e2c1aa-1234-5678',
+        blueprint: {
+          ...blueprint,
+          trigger: { type: 'webhook', config: {} },
+          steps: [
+            {
+              name: 'Send WhatsApp',
+              action: 'Send a WhatsApp message',
+              integration: 'whatsapp',
+              config: {},
+              nodeHint: { type: 'n8n-nodes-base.whatsApp', typeVersion: 1, parameters: {} },
+            },
+          ],
+        },
+        connection: { baseUrl: 'https://client.example.com', apiKey: 'key' },
+        instance,
+      }),
+    ).rejects.toThrow('Cannot uniquely resolve a credential');
   });
 });

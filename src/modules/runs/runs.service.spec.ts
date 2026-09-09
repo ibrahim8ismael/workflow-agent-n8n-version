@@ -27,6 +27,7 @@ describe('RunsService', () => {
     findByAgent: vi.fn(),
     findMany: vi.fn(),
     update: vi.fn(),
+    createTransition: vi.fn().mockResolvedValue({ id: 'trans-1' }),
   } as unknown as RunsRepository;
 
   beforeEach(() => {
@@ -161,6 +162,22 @@ describe('RunsService', () => {
         'run-1',
         expect.objectContaining({ status: 'COMPLETED', result: 'final answer' }),
       );
+      expect(mockRepo.createTransition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: 'run-1',
+          fromStatus: 'CREATED',
+          toStatus: 'COMPLETED',
+          reason: 'run completed',
+        }),
+      );
+    });
+
+    it('should reject completing an already-terminal run', async () => {
+      vi.mocked(mockRepo.findById).mockResolvedValue(run({ status: 'COMPLETED' }) as never);
+
+      await expect(service.complete('run-1', 'again')).rejects.toThrow(
+        'COMPLETED is terminal and cannot move to COMPLETED',
+      );
     });
   });
 
@@ -172,6 +189,17 @@ describe('RunsService', () => {
         'run-1',
         expect.objectContaining({ status: 'FAILED', error: 'boom' }),
       );
+      expect(mockRepo.createTransition).toHaveBeenCalledWith(
+        expect.objectContaining({ fromStatus: 'CREATED', toStatus: 'FAILED' }),
+      );
+    });
+
+    it('should reject failing a CANCELLED run', async () => {
+      vi.mocked(mockRepo.findById).mockResolvedValue(run({ status: 'CANCELLED' }) as never);
+
+      await expect(service.fail('run-1', 'boom')).rejects.toThrow(
+        'CANCELLED is terminal and cannot move to FAILED',
+      );
     });
   });
 
@@ -182,6 +210,14 @@ describe('RunsService', () => {
       expect(mockRepo.update).toHaveBeenCalledWith(
         'run-1',
         expect.objectContaining({ status: 'CANCELLED' }),
+      );
+    });
+
+    it('should reject cancelling a FAILED run', async () => {
+      vi.mocked(mockRepo.findById).mockResolvedValue(run({ status: 'FAILED' }) as never);
+
+      await expect(service.cancel('run-1')).rejects.toThrow(
+        'FAILED is terminal and cannot move to CANCELLED',
       );
     });
   });

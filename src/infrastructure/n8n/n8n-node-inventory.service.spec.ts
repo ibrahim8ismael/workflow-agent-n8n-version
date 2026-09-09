@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { N8nClientApiError } from './n8n-client-api.service';
-import { N8nNodeInventoryService } from './n8n-node-inventory.service';
+import { N8nNodeInventoryService, N8nNodeSchemaError } from './n8n-node-inventory.service';
 
 const connection = { baseUrl: 'http://localhost:7777', apiKey: 'key' };
 
@@ -97,5 +97,75 @@ describe('N8nNodeInventoryService', () => {
     svc.invalidate(connection);
     await svc.inventory(connection);
     expect(clientApi.listWorkflowDetails).toHaveBeenCalledTimes(2);
+  });
+
+  describe('describeNodeType', () => {
+    beforeEach(() => {
+      clientApi.listWorkflowDetails.mockResolvedValue([
+        {
+          nodes: [
+            {
+              type: 'n8n-nodes-base.slack',
+              typeVersion: 2.2,
+              parameters: { resource: 'message', operation: 'send', channel: 'C1' },
+              credentials: { slackOAuth2Api: { id: 'cred-9', name: 'Slack' } },
+            },
+          ],
+        },
+      ]);
+      clientApi.listDataTables.mockResolvedValue([]);
+    });
+
+    it('returns the curated schema for structural nodes', async () => {
+      const schema = await service().describeNodeType(connection, 'n8n-nodes-base.code');
+
+      expect(schema).toMatchObject({
+        nodeType: 'n8n-nodes-base.code',
+        required: ['jsCode'],
+        operationVerified: true,
+        source: 'curated',
+      });
+    });
+
+    it('resolves short names and verifies known operations', async () => {
+      const schema = await service().describeNodeType(connection, 'slack', 'send');
+
+      expect(schema).toMatchObject({
+        nodeType: 'n8n-nodes-base.slack',
+        operation: 'send',
+        operationVerified: true,
+        source: 'curated',
+      });
+      // Credential TYPE names only — never ids.
+      expect(schema.credentials).toEqual(['slackOAuth2Api']);
+      expect(schema.parametersObserved).toMatchObject({ operation: 'send' });
+    });
+
+    it('flags undocumented operations instead of failing the build', async () => {
+      const schema = await service().describeNodeType(connection, 'slack', 'futureOp');
+
+      expect(schema.operationVerified).toBe(false);
+      expect(schema.operations).toContain('send');
+    });
+
+    it('rejects operations on trigger nodes', async () => {
+      await expect(service().describeNodeType(connection, 'webhook', 'send')).rejects.toMatchObject(
+        {
+          name: 'N8nNodeSchemaError',
+          code: 'OPERATION_NOT_SUPPORTED',
+        },
+      );
+    });
+
+    it('rejects unknown node types with the available list', async () => {
+      const error = await service()
+        .describeNodeType(connection, 'n8n-nodes-base.hallucinated')
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(N8nNodeSchemaError);
+      expect(error as N8nNodeSchemaError).toMatchObject({ code: 'NODE_NOT_FOUND' });
+      const details = (error as N8nNodeSchemaError).details as { available: string[] };
+      expect(details.available).toContain('n8n-nodes-base.slack');
+    });
   });
 });

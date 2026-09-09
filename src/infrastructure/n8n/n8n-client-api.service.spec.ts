@@ -111,6 +111,32 @@ describe('N8nClientApiService', () => {
     expect(created).toEqual({ id: 'dt-2', name: 'log2' });
   });
 
+  it('lists credential identities without secret material', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockReset().mockResolvedValueOnce(
+      okJson({
+        data: [
+          { id: 'cred-1', name: 'Slack prod', type: 'slackOAuth2Api' },
+          { id: 'cred-2', name: 'WA', type: 'whatsAppCloudApi' },
+          { id: 'bad', name: 'Broken' },
+          null,
+        ],
+      }),
+    );
+
+    const service = new N8nClientApiService(mockConfig() as never);
+    const credentials = await service.listCredentials(connection);
+
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      'https://n8n.client.example.com/api/v1/credentials',
+    );
+    // Malformed rows dropped; only id/name/type identity survives.
+    expect(credentials).toEqual([
+      { id: 'cred-1', name: 'Slack prod', type: 'slackOAuth2Api' },
+      { id: 'cred-2', name: 'WA', type: 'whatsAppCloudApi' },
+    ]);
+  });
+
   it('maps unresolvable hosts to UNREACHABLE before any request', async () => {
     lookupMock.mockRejectedValue(new Error('ENOTFOUND'));
     const service = new N8nClientApiService(mockConfig() as never);

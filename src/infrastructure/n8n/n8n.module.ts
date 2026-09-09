@@ -16,6 +16,11 @@ import { N8nWorkflowExecutorService } from './n8n-workflow-executor.service';
     N8nProvisionerService,
     N8nNodeInventoryService,
   ],
-  exports: [N8nWorkflowExecutorService, N8nProvisionerService, N8nNodeInventoryService],
+  exports: [
+    N8nClientApiService,
+    N8nWorkflowExecutorService,
+    N8nProvisionerService,
+    N8nNodeInventoryService,
+  ],
 })
 export class N8nModule {}

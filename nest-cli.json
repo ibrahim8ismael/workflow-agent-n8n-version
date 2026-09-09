@@ -5,6 +5,7 @@
   "compilerOptions": {
     "builder": "swc",
     "typeCheck": true,
-    "tsConfigPath": "tsconfig.json"
+    "tsConfigPath": "tsconfig.json",
+    "assets": [{ "include": "**/*.json", "outDir": "dist" }]
   }
 }

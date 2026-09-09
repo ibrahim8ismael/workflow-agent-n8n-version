@@ -7,7 +7,7 @@ function createService() {
     reject: vi.fn().mockResolvedValue({ runId: 'legacy-run', status: 'CANCELLED', usage: {} }),
   };
   const runs = {
-    findById: vi.fn(),
+    findById: vi.fn().mockResolvedValue({ id: 'task-run', status: 'EXECUTING', metadata: {} }),
     findLatestWaitingInConversation: vi.fn().mockResolvedValue(null),
     cancel: vi.fn(),
     create: vi.fn().mockResolvedValue({ id: 'task-run' }),
@@ -16,25 +16,21 @@ function createService() {
     fail: vi.fn(),
     complete: vi.fn().mockResolvedValue({ id: 'task-run' }),
   };
-  const automationDesignGraph = {
-    run: vi.fn().mockResolvedValue({ runId: 'task-run', status: 'WAITING', usage: {} }),
-    resume: vi.fn().mockResolvedValue({ runId: 'task-run', status: 'COMPLETED', usage: {} }),
-    build: vi.fn().mockReturnValue({
-      invoke: vi
-        .fn()
-        .mockResolvedValue({ route: 'completed', response: 'Automation provisioned.', usage: {} }),
-      stream: vi.fn().mockReturnValue(
-        (async function* () {
-          yield {
-            type: 'run.completed',
-            runId: 'task-run',
-            response: 'Automation provisioned.',
-            usage: {},
-          };
-        })(),
-      ),
-    }),
-    graphConfig: vi.fn().mockReturnValue({ configurable: { thread_id: 'test' } }),
+  const automationGraph = {
+    run: vi
+      .fn()
+      .mockResolvedValue({ runId: 'task-run', status: 'WAITING', response: '', usage: {} }),
+    resume: vi
+      .fn()
+      .mockResolvedValue({ runId: 'task-run', status: 'COMPLETED', response: 'Done', usage: {} }),
+    retryFromFailure: vi
+      .fn()
+      .mockResolvedValue({ runId: 'task-run', status: 'COMPLETED', response: 'Done', usage: {} }),
+    stream: vi.fn().mockReturnValue(
+      (async function* () {
+        yield { type: 'run.waiting', runId: 'task-run', reason: 'approval' };
+      })(),
+    ),
   };
   const understandingGraph = { build: vi.fn() };
   const executionGraph = {
@@ -107,7 +103,7 @@ function createService() {
     runtime as never,
     runs as never,
     conversations as never,
-    automationDesignGraph as never,
+    automationGraph as never,
     executionGraph as never,
     conversationGraph as never,
     jaafarGraph as never,
@@ -117,7 +113,7 @@ function createService() {
     runtime,
     runs,
     conversations,
-    automationDesignGraph,
+    automationGraph,
     understandingGraph,
     executionGraph,
     conversationGraph,
@@ -127,7 +123,7 @@ function createService() {
 
 describe('JaafarRuntimeService', () => {
   it('starts explicit automation-design requests on the graph branch', async () => {
-    const { service, automationDesignGraph, jaafarGraph } = createService();
+    const { service, automationGraph, jaafarGraph } = createService();
     jaafarGraph.classify.mockResolvedValue({
       route: 'automation_design',
       understanding: { route: 'automation_design' },
@@ -140,11 +136,14 @@ describe('JaafarRuntimeService', () => {
     });
 
     expect(result.runId).toBe('task-run');
-    expect(automationDesignGraph.build().invoke).toHaveBeenCalled();
+    expect(result.status).toBe('WAITING');
+    expect(automationGraph.run).toHaveBeenCalledWith(
+      expect.objectContaining({ userMessage: 'Design an invoice automation', runId: 'task-run' }),
+    );
   });
 
   it('uses the conversation graph when classification is unavailable', async () => {
-    const { service, conversationGraph, automationDesignGraph, jaafarGraph } = createService();
+    const { service, conversationGraph, automationGraph, jaafarGraph } = createService();
     jaafarGraph.classify.mockRejectedValue(new Error('classifier unavailable'));
 
     const result = await service.start({ agentId: 'agent-1', userMessage: 'What is our policy?' });
@@ -153,7 +152,7 @@ describe('JaafarRuntimeService', () => {
     expect(conversationGraph.run).toHaveBeenCalledWith(
       expect.objectContaining({ mode: 'conversation' }),
     );
-    expect(automationDesignGraph.run).not.toHaveBeenCalled();
+    expect(automationGraph.run).not.toHaveBeenCalled();
   });
 
   it('classifies ordinary conversation and uses the conversation graph', async () => {
@@ -235,7 +234,7 @@ describe('JaafarRuntimeService', () => {
   });
 
   it('resumes graph-owned automation designs through approval', async () => {
-    const { service, runs, automationDesignGraph } = createService();
+    const { service, runs, automationGraph } = createService();
     runs.findById.mockResolvedValue({
       status: 'WAITING',
       metadata: { runtimeMode: 'automation_design' },
@@ -244,11 +243,13 @@ describe('JaafarRuntimeService', () => {
     const result = await service.approve('task-run', { approved: true }, { userId: 'user-1' });
 
     expect(result.status).toBe('COMPLETED');
-    expect(automationDesignGraph.resume).toHaveBeenCalledWith(
+    expect(automationGraph.resume).toHaveBeenCalledWith(
       'task-run',
-      { approved: true, blueprintRevision: '' },
+      expect.objectContaining({ approved: true }),
       { userId: 'user-1' },
     );
+    // V2 owns the WAITING status — no legacy pre-transition for design runs.
+    expect(runs.transitionStatus).not.toHaveBeenCalledWith('task-run', 'EXECUTING');
   });
 
   it('keeps legacy approval behavior for non-graph runs', async () => {
@@ -379,19 +380,18 @@ describe('JaafarRuntimeService', () => {
     expect(conversationGraph.stream).toHaveBeenCalled();
   });
 
-  it('parks automation design runs in WAITING when the design graph interrupts for approval', async () => {
-    const { service, runs, automationDesignGraph, jaafarGraph } = createService();
+  it('parks automation design runs in WAITING when the V2 graph awaits approval', async () => {
+    const { service, runs, automationGraph, jaafarGraph } = createService();
     jaafarGraph.classify.mockResolvedValue({
       understanding: { route: 'automation_design', intent: 'automation_design' },
     });
-    automationDesignGraph.build.mockReturnValue({
-      invoke: vi.fn(),
-      stream: vi.fn().mockReturnValue(
-        (async function* () {
-          yield { await_approval: { __interrupt__: 'automation_design_approval' } };
-        })(),
-      ),
-    });
+    automationGraph.stream.mockReturnValue(
+      (async function* () {
+        yield { type: 'run.started', runId: 'task-run' };
+        yield { type: 'token', runId: 'task-run', content: 'Planning the automation ✓\n' };
+        yield { type: 'run.waiting', runId: 'task-run', reason: 'approval' };
+      })(),
+    );
 
     const events = [];
     for await (const event of service.stream({
@@ -403,7 +403,8 @@ describe('JaafarRuntimeService', () => {
       events.push(event);
     }
 
-    expect(events.map((event) => event.type)).toContain('run.waiting');
+    expect(events.map((event) => event.type)).toEqual(['run.started', 'token', 'run.waiting']);
+    expect(events[1]).toMatchObject({ payload: { content: 'Planning the automation ✓\n' } });
     expect(runs.transitionStatus).toHaveBeenCalledWith('task-run', 'WAITING');
   });
 
@@ -473,111 +474,102 @@ describe('JaafarRuntimeService', () => {
     expect(events.at(-1)?.type).toBe('run.failed');
   });
 
-  it('confirms graph automation design by resuming the graph when status is WAITING', async () => {
-    const { service, runs, automationDesignGraph } = createService();
+  it('approves a WAITING V2 design by resuming the graph', async () => {
+    const { service, runs, automationGraph } = createService();
     runs.findById.mockResolvedValue({
       status: 'WAITING',
-      metadata: { runtimeMode: 'automation_design', blueprintRevision: 'rev-1' },
+      metadata: { runtimeMode: 'automation_design', automationV2: true },
     });
 
-    const result = await service.confirmAutomationDesign(
-      'task-run',
-      { userId: 'user-1' },
-      { blueprintRevision: 'rev-1' },
-    );
+    const result = await service.approve('task-run', { approved: true }, { userId: 'user-1' });
 
     expect(result.status).toBe('COMPLETED');
-    expect(automationDesignGraph.resume).toHaveBeenCalledWith(
+    expect(automationGraph.resume).toHaveBeenCalledWith(
       'task-run',
-      { approved: true, blueprintRevision: 'rev-1' },
+      expect.objectContaining({ approved: true }),
       { userId: 'user-1' },
     );
   });
 
-  it('confirms automation design when metadata has automationDesign even if runtimeMode was conversation', async () => {
-    const { service, runs, automationDesignGraph } = createService();
+  it('rejects a WAITING V2 design without provisioning', async () => {
+    const { service, runs, automationGraph } = createService();
     runs.findById.mockResolvedValue({
       status: 'WAITING',
-      metadata: { runtimeMode: 'conversation', automationDesign: { status: 'READY_FOR_REVIEW' } },
+      metadata: { runtimeMode: 'automation_design', automationV2: true },
     });
 
-    const result = await service.confirmAutomationDesign('task-run', { userId: 'user-1' });
+    const result = await service.reject('task-run', 'Too risky', { userId: 'user-1' });
 
-    expect(result.status).toBe('COMPLETED');
-    expect(automationDesignGraph.resume).toHaveBeenCalled();
+    expect(result.status).toBe('CANCELLED');
+    expect(automationGraph.resume).not.toHaveBeenCalled();
   });
 
-  it('fails confirmation for completed non-graph runs', async () => {
-    const { service, runs } = createService();
+  it('fails approval for design runs that are no longer waiting', async () => {
+    const { service, runs, automationGraph } = createService();
     runs.findById.mockResolvedValue({
       status: 'COMPLETED',
-      metadata: { blueprint: { name: 'Accountant' } },
+      metadata: { runtimeMode: 'automation_design', automationV2: true },
+    });
+    automationGraph.resume.mockResolvedValue({
+      runId: 'task-run',
+      status: 'FAILED',
+      response: 'This automation is no longer waiting for approval (status=COMPLETED).',
+      usage: {},
     });
 
-    const result = await service.confirmAutomationDesign('task-run', { userId: 'user-1' });
+    const result = await service.approve('task-run', { approved: true }, { userId: 'user-1' });
 
     expect(result.status).toBe('FAILED');
+    expect(result.response).toContain('no longer waiting');
   });
 
-  it('explains that a conversation run has no blueprint to confirm', async () => {
-    const { service, runs } = createService();
+  it('rejects approval outside the run scope', async () => {
+    const { service, runs, automationGraph } = createService();
+    runs.findById.mockResolvedValue({
+      status: 'WAITING',
+      userId: 'owner-1',
+      metadata: { runtimeMode: 'automation_design' },
+    });
+
+    const result = await service.approve('task-run', { approved: true }, { userId: 'intruder' });
+
+    expect(result.status).toBe('FAILED');
+    expect(result.response).toContain('scope does not match');
+    expect(automationGraph.resume).not.toHaveBeenCalled();
+  });
+
+  it('retries a failed automation run from its failed stage', async () => {
+    const { service, runs, automationGraph } = createService();
+    runs.findById.mockResolvedValue({
+      status: 'FAILED',
+      metadata: { runtimeMode: 'automation_design', automationV2: true },
+    });
+    automationGraph.retryFromFailure = vi.fn().mockResolvedValue({
+      runId: 'task-run',
+      status: 'COMPLETED',
+      response: 'Automation is now ACTIVE',
+      usage: {},
+    });
+
+    const result = await service.retryAutomation('task-run', { userId: 'user-1' });
+
+    expect(result.status).toBe('COMPLETED');
+    expect(automationGraph.retryFromFailure).toHaveBeenCalledWith('task-run', {
+      userId: 'user-1',
+    });
+  });
+
+  it('refuses to retry non-automation runs', async () => {
+    const { service, runs, automationGraph } = createService();
     runs.findById.mockResolvedValue({
       status: 'COMPLETED',
       metadata: { runtimeMode: 'conversation' },
     });
 
-    const result = await service.confirmAutomationDesign('task-run', { userId: 'user-1' });
+    const result = await service.retryAutomation('task-run', { userId: 'user-1' });
 
     expect(result.status).toBe('FAILED');
-    expect(result.response).toContain('not an automation design');
-    expect(result.error?.code).toBe('INVALID_REQUEST');
-  });
-
-  it('tells the user to keep chatting when the design is still gathering requirements', async () => {
-    const { service, runs } = createService();
-    runs.findById.mockResolvedValue({
-      status: 'COMPLETED',
-      metadata: {
-        runtimeMode: 'automation_design',
-        designStatus: 'GATHERING_REQUIREMENTS',
-        automationDesign: { status: 'GATHERING_REQUIREMENTS' },
-      },
-    });
-
-    const result = await service.confirmAutomationDesign('task-run', { userId: 'user-1' });
-
-    expect(result.status).toBe('FAILED');
-    expect(result.response).toContain('still gathering requirements');
-  });
-
-  it('reports already-provisioned designs as done instead of asking to re-confirm', async () => {
-    const { service, runs } = createService();
-    runs.findById.mockResolvedValue({
-      status: 'COMPLETED',
-      metadata: {
-        runtimeMode: 'automation_design',
-        designStatus: 'PROVISIONED',
-        automationDesign: { status: 'PROVISIONED', automationId: 'auto-1' },
-      },
-    });
-
-    const result = await service.confirmAutomationDesign('task-run', { userId: 'user-1' });
-
-    expect(result.status).toBe('FAILED');
-    expect(result.response).toContain('already approved and provisioned');
-    expect(result.response).toContain('auto-1');
-  });
-
-  it('points execution WAITING runs at the approve endpoint', async () => {
-    const { service, runs } = createService();
-    runs.findById.mockResolvedValue({
-      status: 'WAITING',
-      metadata: { runtimeMode: 'execution', executionGraphInput: { plan: {} } },
-    });
-
-    const result = await service.confirmAutomationDesign('task-run', { userId: 'user-1' });
-
-    expect(result.status).toBe('FAILED');
-    expect(result.response).toContain('/runs/:id/approve');
+    expect(result.response).toContain('Only automation runs can be retried');
+    expect(automationGraph.retryFromFailure).not.toHaveBeenCalled();
   });
 });

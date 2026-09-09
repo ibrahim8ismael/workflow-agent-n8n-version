@@ -87,12 +87,32 @@ const understandingSchema: z.ZodType<JaafarUnderstanding> = z.object({
   intent: z.enum(['conversation', 'automation_design', 'task_execution', 'general_question']),
   goal: z.string().min(1),
   businessContext: z.string(),
+  trigger: z.object({
+    kind: z.enum(['webhook', 'schedule', 'manual', 'chat', 'none']),
+    event: z.string(),
+    schedule: z.string(),
+  }),
+  actions: z.array(z.string()),
+  entities: z.array(z.string()),
+  conditions: z.array(z.string()),
+  constraints: z.array(z.string()),
+  desiredOutcome: z.string(),
   requirements: z.array(
     z.object({
+      id: z.string().optional(),
       field: z.string().min(1),
       value: z.string(),
       required: z.boolean(),
       source: z.enum(['user', 'history', 'inferred', 'retrieved']),
+    }),
+  ),
+  assumptions: z.array(
+    z.object({
+      statement: z.string(),
+      rationale: z.string(),
+      reversible: z.boolean(),
+      risk: z.enum(['low', 'medium', 'high']),
+      needsConfirmation: z.boolean().optional(),
     }),
   ),
   missingInputs: z.array(

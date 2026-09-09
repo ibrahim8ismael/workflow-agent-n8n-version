@@ -62,7 +62,39 @@ describe('JaafarRequestUnderstandingService', () => {
     ).resolves.toMatchObject({ route: 'general_question', clarificationRequired: false });
   });
 
-  it('provides a focused question when confidence is low', async () => {
+  it('self-corrects at higher effort when confidence is low instead of forcing clarification', async () => {
+    const llmRuntime = {
+      generateObject: vi
+        .fn()
+        .mockResolvedValueOnce({
+          object: { ...output, missingInputs: [], confidence: 0.4, clarificationRequired: false },
+        })
+        .mockResolvedValueOnce({
+          object: {
+            ...output,
+            missingInputs: [],
+            confidence: 0.9,
+            clarificationRequired: false,
+          },
+        }),
+    };
+    const service = new JaafarRequestUnderstandingService(llmRuntime as never);
+
+    await expect(
+      service.understand({ userMessage: 'Do the thing', history: [], effort: 'medium' }),
+    ).resolves.toMatchObject({
+      route: 'automation_design',
+      clarificationQuestion: undefined,
+    });
+    // First call medium, self-correction pass at high.
+    expect(llmRuntime.generateObject).toHaveBeenCalledTimes(2);
+    expect(llmRuntime.generateObject).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ mode: 'high' }),
+    );
+  });
+
+  it('keeps the initial intent when self-correction stays uncertain', async () => {
     const llmRuntime = {
       generateObject: vi.fn().mockResolvedValue({
         object: { ...output, missingInputs: [], confidence: 0.4, clarificationRequired: false },
@@ -71,11 +103,84 @@ describe('JaafarRequestUnderstandingService', () => {
     const service = new JaafarRequestUnderstandingService(llmRuntime as never);
 
     await expect(
-      service.understand({ userMessage: 'Do the thing', history: [] }),
-    ).resolves.toMatchObject({
-      route: 'clarification',
-      clarificationQuestion: 'What outcome would you like Jaafar to help you achieve?',
-    });
+      service.understand({ userMessage: 'Do the thing', history: [], effort: 'medium' }),
+    ).resolves.toMatchObject({ route: 'automation_design', clarificationRequired: false });
+    expect(llmRuntime.generateObject).toHaveBeenCalledTimes(2);
+  });
+
+  it('assigns stable requirement ids and extracts the v2 intent structure', async () => {
+    const llmRuntime = {
+      generateObject: vi.fn().mockResolvedValue({
+        object: {
+          intent: 'automation_design',
+          goal: 'Notify sales about big orders',
+          businessContext: 'E-commerce',
+          trigger: { kind: 'webhook', event: 'order.created', schedule: '' },
+          actions: ['find customer', 'notify sales'],
+          entities: ['Shopify', 'Slack'],
+          conditions: ['order total above $500'],
+          constraints: [],
+          desiredOutcome: 'Sales notified for every big order',
+          requirements: [
+            { field: 'channel', value: 'sales Slack channel', required: true, source: 'user' },
+            { field: 'threshold', value: '$500', required: false, source: 'inferred' },
+          ],
+          assumptions: [
+            {
+              statement: 'Sales channel is #sales',
+              rationale: 'only sales channel connected',
+              reversible: true,
+              risk: 'low',
+            },
+          ],
+          missingInputs: [],
+          confidence: 0.9,
+          clarificationRequired: false,
+        },
+      }),
+    };
+    const service = new JaafarRequestUnderstandingService(llmRuntime as never);
+
+    const result = await service.understand({ userMessage: 'Notify sales', history: [] });
+
+    expect(result.route).toBe('automation_design');
+    expect(result.requirements.map((r) => r.id)).toEqual(['R1', 'R2']);
+    expect(result.trigger).toMatchObject({ kind: 'webhook', event: 'order.created' });
+    expect(result.actions).toContain('notify sales');
+    expect(result.assumptions).toMatchObject([
+      { statement: 'Sales channel is #sales', needsConfirmation: false },
+    ]);
+    // One LLM call — no self-correction at high confidence.
+    expect(llmRuntime.generateObject).toHaveBeenCalledTimes(1);
+  });
+
+  it('forces confirmation for high-risk or irreversible assumptions', async () => {
+    const llmRuntime = {
+      generateObject: vi.fn().mockResolvedValue({
+        object: {
+          ...output,
+          missingInputs: [],
+          clarificationRequired: false,
+          confidence: 0.9,
+          assumptions: [
+            {
+              statement: 'Delete old contacts without backup',
+              rationale: 'user said clean up',
+              reversible: false,
+              risk: 'high',
+            },
+          ],
+        },
+      }),
+    };
+    const service = new JaafarRequestUnderstandingService(llmRuntime as never);
+
+    const result = await service.understand({ userMessage: 'Clean up contacts', history: [] });
+
+    expect(result.route).toBe('clarification');
+    expect(result.clarificationRequired).toBe(true);
+    expect(result.clarificationQuestion).toContain('Delete old contacts without backup');
+    expect(result.assumptions[0]).toMatchObject({ needsConfirmation: true });
   });
 
   it('includes the pending follow-up question in the prompt', async () => {

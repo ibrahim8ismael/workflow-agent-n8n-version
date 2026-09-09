@@ -1,0 +1,1640 @@
+import { Annotation, Command, END, interrupt, START, StateGraph } from '@langchain/langgraph';
+import { MemorySaver } from '@langchain/langgraph-checkpoint';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { LangGraphPostgresCheckpointerService } from '../../../infrastructure/langgraph/langgraph-postgres-checkpointer.service';
+import { LLMRuntimeService } from '../../../infrastructure/llm-runtime/llm-runtime.service';
+import {
+  N8nClientApiService,
+  type N8nClientConnection,
+} from '../../../infrastructure/n8n/n8n-client-api.service';
+import {
+  type N8nInstanceInventory,
+  N8nNodeInventoryService,
+} from '../../../infrastructure/n8n/n8n-node-inventory.service';
+import {
+  type AutomationBlueprint,
+  automationBlueprintSchema,
+  blueprintRevision,
+} from '../../automations/schemas/automation-blueprint.schema';
+import { ConversationsService } from '../../conversations/services/conversations.service';
+import { N8nConnectionsService } from '../../integrations/n8n/services/n8n-connections.service';
+import { AgentRunService } from '../../runs/agent-run.service';
+import { AGENT_RUN_PHASE } from '../../runs/agent-run-phase';
+import { RunsService } from '../../runs/runs.service';
+import type { JaafarUnderstanding } from '../types/jaafar-understanding.types';
+import type { PendingQuestionContext } from '../types/runtime-contract.types';
+import { AutomationErrorClassifierService } from './automation-error-classifier.service';
+import { AutomationPlanReviewService } from './automation-plan-review.service';
+import {
+  AutomationRepairService,
+  MAX_REPAIR_ATTEMPTS,
+  type RepairStage,
+} from './automation-repair.service';
+import { AutomationRuntimeValidatorService } from './automation-runtime-validator.service';
+import { AutomationWorkflowBuilderService } from './automation-workflow-builder.service';
+import { IntegrationRegistryService } from './integration-registry.service';
+import { JaafarContextLoaderService } from './jaafar-context-loader.service';
+import { JaafarContextManagerService, type StageContext } from './jaafar-context-manager.service';
+import type { RequestUnderstandingResult } from './jaafar-request-understanding.service';
+import { JaafarRequestUnderstandingService } from './jaafar-request-understanding.service';
+import { NodeResolverService } from './node-resolver.service';
+import type { ExecuteResponse } from './runtime.service';
+
+export interface JaafarAutomationGraphInput {
+  runId?: string;
+  agentId: string;
+  userMessage: string;
+  conversationId?: string;
+  userId?: string;
+  organizationId?: string;
+  effort?: 'low' | 'medium' | 'high';
+  /** Prior-turn follow-up (previous request + unanswered question). */
+  pendingContext?: PendingQuestionContext;
+  /** Pre-computed v2 understanding — skips re-classification when present. */
+  understanding?: RequestUnderstandingResult;
+  /** Retry entry after failure (§43): jumps START straight to this node. */
+  retryFrom?: 'provision' | 'test_execute' | 'diagnose';
+  /** Hydrated prior-pipeline state for retry (no rebuild). */
+  blueprint?: AutomationBlueprint;
+  automationId?: string;
+  externalWorkflowId?: string | null;
+  webhookPath?: string | null;
+  requirements?: Array<{ id?: string; field: string; required: boolean }>;
+  conditions?: string[];
+  repairAttempt?: number;
+  lastFailure?: { stage: RepairStage; message: string; code: string };
+}
+
+export interface AutomationApprovalDecision {
+  approved: boolean;
+  reason?: string;
+}
+
+export type AutomationGraphStreamEvent =
+  | { type: 'run.started'; runId: string }
+  | { type: 'token'; runId: string; content: string }
+  | { type: 'run.waiting'; runId: string; reason: 'approval' | 'clarification' }
+  | {
+      type: 'run.completed';
+      runId: string;
+      response: string;
+      usage: { promptTokens: number; completionTokens: number; totalTokens: number };
+    }
+  | { type: 'run.failed'; runId: string; code: string; message: string };
+
+interface AutomationGraphState {
+  input: JaafarAutomationGraphInput & { runId: string };
+  understanding?: RequestUnderstandingResult;
+  blueprint?: AutomationBlueprint;
+  planAttempts: number;
+  planFeedback?: string;
+  clarificationOverride?: string;
+  automationId?: string;
+  externalWorkflowId?: string | null;
+  webhookPath?: string | null;
+  verifyOk?: boolean;
+  testOk?: boolean;
+  lastFailure?: { stage: RepairStage; message: string; code: string };
+  repairAttempt: number;
+  diagnosis?: string;
+  repairChanges?: string[];
+  retryUnchanged?: boolean;
+  nextStep?: 'provision' | 'test_execute';
+  response?: string;
+  escalated?: boolean;
+  waitingReason?: 'approval' | 'clarification';
+  usage: { promptTokens: number; completionTokens: number; totalTokens: number };
+}
+
+const AutomationGraphState = Annotation.Root({
+  input: Annotation<AutomationGraphState['input']>({
+    default: () => ({ runId: '', agentId: '', userMessage: '' }),
+    reducer: (_left, right) => right,
+  }),
+  understanding: Annotation<AutomationGraphState['understanding']>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  blueprint: Annotation<AutomationGraphState['blueprint']>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  planAttempts: Annotation<number>({ default: () => 0, reducer: (_left, right) => right }),
+  planFeedback: Annotation<string | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  clarificationOverride: Annotation<string | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  automationId: Annotation<string | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  externalWorkflowId: Annotation<string | null | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  webhookPath: Annotation<string | null | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  verifyOk: Annotation<boolean | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  testOk: Annotation<boolean | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  lastFailure: Annotation<AutomationGraphState['lastFailure']>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  repairAttempt: Annotation<number>({ default: () => 0, reducer: (_left, right) => right }),
+  diagnosis: Annotation<string | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  repairChanges: Annotation<string[] | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  retryUnchanged: Annotation<boolean | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  nextStep: Annotation<'provision' | 'test_execute' | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  escalated: Annotation<boolean | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  response: Annotation<string | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  waitingReason: Annotation<'approval' | 'clarification' | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  usage: Annotation<AutomationGraphState['usage']>({
+    default: () => ({ promptTokens: 0, completionTokens: 0, totalTokens: 0 }),
+    reducer: (left, right) => ({
+      promptTokens: left.promptTokens + right.promptTokens,
+      completionTokens: left.completionTokens + right.completionTokens,
+      totalTokens: left.totalTokens + right.totalTokens,
+    }),
+  }),
+});
+
+const MAX_PLAN_ATTEMPTS = 2;
+
+/**
+ * Jaafar V2 automation graph (docs/Jaafar-improve.md §10–§22, Phase 3).
+ *
+ * understand → plan → review_plan (fix loop) → build → static_validate →
+ * await_approval (human interrupt) → provision → verify.
+ *
+ * Every node advances the AgentRun state machine, so a run can always resume
+ * from its last valid phase and COMPLETED requires the full pipeline —
+ * Jaafar cannot report success before validation.
+ */
+@Injectable()
+export class JaafarAutomationGraphService {
+  private readonly logger = new Logger(JaafarAutomationGraphService.name);
+  private readonly memoryCheckpointer = new MemorySaver();
+
+  constructor(
+    private readonly agentRuns: AgentRunService,
+    private readonly runs: RunsService,
+    private readonly conversations: ConversationsService,
+    private readonly contextManager: JaafarContextManagerService,
+    private readonly contextLoader: JaafarContextLoaderService,
+    private readonly understandingService: JaafarRequestUnderstandingService,
+    private readonly registry: IntegrationRegistryService,
+    private readonly planReview: AutomationPlanReviewService,
+    private readonly builder: AutomationWorkflowBuilderService,
+    private readonly validator: AutomationRuntimeValidatorService,
+    private readonly repair: AutomationRepairService,
+    private readonly classifier: AutomationErrorClassifierService,
+    private readonly llmRuntime: LLMRuntimeService,
+    private readonly clientApi: N8nClientApiService,
+    @Optional() private readonly n8nConnections?: N8nConnectionsService,
+    @Optional() private readonly nodeInventory?: N8nNodeInventoryService,
+    @Optional() private readonly postgresCheckpointer?: LangGraphPostgresCheckpointerService,
+    @Optional() private readonly nodeResolver?: NodeResolverService,
+  ) {}
+
+  /** Blocking invoke (POST /runs path). */
+  async run(input: JaafarAutomationGraphInput): Promise<ExecuteResponse> {
+    const runId = await this.ensureRun(input);
+    try {
+      const result = await this.build().invoke(
+        { input: { ...input, runId } },
+        this.graphConfig(runId, input),
+      );
+      if (this.isInterrupted(result)) {
+        await this.agentRuns.advance(runId, {
+          toStatus: 'WAITING',
+          reason: 'automation awaiting approval',
+        });
+        const summary = this.formatApprovalSummary(
+          result.blueprint as AutomationBlueprint | undefined,
+        );
+        if (summary && input.conversationId) {
+          await this.conversations.addMessage(input.conversationId, {
+            role: 'assistant',
+            content: summary,
+          });
+        }
+        const waiting = this.result(runId, result, 'WAITING');
+        return summary ? { ...waiting, response: summary } : waiting;
+      }
+      if (result.response === undefined) {
+        throw new Error('Automation graph finished without a response');
+      }
+      return this.result(runId, result, 'COMPLETED');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Automation run failed';
+      this.logger.error(`Automation graph run ${runId} failed: ${message}`);
+      await this.failRun(runId, message);
+      throw error;
+    }
+  }
+
+  /** SSE streaming invoke (POST /runs/stream path). */
+  async *stream(input: JaafarAutomationGraphInput): AsyncGenerator<AutomationGraphStreamEvent> {
+    const runId = await this.ensureRun(input);
+    yield { type: 'run.started', runId };
+    // Persist the user turn BEFORE generating — a mid-run failure must never
+    // erase it from history (Phase 0 lesson).
+    if (input.conversationId) {
+      await this.conversations.addMessage(input.conversationId, {
+        role: 'user',
+        content: input.userMessage,
+      });
+      await this.conversations.titleFromFirstMessage(input.conversationId, input.userMessage);
+    }
+    try {
+      const stream = await this.build().stream(
+        { input: { ...input, runId } },
+        { ...this.graphConfig(runId, input), streamMode: 'updates' },
+      );
+      for await (const update of stream) {
+        for (const event of this.mapStreamUpdate(runId, update as Record<string, unknown>)) {
+          if (event.type === 'run.completed') {
+            if (input.conversationId) {
+              await this.conversations.addMessage(input.conversationId, {
+                role: 'assistant',
+                content: event.response,
+              });
+            }
+            // Token totals accumulated on the run row across graph LLM calls.
+            try {
+              const row = await this.runs.findById(runId);
+              (event as { usage: unknown }).usage = {
+                promptTokens: Number(row.promptTokens ?? 0),
+                completionTokens: Number(row.completionTokens ?? 0),
+                totalTokens: Number(row.totalTokens ?? 0),
+              };
+            } catch {
+              /* keep zero usage */
+            }
+          }
+          yield event;
+          if (event.type === 'run.waiting') {
+            await this.agentRuns.advance(runId, {
+              toStatus: 'WAITING',
+              reason: `automation awaiting ${event.reason}`,
+            });
+          }
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Automation run failed';
+      await this.failRun(runId, message);
+      yield { type: 'run.failed', runId, code: 'AUTOMATION_FAILED', message };
+    }
+  }
+
+  /**
+   * Resumes a WAITING run after the human approval gate. Rejections fail the
+   * run with the human's reason; runs that predate the V2 graph get the
+   * graceful "restate your request" message (cutover rule).
+   */
+  async resume(
+    runId: string,
+    decision: AutomationApprovalDecision,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<ExecuteResponse> {
+    const snapshot = await this.agentRuns.snapshot(runId);
+    const run = snapshot.run as {
+      userId?: string | null;
+      organizationId?: string | null;
+      status: string;
+      metadata?: unknown;
+    };
+    if (scope?.userId && run.userId && run.userId !== scope.userId) {
+      return this.scopeFailure(runId, 'user');
+    }
+    if (
+      scope?.organizationId &&
+      run.organizationId &&
+      run.organizationId !== scope.organizationId
+    ) {
+      return this.scopeFailure(runId, 'organization');
+    }
+    const metadata = (run.metadata as Record<string, unknown> | null) ?? {};
+    if (!metadata.automationV2) {
+      return {
+        runId,
+        mode: 'automation_design',
+        status: 'FAILED',
+        response:
+          'This design was started by the previous Jaafar version and cannot be approved anymore. Please restate your request and I will prepare a fresh design.',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
+    if (run.status !== 'WAITING') {
+      return {
+        runId,
+        mode: 'automation_design',
+        status: 'FAILED',
+        response: `This automation is no longer waiting for approval (status=${run.status}). Send a new message to start another design.`,
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
+    if (!decision.approved) {
+      await this.agentRuns.advance(runId, {
+        toPhase: AGENT_RUN_PHASE.FAILED,
+        toStatus: 'FAILED',
+        reason: decision.reason ?? 'automation rejected at approval gate',
+      });
+      return {
+        runId,
+        mode: 'automation_design',
+        status: 'FAILED',
+        response:
+          decision.reason ?? 'The automation design was rejected — nothing was provisioned.',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
+    try {
+      const result = await this.build().invoke(
+        new Command({ resume: { approved: true } }),
+        this.graphConfig(runId, {
+          userId: scope?.userId ?? run.userId ?? undefined,
+          organizationId: scope?.organizationId ?? run.organizationId ?? undefined,
+        }),
+      );
+      return this.result(runId, result, 'COMPLETED');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Automation provisioning failed';
+      await this.failRun(runId, message);
+      throw error;
+    }
+  }
+
+  /**
+   * Retries a FAILED repairable run from its failed stage (§43) — no rebuild.
+   * The blueprint, automation row, and repair-attempt count are rehydrated
+   * from the run's artifacts; START jumps straight to the mapped node.
+   */
+  async retryFromFailure(
+    runId: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<ExecuteResponse> {
+    const snapshot = await this.agentRuns.snapshot(runId);
+    const run = snapshot.run as {
+      userId?: string | null;
+      organizationId?: string | null;
+      status: string;
+      currentPhase?: string;
+      error?: string | null;
+      metadata?: unknown;
+      automationPlan?: unknown;
+      requirements?: unknown;
+      conditions?: unknown;
+      executionResults?: unknown;
+      repairAttempts?: unknown;
+    };
+    if (scope?.userId && run.userId && run.userId !== scope.userId) {
+      return this.scopeFailure(runId, 'user');
+    }
+    if (
+      scope?.organizationId &&
+      run.organizationId &&
+      run.organizationId !== scope.organizationId
+    ) {
+      return this.scopeFailure(runId, 'organization');
+    }
+    const metadata = (run.metadata as Record<string, unknown> | null) ?? {};
+    if (!metadata.automationV2) {
+      return {
+        runId,
+        mode: 'automation_design',
+        status: 'FAILED',
+        response:
+          'This run was started by the previous Jaafar version and cannot be retried. Please restate your request and I will prepare a fresh design.',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
+    if (!(await this.agentRuns.isRepairable(runId))) {
+      return {
+        runId,
+        mode: 'automation_design',
+        status: 'FAILED',
+        response: `This automation run cannot be retried from its current state (status=${run.status}). Send a new message to start another design.`,
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
+    const execution = (run.executionResults as Record<string, unknown> | null) ?? {};
+    const retryFrom =
+      run.currentPhase === 'EXECUTING'
+        ? ('provision' as const)
+        : run.currentPhase === 'RUNTIME_VALIDATION'
+          ? ('test_execute' as const)
+          : ('diagnose' as const);
+    try {
+      // Fresh checkpoint thread: prior node outputs stay auditable on the old
+      // thread while the retry runs from explicitly hydrated state. The
+      // repair budget restarts — the user intervened with new information —
+      // while the attempt trail keeps growing for audit.
+      const result = await this.build().invoke(
+        {
+          input: {
+            runId,
+            agentId: snapshot.run.agentId,
+            userMessage: (metadata.userMessage as string) || 'Retry the failed automation',
+            conversationId: snapshot.run.conversationId ?? undefined,
+            userId: snapshot.run.userId ?? undefined,
+            organizationId: snapshot.run.organizationId ?? undefined,
+            retryFrom,
+            blueprint: run.automationPlan as AutomationBlueprint | undefined,
+            automationId:
+              typeof execution.automationId === 'string' ? execution.automationId : undefined,
+            externalWorkflowId:
+              typeof execution.externalWorkflowId === 'string'
+                ? execution.externalWorkflowId
+                : undefined,
+            webhookPath:
+              typeof execution.webhookPath === 'string' ? execution.webhookPath : undefined,
+            requirements: Array.isArray(run.requirements)
+              ? (run.requirements as Array<{ id?: string; field: string; required: boolean }>)
+              : undefined,
+            conditions: Array.isArray(run.conditions) ? (run.conditions as string[]) : undefined,
+            lastFailure: {
+              stage: retryFrom === 'provision' ? ('provision' as const) : ('test' as const),
+              message: run.error ?? 'Retry requested after failure',
+              code: 'UNKNOWN',
+            },
+          },
+        },
+        this.graphConfig(
+          runId,
+          {
+            userId: scope?.userId ?? run.userId ?? undefined,
+            organizationId: scope?.organizationId ?? run.organizationId ?? undefined,
+          },
+          'retry',
+        ),
+      );
+      return this.result(runId, result, 'COMPLETED');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Automation retry failed';
+      await this.failRun(runId, message);
+      throw error;
+    }
+  }
+
+  build() {
+    return new StateGraph(AutomationGraphState)
+      .addNode('understand', async (state) => {
+        if (state.input.understanding) {
+          await this.recordUnderstanding(state.input.runId, state.input.understanding);
+          return { understanding: state.input.understanding };
+        }
+        const loaded = await this.contextLoader.load({
+          agentId: state.input.agentId,
+          userMessage: state.input.userMessage,
+          conversationId: state.input.conversationId,
+          userId: state.input.userId,
+          organizationId: state.input.organizationId,
+          mode: 'planning',
+        });
+        const understanding = await this.understandingService.understand({
+          userMessage: state.input.userMessage,
+          history: loaded.history,
+          agentName: loaded.agent.name,
+          agentInstructions: loaded.agent.instructions,
+          memoryReferences: loaded.memoryReferences,
+          knowledgeReferences: loaded.knowledgeReferences,
+          effort: state.input.effort,
+          ...(state.input.pendingContext ? { pendingContext: state.input.pendingContext } : {}),
+        });
+        await this.recordUnderstanding(state.input.runId, understanding);
+        await this.recordUsage(state.input.runId, understanding.modelCall.usage);
+        return {
+          understanding,
+          usage: understanding.modelCall.usage,
+        };
+      })
+      .addNode('plan', async (state) => {
+        if (!state.understanding) throw new Error('Planning requires understanding');
+        await this.agentRuns.advance(state.input.runId, {
+          toPhase: AGENT_RUN_PHASE.PLANNING,
+          reason: 'request understood — planning automation',
+        });
+        const [planContext, capabilities, instance] = await Promise.all([
+          this.contextManager.buildForStage({
+            stage: 'PLANNING',
+            agentId: state.input.agentId,
+            userMessage: state.input.userMessage,
+            conversationId: state.input.conversationId,
+            userId: state.input.userId,
+            organizationId: state.input.organizationId,
+          }),
+          this.registry
+            .capabilitiesForScope({
+              userId: state.input.userId,
+              organizationId: state.input.organizationId,
+            })
+            .catch(() => []),
+          this.loadInstance(state.input).catch(() => null),
+        ]);
+        const result = await this.llmRuntime
+          .generateObject({
+            mode: state.input.effort ?? 'medium',
+            systemPrompt: this.planSystemPrompt(
+              planContext,
+              capabilities,
+              instance,
+              state,
+              this.relevantNodeTypes(state.understanding, capabilities, instance),
+            ),
+            messages: [
+              {
+                role: 'user',
+                content: this.planUserPrompt(state.understanding, state.planFeedback),
+              },
+            ],
+            schema: automationBlueprintSchema,
+            temperature: 0.2,
+            // Blueprints with node hints are large; truncation surfaces as an
+            // empty object downstream, so budget generously.
+            maxTokens: 4000,
+            timeoutMs: 90_000,
+          })
+          .catch((error: unknown) => {
+            throw new Error(
+              `plan generation failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
+        const blueprint = automationBlueprintSchema.parse(result.object);
+        await this.recordUsage(state.input.runId, result.usage);
+        return {
+          blueprint,
+          planAttempts: state.planAttempts + 1,
+          // Clear any prior-round feedback — presence of feedback routes back here.
+          planFeedback: undefined,
+          clarificationOverride: undefined,
+          usage: result.usage,
+        };
+      })
+      .addNode('review_plan', async (state) => {
+        if (!state.blueprint || !state.understanding) {
+          throw new Error('Plan review requires a blueprint and understanding');
+        }
+        const capabilities = await this.registry
+          .capabilitiesForScope({
+            userId: state.input.userId,
+            organizationId: state.input.organizationId,
+          })
+          .catch(() => undefined);
+        const instance = await this.loadInstance(state.input).catch(() => null);
+        const reviewed = this.planReview.review({
+          blueprint: state.blueprint,
+          requirements: state.understanding.requirements,
+          conditions: state.understanding.conditions,
+          ...(capabilities ? { capabilities } : {}),
+          ...(instance ? { instanceNodeTypes: instance.nodeTypes.map((node) => node.type) } : {}),
+          ...(state.understanding.genericNodeOverride
+            ? { genericOverride: state.understanding.genericNodeOverride }
+            : {}),
+        });
+        if (!reviewed.valid) {
+          // Missing connection and nothing else (§12): asking the user to
+          // connect it beats burning the replan budget on an unfixable plan.
+          // The invalid names never reach the builder. Placeholder-ish values
+          // (PENDING, TODO, "X (must be connected)") are model formatting
+          // failures, not real providers — those go back for a replan.
+          const unknownIntegrations = reviewed.errors.filter(
+            (e) => e.code === 'UNKNOWN_INTEGRATION',
+          );
+          const names = [
+            ...new Set(
+              unknownIntegrations.map(
+                (e) => e.message.match(/"([^"]+)"/)?.[1] ?? 'the required integration',
+              ),
+            ),
+          ];
+          const placeholders = names.filter((name) => this.isPlaceholderIntegrationName(name));
+          if (placeholders.length > 0) {
+            if (state.planAttempts >= MAX_PLAN_ATTEMPTS) {
+              throw new Error(
+                `Automation plan keeps inventing integrations (${placeholders.join(', ')}) instead of using connected provider keys`,
+              );
+            }
+            return {
+              blueprint: reviewed.blueprint,
+              planFeedback:
+                `Your previous plan was rejected:\n` +
+                `- Do NOT use placeholder integration names like ${placeholders.join(', ')}. ` +
+                `step[].integration must be an EXACT provider key from the connected list, or omitted for structural steps.\n` +
+                `Fix every issue and return the complete corrected blueprint.`,
+            };
+          }
+          if (
+            unknownIntegrations.length > 0 &&
+            unknownIntegrations.length === reviewed.errors.length
+          ) {
+            const nameList =
+              names.length > 1
+                ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+                : (names[0] ?? 'the required integration');
+            return {
+              blueprint: reviewed.blueprint,
+              planFeedback: undefined,
+              clarificationOverride:
+                `To build "${state.blueprint.name}" I need ${nameList} connected ` +
+                `to your n8n first — I can't provision steps for tools I can't see. ` +
+                `Connect ${nameList} (or tell me which connected tool to use instead) and I'll continue the design.`,
+            };
+          }
+          if (state.planAttempts >= MAX_PLAN_ATTEMPTS) {
+            const details = reviewed.errors.map((e) => `${e.code}: ${e.message}`).join('; ');
+            throw new Error(`Automation plan failed review twice: ${details}`);
+          }
+          return {
+            blueprint: reviewed.blueprint,
+            planFeedback: `Your previous plan was rejected:\n${reviewed.errors.map((e) => `- ${e.message}`).join('\n')}${this.relevantWarningsFeedback(reviewed.warnings)}\nFix every issue and return the complete corrected blueprint.`,
+          };
+        }
+        await this.agentRuns.recordArtifacts(
+          state.input.runId,
+          { automationPlan: reviewed.blueprint as never },
+          'automation plan reviewed',
+        );
+        // Structurally valid but admittedly incomplete: ask for what's
+        // missing instead of sending a half-design to approval.
+        if (!reviewed.blueprint.ready || reviewed.blueprint.missingRequirements.length > 0) {
+          const missing = reviewed.blueprint.missingRequirements;
+          return {
+            blueprint: reviewed.blueprint,
+            planFeedback: undefined,
+            clarificationOverride:
+              `I need a little more information before I can prepare the automation design:\n` +
+              missing.map((item) => `- ${item}`).join('\n'),
+          };
+        }
+        return { blueprint: reviewed.blueprint };
+      })
+      .addNode('build', async (state) => {
+        await this.agentRuns.advance(state.input.runId, {
+          toPhase: AGENT_RUN_PHASE.BUILDING,
+          reason: 'plan valid — building workflow',
+        });
+        return {};
+      })
+      .addNode('static_validate', async (state) => {
+        if (!state.blueprint || !state.understanding) {
+          throw new Error('Static validation requires a reviewed blueprint');
+        }
+        const capabilities = await this.registry
+          .capabilitiesForScope({
+            userId: state.input.userId,
+            organizationId: state.input.organizationId,
+          })
+          .catch(() => undefined);
+        const validation = await this.builder.validateOnly({
+          blueprint: state.blueprint,
+          scope: { userId: state.input.userId, organizationId: state.input.organizationId },
+          runId: state.input.runId,
+          requirements: state.understanding.requirements,
+          conditions: state.understanding.conditions,
+          ...(capabilities ? { capabilities } : {}),
+          ...(state.understanding.genericNodeOverride
+            ? { genericOverride: state.understanding.genericNodeOverride }
+            : {}),
+        });
+        if (!validation.valid) {
+          const details = validation.errors.map((e) => `${e.code}: ${e.message}`).join('; ');
+          // Fixable statically-rejected plans loop back into planning with the
+          // exact defects (§15: fix plan → validate again) while budget
+          // remains; only the truly unfixable throw.
+          if (state.planAttempts >= MAX_PLAN_ATTEMPTS) {
+            throw new Error(`Automation failed static validation: ${details}`);
+          }
+          return {
+            planFeedback:
+              `Your previous plan failed STATIC validation (it was never built):\n` +
+              `${validation.errors.map((e) => `- ${e.message}`).join('\n')}` +
+              `${this.relevantWarningsFeedback(validation.warnings)}\n` +
+              `Fix every issue — use exact provider keys, machine-readable trigger config, balanced {{ }} expressions, and reference earlier steps by plan name — and return the complete corrected blueprint.`,
+          };
+        }
+        await this.agentRuns.advance(state.input.runId, {
+          toPhase: AGENT_RUN_PHASE.STATIC_VALIDATION,
+          reason: 'workflow passed static validation',
+        });
+        return {};
+      })
+      .addNode('await_approval', (state) => {
+        if (!state.blueprint) throw new Error('Approval requires a validated blueprint');
+        const revision = blueprintRevision(state.blueprint);
+        interrupt({
+          type: 'automation_design_approval',
+          runId: state.input.runId,
+          blueprintRevision: revision,
+          blueprint: {
+            name: state.blueprint.name,
+            goal: state.blueprint.goal,
+            trigger: state.blueprint.trigger.type,
+            steps: state.blueprint.steps.map((step) => ({
+              name: step.name,
+              action: step.action,
+              ...(step.integration ? { integration: step.integration } : {}),
+              ...(step.nodeHint
+                ? {
+                    nodeType: step.nodeHint.type,
+                    ...(step.nodeHint.nodeChoiceReason
+                      ? { nodeChoiceReason: step.nodeHint.nodeChoiceReason }
+                      : {}),
+                  }
+                : {}),
+            })),
+          },
+        });
+        return {};
+      })
+      .addNode('provision', async (state) => {
+        const blueprint = this.blueprintOf(state);
+        if (!blueprint) {
+          throw new Error('Provisioning requires a validated blueprint');
+        }
+        await this.agentRuns.advance(state.input.runId, {
+          toPhase: AGENT_RUN_PHASE.EXECUTING,
+          toStatus: 'EXECUTING',
+          reason: state.automationId
+            ? 'repair approved — re-provisioning automation'
+            : 'design approved — provisioning automation',
+        });
+        const capabilities = await this.registry
+          .capabilitiesForScope({
+            userId: state.input.userId,
+            organizationId: state.input.organizationId,
+          })
+          .catch(() => undefined);
+        const built = await this.builder.build({
+          blueprint,
+          scope: { userId: state.input.userId, organizationId: state.input.organizationId },
+          runId: state.input.runId,
+          requirements: this.requirementsOf(state),
+          conditions: this.conditionsOf(state),
+          ...(capabilities ? { capabilities } : {}),
+          ...(state.understanding?.genericNodeOverride
+            ? { genericOverride: state.understanding.genericNodeOverride }
+            : {}),
+          ...((state.automationId ?? state.input.automationId)
+            ? { automationId: (state.automationId ?? state.input.automationId) as string }
+            : {}),
+        });
+        return {
+          automationId: built.automation.id,
+          externalWorkflowId: built.automation.externalWorkflowId,
+          webhookPath: built.automation.webhookPath,
+        };
+      })
+      .addNode('verify', async (state) => {
+        await this.agentRuns.advance(state.input.runId, {
+          toPhase: AGENT_RUN_PHASE.RUNTIME_VALIDATION,
+          reason: 'provisioned — verifying in n8n',
+        });
+        const verification = await this.verifyProvisioned(state);
+        if (!verification.ok) {
+          return {
+            verifyOk: false as const,
+            lastFailure: {
+              stage: 'verify' as const,
+              message: verification.message,
+              code: 'API_ERROR',
+            },
+          };
+        }
+        return { verifyOk: true as const };
+      })
+      .addNode('test_execute', async (state) => {
+        const blueprint = state.blueprint ?? state.input.blueprint;
+        if (!blueprint) throw new Error('Test execution requires a blueprint');
+        const connection = await this.resolveConnection(state.input);
+        const webhookPath = state.webhookPath ?? state.input.webhookPath ?? undefined;
+        if (!connection || !webhookPath) {
+          return {
+            testOk: false as const,
+            lastFailure: {
+              stage: 'test' as const,
+              message:
+                'No ACTIVE n8n connection is available to execute the automation against — reconnect the client instance first.',
+              code: 'CREDENTIAL_ERROR',
+            },
+          };
+        }
+        const validated = await this.validator.validate({
+          blueprint,
+          baseUrl: connection.baseUrl,
+          webhookPath,
+          runId: state.input.runId,
+          userId: state.input.userId,
+          organizationId: state.input.organizationId,
+        });
+        await this.agentRuns.recordArtifacts(
+          state.input.runId,
+          {
+            executionResults: {
+              automationId: state.automationId ?? state.input.automationId ?? null,
+              externalWorkflowId:
+                state.externalWorkflowId ?? state.input.externalWorkflowId ?? null,
+              webhookPath,
+              testPassed: validated.ok,
+              testChecks: validated.checks,
+              testDurationMs: validated.durationMs,
+            } as never,
+          },
+          validated.ok ? 'runtime validation passed' : 'runtime validation failed',
+        );
+        if (!validated.ok) {
+          const firstFailing = validated.checks.find((check) => !check.passed);
+          return {
+            testOk: false as const,
+            lastFailure: {
+              stage: 'test' as const,
+              message:
+                firstFailing?.detail ??
+                validated.classified?.summary ??
+                'Runtime validation failed',
+              code: validated.classified?.code ?? 'LOGIC_ERROR',
+            },
+          };
+        }
+        return { testOk: true as const };
+      })
+      .addNode('diagnose', async (state) => {
+        const failure = state.lastFailure ?? state.input.lastFailure;
+        if (!failure) throw new Error('Diagnosis requires a recorded failure');
+        // Park in the repairable FAILED phase first — RUNTIME_VALIDATION has
+        // no direct edge to DIAGNOSING, and FAILED→DIAGNOSING is the repair path.
+        await this.agentRuns.advance(state.input.runId, {
+          toPhase: AGENT_RUN_PHASE.FAILED,
+          reason: `automation failed at ${failure.stage} — diagnosing`,
+        });
+        await this.agentRuns.advance(state.input.runId, {
+          toPhase: AGENT_RUN_PHASE.DIAGNOSING,
+          reason: `diagnosing ${failure.code} at ${failure.stage}`,
+        });
+        const classified = this.classifier.classify(
+          { message: failure.message, code: failure.code },
+          failure.stage,
+        );
+        const blueprint = state.blueprint ?? state.input.blueprint;
+        if (!blueprint) throw new Error('Diagnosis requires the failed blueprint');
+        if (!this.repair.needsPatch(classified)) {
+          return {
+            diagnosis: `${classified.summary} Classified as transient — retrying unchanged.`,
+            repairChanges: [],
+            retryUnchanged: true,
+            nextStep:
+              failure.stage === 'provision' ? ('provision' as const) : ('test_execute' as const),
+          };
+        }
+        const patched = await this.repair.diagnoseAndPatch({
+          blueprint,
+          failure: {
+            stage: failure.stage,
+            message: failure.message,
+            classified,
+          },
+          requirements: state.understanding?.requirements ?? state.input.requirements ?? [],
+          conditions: state.understanding?.conditions ?? state.input.conditions ?? [],
+          attempt: (state.repairAttempt || state.input.repairAttempt || 0) + 1,
+          effort: state.input.effort,
+        });
+        return {
+          blueprint: patched.blueprint,
+          diagnosis: patched.diagnosis,
+          repairChanges: patched.changes,
+          retryUnchanged: false,
+          nextStep: 'provision' as const,
+        };
+      })
+      .addNode('repair', async (state) => {
+        const attempt = (state.repairAttempt || state.input.repairAttempt || 0) + 1;
+        await this.agentRuns.advance(state.input.runId, {
+          toPhase: AGENT_RUN_PHASE.REPAIRING,
+          reason: `repair attempt ${attempt}/${MAX_REPAIR_ATTEMPTS}`,
+        });
+        const blueprint = state.blueprint ?? state.input.blueprint;
+        if (!blueprint) throw new Error('Repair requires a blueprint');
+        // Revalidate the patched blueprint here — the `provision` node owns
+        // the actual re-provisioning, so a repair never provisions twice.
+        // Unchanged retries skip validation (nothing changed).
+        try {
+          if (!state.retryUnchanged) {
+            const capabilities = await this.registry
+              .capabilitiesForScope({
+                userId: state.input.userId,
+                organizationId: state.input.organizationId,
+              })
+              .catch(() => undefined);
+            const revalidation = await this.builder.validateOnly({
+              blueprint,
+              scope: { userId: state.input.userId, organizationId: state.input.organizationId },
+              requirements: state.understanding?.requirements ?? state.input.requirements,
+              conditions: state.understanding?.conditions ?? state.input.conditions,
+              ...(capabilities ? { capabilities } : {}),
+              ...(state.understanding?.genericNodeOverride
+                ? { genericOverride: state.understanding.genericNodeOverride }
+                : {}),
+            });
+            if (!revalidation.valid) {
+              const details = revalidation.errors.map((e) => `${e.code}: ${e.message}`).join('; ');
+              throw new Error(`Repaired plan failed revalidation: ${details}`);
+            }
+          }
+          await this.agentRuns.appendRepairAttempt(state.input.runId, {
+            attempt,
+            at: new Date().toISOString(),
+            stage: state.lastFailure?.stage ?? state.input.lastFailure?.stage ?? 'test',
+            code: state.lastFailure?.code ?? state.input.lastFailure?.code ?? 'UNKNOWN',
+            diagnosis: state.diagnosis ?? 'transient failure — retrying unchanged',
+            changes: state.repairChanges ?? [],
+            blueprintRevision: blueprintRevision(blueprint),
+          });
+        } catch (error) {
+          // A revalidation/reprovision failure is itself a repair outcome —
+          // loop back into diagnosis while budget remains.
+          const message = error instanceof Error ? error.message : String(error);
+          await this.agentRuns.appendRepairAttempt(state.input.runId, {
+            attempt,
+            at: new Date().toISOString(),
+            stage: 'validate',
+            code: 'INVALID_CONFIGURATION',
+            diagnosis: state.diagnosis ?? 'repair rejected',
+            changes: state.repairChanges ?? [],
+            blueprintRevision: blueprintRevision(blueprint),
+          });
+          return {
+            repairAttempt: attempt,
+            lastFailure: { stage: 'validate' as const, message, code: 'INVALID_CONFIGURATION' },
+            nextStep: 'provision' as const,
+          };
+        }
+        return {
+          repairAttempt: attempt,
+          nextStep: state.nextStep ?? ('test_execute' as const),
+        };
+      })
+      .addNode('complete', async (state) => {
+        await this.agentRuns.advance(state.input.runId, {
+          toPhase: AGENT_RUN_PHASE.COMPLETED,
+          toStatus: 'COMPLETED',
+          reason: 'automation tested and verified in n8n',
+        });
+        const attempts = state.repairAttempt || state.input.repairAttempt || 0;
+        const response =
+          `Automation "${state.blueprint?.name ?? state.input.blueprint?.name}" is now ACTIVE in your n8n instance` +
+          `${(state.webhookPath ?? state.input.webhookPath) ? ` (webhook: ${state.webhookPath ?? state.input.webhookPath})` : ''}. ` +
+          `It was statically validated, executed against test data, and verified live` +
+          `${attempts > 0 ? ` (after ${attempts} automatic repair${attempts === 1 ? '' : 's'})` : ''} — no success was reported before verification.`;
+        if (state.input.conversationId) {
+          await this.conversations.addMessage(state.input.conversationId, {
+            role: 'assistant',
+            content: response,
+          });
+        }
+        return { response };
+      })
+      .addNode('escalate', async (state) => {
+        await this.agentRuns.advance(state.input.runId, {
+          toPhase: AGENT_RUN_PHASE.FAILED,
+          toStatus: 'FAILED',
+          reason: `repair budget exhausted (${MAX_REPAIR_ATTEMPTS} attempts)`,
+        });
+        const failure = state.lastFailure ??
+          state.input.lastFailure ?? {
+            stage: 'test' as const,
+            message: 'Automation could not be completed',
+            code: 'UNKNOWN',
+          };
+        const snapshot = await this.agentRuns.snapshot(state.input.runId);
+        const attempts = (snapshot.run.repairAttempts as unknown[] | null) ?? [];
+        const message = this.repair.escalationMessage({
+          automationName: state.blueprint?.name ?? state.input.blueprint?.name ?? 'your automation',
+          succeeded: this.succeededSteps(state),
+          failure: {
+            stage: failure.stage,
+            message: failure.message,
+            classified: this.classifier.classify(
+              { message: failure.message, code: failure.code },
+              failure.stage,
+            ),
+          },
+          attempts: attempts as never,
+        });
+        if (state.input.conversationId) {
+          await this.conversations.addMessage(state.input.conversationId, {
+            role: 'assistant',
+            content: message,
+          });
+        }
+        return { response: message, escalated: true };
+      })
+      .addConditionalEdges(START, (state) => state.input.retryFrom ?? 'understand', {
+        understand: 'understand',
+        provision: 'provision',
+        test_execute: 'test_execute',
+        diagnose: 'diagnose',
+      })
+      .addNode('ask_clarification', async (state) => {
+        const question =
+          state.clarificationOverride ??
+          state.understanding?.clarificationQuestion ??
+          'What outcome would you like Jaafar to help you achieve?';
+        await this.agentRuns.advance(state.input.runId, {
+          toStatus: 'WAITING',
+          reason: 'automation needs confirmation',
+        });
+        if (state.input.conversationId) {
+          await this.conversations.addMessage(state.input.conversationId, {
+            role: 'assistant',
+            content: question,
+          });
+        }
+        return { response: question, waitingReason: 'clarification' as const };
+      })
+      .addConditionalEdges('understand', (state) => this.routeAfterUnderstanding(state), {
+        clarification: 'ask_clarification',
+        plan: 'plan',
+      })
+      .addEdge('ask_clarification', END)
+      .addConditionalEdges('review_plan', (state) => this.routeAfterReview(state), {
+        replan: 'plan',
+        build: 'build',
+        ask: 'ask_clarification',
+      })
+      .addEdge('plan', 'review_plan')
+      .addEdge('build', 'static_validate')
+      .addConditionalEdges(
+        'static_validate',
+        (state) => (state.planFeedback ? 'replan' : 'approval'),
+        { replan: 'plan', approval: 'await_approval' },
+      )
+      .addEdge('await_approval', 'provision')
+      .addEdge('provision', 'verify')
+      .addConditionalEdges('verify', (state) => (state.verifyOk ? 'test' : 'diagnose'), {
+        test: 'test_execute',
+        diagnose: 'diagnose',
+      })
+      .addConditionalEdges('test_execute', (state) => (state.testOk ? 'complete' : 'diagnose'), {
+        complete: 'complete',
+        diagnose: 'diagnose',
+      })
+      .addEdge('diagnose', 'repair')
+      .addConditionalEdges('repair', (state) => this.routeAfterRepair(state), {
+        provision: 'provision',
+        test_execute: 'test_execute',
+        escalate: 'escalate',
+      })
+      .addEdge('complete', END)
+      .addEdge('escalate', END)
+      .compile({ checkpointer: this.checkpointer() });
+  }
+
+  graphConfig(
+    runId: string,
+    scope?: Pick<JaafarAutomationGraphInput, 'userId' | 'organizationId'>,
+    threadSuffix?: string,
+  ) {
+    const thread = `jaafar:automation:${scope?.organizationId ?? 'personal'}:${scope?.userId ?? 'anonymous'}:${runId}${threadSuffix ? `:${threadSuffix}` : ''}`;
+    return { configurable: { thread_id: thread } };
+  }
+
+  private blueprintOf(state: AutomationGraphState): AutomationBlueprint | undefined {
+    return state.blueprint ?? state.input.blueprint;
+  }
+
+  private requirementsOf(
+    state: AutomationGraphState,
+  ): Array<{ id?: string; field: string; required: boolean }> | undefined {
+    return state.understanding?.requirements ?? state.input.requirements;
+  }
+
+  private conditionsOf(state: AutomationGraphState): string[] | undefined {
+    return state.understanding?.conditions ?? state.input.conditions;
+  }
+
+  // ── internals ──────────────────────────────────────────────
+
+  private async ensureRun(input: JaafarAutomationGraphInput): Promise<string> {
+    if (input.runId) {
+      await this.runs.updateMetadata(input.runId, { automationV2: true });
+      return input.runId;
+    }
+    const created = await this.agentRuns.createAgentRun({
+      agentId: input.agentId,
+      ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+      ...(input.userId ? { userId: input.userId } : {}),
+      ...(input.organizationId ? { organizationId: input.organizationId } : {}),
+      metadata: {
+        runtimeMode: 'automation_design',
+        automationV2: true,
+        userMessage: input.userMessage,
+      },
+    });
+    return created.id;
+  }
+
+  private async failRun(runId: string, message: string): Promise<void> {
+    try {
+      // Every non-terminal phase can sink to FAILED (repairable — Phase 4
+      // resumes from here). Terminal rows fall through to the legacy fail.
+      await this.agentRuns.advance(runId, {
+        toPhase: AGENT_RUN_PHASE.FAILED,
+        toStatus: 'FAILED',
+        reason: message.slice(0, 500),
+      });
+    } catch {
+      try {
+        await this.runs.fail(runId, message);
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
+
+  private routeAfterUnderstanding(state: AutomationGraphState): 'clarification' | 'plan' {
+    if (!state.understanding || state.understanding.route === 'clarification')
+      return 'clarification';
+    return 'plan';
+  }
+
+  private routeAfterReview(state: AutomationGraphState): 'replan' | 'build' | 'ask' {
+    // review_plan either throws (unfixable), returns planFeedback (replan),
+    // sets clarificationOverride (ask the user — missing connection or
+    // missing requirements), or a clean blueprint (build). The plan node
+    // clears feedback on every attempt, so presence reliably means
+    // "rejected this round".
+    if (state.clarificationOverride) return 'ask';
+    return state.planFeedback ? 'replan' : 'build';
+  }
+
+  private routeAfterRepair(state: AutomationGraphState): 'provision' | 'test_execute' | 'escalate' {
+    const attempts = state.repairAttempt || state.input.repairAttempt || 0;
+    if (attempts >= MAX_REPAIR_ATTEMPTS) return 'escalate';
+    return state.nextStep ?? 'test_execute';
+  }
+
+  /**
+   * Placeholder-ish "integration" names are model formatting failures, not
+   * real providers — asking the user to "connect PENDING" would be absurd.
+   */
+  /**
+   * Native-preference warnings worth feeding back into a replan (e.g. prefer
+   * the native node while availability is unproven). Other warnings stay out
+   * of the feedback so replan loops are never triggered by unprovable hints.
+   */
+  private relevantWarningsFeedback(
+    warnings: Array<{ code: string; message: string; stepId?: string }>,
+  ): string {
+    const relevant = warnings.filter(
+      (warning) =>
+        warning.code === 'UNMAPPED_STEP' && /native node|HTTP Request|Code/i.test(warning.message),
+    );
+    if (relevant.length === 0) return '';
+    return `\nAlso address these warnings:\n${relevant.map((warning) => `- ${warning.message}`).join('\n')}`;
+  }
+
+  private isPlaceholderIntegrationName(name: string): boolean {
+    return (
+      /^(pending|todo|tbd|tba|n\/a|none|unknown|unspecified|required|needed|various)$/i.test(
+        name.trim(),
+      ) || /[\s()]/.test(name)
+    );
+  }
+
+  private succeededSteps(state: AutomationGraphState): string[] {
+    const done: string[] = ['Request understood', 'Plan reviewed', 'Workflow statically validated'];
+    if (state.automationId ?? state.input.automationId) done.push('Provisioned in n8n');
+    if (state.verifyOk) done.push('Provisioning verified live');
+    if (state.testOk) done.push('Test execution passed');
+    return done;
+  }
+
+  private async recordUnderstanding(runId: string, understanding: RequestUnderstandingResult) {
+    await this.agentRuns.recordArtifacts(
+      runId,
+      {
+        businessContext: understanding.businessContext as never,
+        requirements: understanding.requirements as never,
+        assumptions: understanding.assumptions as never,
+        constraints: understanding.constraints as never,
+      },
+      'request understood',
+    );
+  }
+
+  private async recordUsage(
+    runId: string,
+    usage: { promptTokens: number; completionTokens: number; totalTokens: number },
+  ) {
+    try {
+      await this.runs.recordModelUsage(runId, usage);
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  private async loadInstance(
+    input: JaafarAutomationGraphInput,
+  ): Promise<N8nInstanceInventory | null> {
+    try {
+      const credentials = await this.n8nConnections?.resolveActiveForScope({
+        userId: input.userId,
+        organizationId: input.organizationId,
+      });
+      if (!credentials || !this.nodeInventory) return null;
+      return await this.nodeInventory.inventory({
+        baseUrl: credentials.baseUrl,
+        apiKey: credentials.apiKey,
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  private async resolveConnection(
+    input: JaafarAutomationGraphInput,
+  ): Promise<N8nClientConnection | null> {
+    try {
+      const resolved = await this.n8nConnections?.resolveActiveForScope({
+        userId: input.userId,
+        organizationId: input.organizationId,
+      });
+      if (!resolved) return null;
+      return { baseUrl: resolved.baseUrl, apiKey: resolved.apiKey };
+    } catch {
+      return null;
+    }
+  }
+
+  private planSystemPrompt(
+    planContext: StageContext,
+    capabilities: Array<{
+      displayName: string;
+      connectionStatus: string;
+      credentialType?: string;
+      provider?: string;
+      suggestedNodeType?: string;
+    }>,
+    instance: N8nInstanceInventory | null,
+    state: AutomationGraphState,
+    relevantTypes?: string[],
+  ): string {
+    const capabilityLines = capabilities.map(
+      (capability) =>
+        `- ${capability.displayName} [${capability.connectionStatus}]${capability.credentialType ? ` <${capability.credentialType}>` : ''}${capability.suggestedNodeType ? ` → prefer ${capability.suggestedNodeType}` : ''}`,
+    );
+    const byType = new Map((instance?.nodeTypes ?? []).map((node) => [node.type, node]));
+    const listedTypes =
+      relevantTypes && relevantTypes.length > 0
+        ? relevantTypes
+        : (instance?.nodeTypes ?? []).slice(0, 60).map((node) => node.type);
+    const nodeLines = listedTypes.map((type) => {
+      const node = byType.get(type);
+      const version = node?.typeVersion !== undefined ? ` v${node.typeVersion}` : '';
+      const creds =
+        node?.credentials && Object.keys(node.credentials).length > 0
+          ? ` [credentials: ${Object.keys(node.credentials).join(', ')}]`
+          : '';
+      return `- ${type}${version}${creds}`;
+    });
+    return [
+      'You are Jaafar designing a business automation as an n8n blueprint. Never guess — every step must trace to the request, and every integration must come from the connected list.',
+      'Return steps with stable requirementIds (R1, R2, …) matching the requirements below, explicit conditions for branches, and expectedOutput per step.',
+      'Choose steps[].nodeHint = { type, typeVersion?, parameters, nodeChoiceReason? } using REAL node types from the instance list. Put concrete business values (message text, recipients, intervals, urls…) into parameters. Never invent credential names or ids.',
+      "<node_selection_policy>Jaafar builds against the user's connected n8n instance, the source of truth for node availability. Priority: 1. Native integration node — if a compatible native node is listed below, prefer it. If the requested operation is verified as supported, MUST use it. If the operation is unverified, still prefer the native node and record nodeChoiceReason. 2. HTTP Request — only when no compatible native node is listed, when the native node is verified not to support the operation, or when the user explicitly requests direct HTTP/API usage (genericNodeOverride). 3. Code / Set / IF — only for transformation, logic, calculations, parsing, branching. NEVER as an integration substitute. Forbidden: HTTP Request for an integration with a listed compatible native node; Code calling an external API when a native or HTTP node fits. Do not assume a native exists because n8n generally supports the provider. Generic choices MUST include nodeChoiceReason.</node_selection_policy>",
+      'Name every step[].integration and blueprint integration with the EXACT provider key from the connected list above (e.g. "slack", never "Slack channel" or "Slack (must be connected)"). Leave step[].integration EMPTY for structural steps (webhook, schedule, code, set, httpRequest, if, respond) and for generic HTTP calls — set it ONLY when the step calls a real third-party service. If the automation needs an integration that is NOT connected, do NOT invent a name for it — omit it from the steps and state the missing connection plainly in the summary instead.',
+      'In n8n expressions reference earlier steps by their step NAME (e.g. {{$node["Receive order"].json}}), never by id. Keep every {{ }} balanced inside each string.',
+      '<request_context>',
+      this.contextManager.renderToPromptText(planContext),
+      '</request_context>',
+      '<connected_integrations>',
+      capabilityLines.join('\n') || '(none connected)',
+      '</connected_integrations>',
+      '<client_n8n_node_types>',
+      nodeLines.join('\n') ||
+        '(instance not readable — prefer native nodes for known providers, verify at static validation)',
+      '</client_n8n_node_types>',
+      `<understanding>\n${JSON.stringify(state.understanding)}\n</understanding>`,
+    ].join('\n\n');
+  }
+
+  /**
+   * Relevant-node filtering for the planner (plan §6): natives matching
+   * the request's entities/actions/conditions first, soft-capped so the
+   * LLM sees ~20 targeted types instead of 60–80. Falls back to the raw
+   * inventory order when the resolver is unavailable (spec-constructed).
+   */
+  private relevantNodeTypes(
+    understanding: AutomationGraphState['understanding'],
+    capabilities: Array<{
+      provider?: string;
+      suggestedNodeType?: string;
+      nodeTypes?: string[];
+    }>,
+    instance: N8nInstanceInventory | null,
+  ): string[] | undefined {
+    if (!this.nodeResolver || !instance) return undefined;
+    try {
+      return this.nodeResolver.filterRelevantNodes({
+        entities: understanding?.entities,
+        actions: understanding?.actions,
+        conditions: understanding?.conditions,
+        instanceNodeTypes: instance.nodeTypes.map((node) => ({ type: node.type })),
+        capabilities: (capabilities ?? []).map((capability) => ({
+          provider: capability.provider ?? '',
+          suggestedNodeType: capability.suggestedNodeType,
+          nodeTypes: capability.nodeTypes,
+        })),
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
+  private planUserPrompt(understanding: JaafarUnderstanding, feedback?: string): string {
+    return [
+      `<goal>${understanding.goal}</goal>`,
+      `<trigger>${JSON.stringify(understanding.trigger)}</trigger>`,
+      `<actions>${JSON.stringify(understanding.actions)}</actions>`,
+      `<entities>${JSON.stringify(understanding.entities)}</entities>`,
+      `<conditions>${JSON.stringify(understanding.conditions)}</conditions>`,
+      `<constraints>${JSON.stringify(understanding.constraints)}</constraints>`,
+      `<requirements>${JSON.stringify(understanding.requirements)}</requirements>`,
+      `<assumptions>${JSON.stringify(understanding.assumptions)}</assumptions>`,
+      feedback ? `<prior_plan_feedback>\n${feedback}\n</prior_plan_feedback>` : '',
+      'Return the complete automation blueprint now.',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  private async verifyProvisioned(state: AutomationGraphState): Promise<{
+    ok: boolean;
+    message: string;
+    webhookPath?: string;
+    nodeCount?: number;
+  }> {
+    const externalWorkflowId = state.externalWorkflowId ?? state.input.externalWorkflowId;
+    if (!externalWorkflowId) {
+      return { ok: false, message: 'Provisioned workflow id is missing' };
+    }
+    let connection: N8nClientConnection | null = null;
+    try {
+      const resolved = await this.n8nConnections?.resolveActiveForScope({
+        userId: state.input.userId,
+        organizationId: state.input.organizationId,
+      });
+      if (resolved) connection = { baseUrl: resolved.baseUrl, apiKey: resolved.apiKey };
+    } catch {
+      connection = null;
+    }
+    if (!connection) {
+      // No live connection to verify against — the provisioner already
+      // activated the workflow; record that verification was skipped.
+      await this.agentRuns.recordArtifacts(
+        state.input.runId,
+        { executionResults: { verified: false, reason: 'no live connection' } as never },
+        'verification skipped (no connection)',
+      );
+      return { ok: true, message: 'provisioned (live verification skipped — no connection)' };
+    }
+    try {
+      const detail = await this.clientApi.getWorkflow(connection, externalWorkflowId);
+      const nodes = detail.nodes ?? [];
+      if (nodes.length === 0) {
+        return { ok: false, message: 'Provisioned workflow came back with no nodes' };
+      }
+      const hooks = N8nClientApiService.extractWebhookPaths(detail);
+      await this.agentRuns.recordArtifacts(
+        state.input.runId,
+        {
+          executionResults: {
+            verified: true,
+            nodeCount: nodes.length,
+            webhookPath: hooks[0]?.path,
+          } as never,
+        },
+        'automation verified live in n8n',
+      );
+      return {
+        ok: true,
+        message: 'verified',
+        webhookPath: hooks[0]?.path,
+        nodeCount: nodes.length,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        message: `Provisioned workflow could not be read back: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  private mapStreamUpdate(
+    runId: string,
+    update: Record<string, unknown>,
+  ): AutomationGraphStreamEvent[] {
+    const events: AutomationGraphStreamEvent[] = [];
+    if ('__interrupt__' in update) {
+      // The interrupt payload carries the blueprint for review — render it
+      // as content so stream clients show the design, not just a wait state.
+      // Defensive: any shape surprise falls back to the bare wait event.
+      try {
+        const raw = update.__interrupt__ as Array<{ value?: unknown }> | { value?: unknown };
+        const interrupts = Array.isArray(raw) ? raw : [raw];
+        const found = interrupts
+          .map((item) => item?.value)
+          .find((value) => value && typeof value === 'object') as
+          | { blueprint?: AutomationBlueprint }
+          | undefined;
+        const summary = this.formatApprovalSummary(found?.blueprint);
+        if (summary) events.push({ type: 'token', runId, content: summary });
+      } catch {
+        /* bare run.waiting below */
+      }
+      events.push({ type: 'run.waiting', runId, reason: 'approval' });
+      return events;
+    }
+    for (const [node, value] of Object.entries(update)) {
+      const state = (value ?? {}) as Record<string, unknown>;
+      if (node === 'understand' && state.understanding) {
+        events.push({ type: 'token', runId, content: 'Understanding your request ✓\n' });
+      } else if (node === 'plan') {
+        events.push({ type: 'token', runId, content: 'Planning the automation ✓\n' });
+      } else if (node === 'review_plan' && !state.planFeedback) {
+        events.push({ type: 'token', runId, content: 'Plan reviewed ✓\n' });
+      } else if (node === 'build' || node === 'static_validate') {
+        events.push({
+          type: 'token',
+          runId,
+          content:
+            state.planFeedback && node === 'static_validate'
+              ? 'Static check found issues, refining the plan ⏳\n'
+              : 'Building and validating the workflow ✓\n',
+        });
+      } else if (node === 'provision' && state.automationId) {
+        events.push({ type: 'token', runId, content: 'Provisioning in your n8n ✓\n' });
+      } else if (node === 'verify' && state.verifyOk) {
+        events.push({ type: 'token', runId, content: 'Provisioning verified ✓\n' });
+      } else if (node === 'test_execute') {
+        events.push({ type: 'token', runId, content: 'Testing the workflow ⏳\n' });
+      } else if (node === 'diagnose' && typeof state.diagnosis === 'string') {
+        events.push({
+          type: 'token',
+          runId,
+          content: `Diagnosing the issue ⏳\n${state.diagnosis}\n`,
+        });
+      } else if (node === 'repair') {
+        events.push({ type: 'token', runId, content: 'Repairing and re-provisioning ⏳\n' });
+      } else if (node === 'complete' && typeof state.response === 'string') {
+        events.push({
+          type: 'run.completed',
+          runId,
+          response: state.response,
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        });
+      } else if (node === 'escalate' && typeof state.response === 'string') {
+        events.push({
+          type: 'run.failed',
+          runId,
+          code: 'AUTOMATION_ESCALATED',
+          message: state.response,
+        });
+      } else if (node === 'ask_clarification' && typeof state.response === 'string') {
+        events.push({ type: 'token', runId, content: state.response });
+        events.push({ type: 'run.waiting', runId, reason: 'clarification' });
+      }
+    }
+    return events;
+  }
+
+  private result(
+    runId: string,
+    result: AutomationGraphState,
+    status: 'WAITING' | 'COMPLETED' | 'FAILED',
+  ): ExecuteResponse {
+    return {
+      runId,
+      mode: 'automation_design',
+      // Clarification answers park the row as WAITING (pendingContext carries
+      // the question into the next turn) — report that honestly. Escalations
+      // park the row as FAILED with the §42 message as the response.
+      status: result.waitingReason ? 'WAITING' : result.escalated ? 'FAILED' : status,
+      response: result.response ?? '',
+      plan: result.blueprint
+        ? {
+            ...(result.blueprint as unknown as Record<string, unknown>),
+            blueprintRevision: blueprintRevision(result.blueprint),
+          }
+        : undefined,
+      usage: result.usage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    };
+  }
+
+  /**
+   * Human-readable design summary for the approval gate — the non-stream
+   * client has nothing else to render while WAITING. Tolerant of the trimmed
+   * interrupt copy (trigger as string, no integrations/riskNotes).
+   */
+  private formatApprovalSummary(
+    blueprint:
+      | AutomationBlueprint
+      | {
+          name?: string;
+          goal?: string;
+          trigger?: { type?: string } | string;
+          summary?: string;
+          steps?: Array<{ name?: string; action?: string; integration?: string }>;
+          integrations?: string[];
+          riskNotes?: string[];
+        }
+      | undefined,
+  ): string {
+    if (!blueprint?.name) return '';
+    const trigger =
+      typeof blueprint.trigger === 'string'
+        ? blueprint.trigger
+        : (blueprint.trigger?.type ?? 'webhook');
+    const steps = blueprint.steps ?? [];
+    const integrations = blueprint.integrations ?? [];
+    const riskNotes = blueprint.riskNotes ?? [];
+    return [
+      `Draft automation blueprint: ${blueprint.name}`,
+      '',
+      `Goal: ${blueprint.goal ?? ''}`,
+      `Trigger: ${trigger}`,
+      '',
+      blueprint.summary ?? '',
+      '',
+      'Steps:',
+      ...steps.map(
+        (step, index) =>
+          `- ${index + 1}. ${step.name} — ${step.action}${step.integration ? ` (via ${step.integration})` : ''}`,
+      ),
+      '',
+      `Integrations: ${integrations.join(', ') || 'None specified'}`,
+      '',
+      ...(riskNotes.length ? ['Risk notes:', ...riskNotes.map((item) => `- ${item}`), ''] : []),
+      'This design is ready for your review. Nothing has been provisioned yet. Approve it when you want me to create the automation in your n8n instance.',
+    ].join('\n');
+  }
+
+  private scopeFailure(runId: string, scope: 'user' | 'organization'): ExecuteResponse {
+    return {
+      runId,
+      mode: 'automation_design',
+      status: 'FAILED',
+      response: `This automation is not available in the current ${scope} scope.`,
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    };
+  }
+
+  private isInterrupted(
+    result: unknown,
+  ): result is AutomationGraphState & { __interrupt__: unknown } {
+    return Boolean(result && typeof result === 'object' && '__interrupt__' in result);
+  }
+
+  private checkpointer() {
+    if (process.env.NODE_ENV === 'test' || process.env.VITEST) return this.memoryCheckpointer;
+    if (this.postgresCheckpointer) return this.postgresCheckpointer.getCheckpointer();
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('PostgreSQL checkpointing is required for production graph execution');
+    }
+    return this.memoryCheckpointer;
+  }
+}

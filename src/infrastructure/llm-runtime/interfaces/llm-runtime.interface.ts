@@ -44,7 +44,10 @@ export interface LLMGenerateObjectResult {
   execution: LLMExecutionMetadata;
 }
 
-export interface LLMStreamParams extends LLMGenerateParams {}
+export interface LLMStreamParams extends LLMGenerateParams {
+  /** Timeout for the FIRST chunk (model queue + reasoning preamble). */
+  firstByteTimeoutMs?: number;
+}
 
 export interface LLMStreamChunk extends AdapterStreamChunk {
   execution?: LLMExecutionMetadata;

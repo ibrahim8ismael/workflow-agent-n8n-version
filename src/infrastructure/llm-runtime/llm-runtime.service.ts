@@ -97,42 +97,57 @@ export class LLMRuntimeService implements ILLMRuntime {
   }
 
   async *generateStream(params: LLMStreamParams): AsyncIterable<LLMStreamChunk> {
-    const candidate = this.resolveCandidates(params.mode)[0];
+    const interChunkTimeout = params.timeoutMs ?? this.timeoutFor(params.mode);
+    const firstByteTimeout =
+      params.firstByteTimeoutMs ?? params.timeoutMs ?? this.timeoutFor(params.mode);
     const startedAt = Date.now();
-    const execution = this.executionMetadata(params.mode, candidate, startedAt, 0, {
-      promptTokens: 0,
-      completionTokens: 0,
-      totalTokens: 0,
-    });
-    const stream = this.aiAdapter.generateStream({
-      model: this.modelString(candidate),
-      systemPrompt: params.systemPrompt,
-      messages: params.messages,
-      sdkTools: params.sdkTools,
-      temperature: params.temperature,
-      maxTokens: params.maxTokens,
-    });
+    let lastError: unknown;
 
-    try {
-      const iterator = stream[Symbol.asyncIterator]();
-      while (true) {
-        const next = await this.withTimeout(
-          iterator.next(),
-          params.timeoutMs ?? this.timeoutFor(params.mode),
-        );
-        if (next.done) break;
-        const chunk = next.value;
-        const normalized: LLMStreamChunk = { ...chunk };
-        if (chunk.type === 'finish') {
-          execution.durationMs = Date.now() - startedAt;
-          normalized.execution = execution;
+    for (const candidate of this.resolveCandidates(params.mode)) {
+      const execution = this.executionMetadata(params.mode, candidate, startedAt, 0, {
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+      });
+      const stream = this.aiAdapter.generateStream({
+        model: this.modelString(candidate),
+        systemPrompt: params.systemPrompt,
+        messages: params.messages,
+        sdkTools: params.sdkTools,
+        temperature: params.temperature,
+        maxTokens: params.maxTokens,
+      });
+
+      let yielded = false;
+      try {
+        const iterator = stream[Symbol.asyncIterator]();
+        let isFirstChunk = true;
+        while (true) {
+          const timeoutMs = isFirstChunk ? firstByteTimeout : interChunkTimeout;
+          const next = await this.withTimeout(iterator.next(), timeoutMs);
+          isFirstChunk = false;
+          if (next.done) break;
+          const chunk = next.value;
+          const normalized: LLMStreamChunk = { ...chunk };
+          if (chunk.type === 'finish') {
+            execution.durationMs = Date.now() - startedAt;
+            normalized.execution = execution;
+          }
+          yield normalized;
+          yielded = true;
         }
-        yield normalized;
+        return;
+      } catch (error) {
+        this.logger.warn(`LLM stream failed for ${candidate.provider}:${candidate.model}`);
+        lastError = error;
+        if (this.isFatal(error)) throw error;
+        // Once tokens reached the caller the run already started rendering —
+        // a different provider would produce inconsistent output.
+        if (yielded) throw error;
       }
-    } catch (error) {
-      this.logger.warn(`LLM stream failed for ${candidate.provider}:${candidate.model}`);
-      throw error;
     }
+
+    throw lastError instanceof Error ? lastError : new Error('LLM stream failed');
   }
 
   private async withFailover<T>(

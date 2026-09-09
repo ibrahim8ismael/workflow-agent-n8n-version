@@ -340,6 +340,9 @@ export class MockDatabaseService {
   get run() {
     return this.modelProxy('run');
   }
+  get agentRunTransition() {
+    return this.modelProxy('agentRunTransition');
+  }
   get memory() {
     return this.modelProxy('memory');
   }

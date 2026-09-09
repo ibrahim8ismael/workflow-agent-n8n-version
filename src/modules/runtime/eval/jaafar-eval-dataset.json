@@ -1,0 +1,1946 @@
+{
+  "version": 2,
+  "purpose": "Jaafar V2 evaluation scenarios (docs/Jaafar-improve.md §32). Offline cases run in CI via `npm run eval`; live-only cases (offline: null) are for manual runs against a real instance.",
+  "scenarios": [
+    {
+      "id": "basic-webhook-slack",
+      "category": "basic",
+      "input": "Whenever I get a new Shopify order, notify the sales Slack channel.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "valid plan covering order receipt + notification",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Order alerts",
+          "goal": "Notify sales about new Shopify orders",
+          "summary": "Order to Slack",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Receive order",
+              "action": "Receive the new Shopify order",
+              "config": {},
+              "requirementIds": ["R1"],
+              "expectedOutput": "order payload",
+              "nodeHint": { "type": "n8n-nodes-base.webhook", "parameters": { "path": "orders" } }
+            },
+            {
+              "id": "S2",
+              "name": "Notify sales",
+              "action": "Post the order to Slack",
+              "integration": "slack",
+              "config": {},
+              "requirementIds": ["R2"],
+              "expectedOutput": "message id",
+              "nodeHint": { "type": "n8n-nodes-base.slack", "parameters": {} }
+            }
+          ],
+          "integrations": ["shopify", "slack"],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [
+          { "id": "R1", "field": "receive order", "required": true },
+          { "id": "R2", "field": "notify sales", "required": true }
+        ],
+        "capabilities": [
+          {
+            "provider": "shopify",
+            "displayName": "Shopify",
+            "source": "n8n",
+            "connectionStatus": "CONNECTED",
+            "credentialsAvailable": true
+          },
+          {
+            "provider": "slack",
+            "displayName": "Slack",
+            "source": "n8n",
+            "connectionStatus": "CONNECTED",
+            "credentialsAvailable": true
+          }
+        ],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "basic-schedule-email",
+      "category": "basic",
+      "input": "Every morning at 8am, email me yesterday's sales total.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "valid plan with a schedule trigger and email step",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Daily sales email",
+          "goal": "Email yesterday's sales total every morning",
+          "summary": "Schedule to email",
+          "trigger": { "type": "schedule", "config": { "every": 1, "unit": "days" } },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Fetch totals",
+              "action": "Fetch yesterday's sales total",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.httpRequest", "parameters": {} }
+            },
+            {
+              "id": "S2",
+              "name": "Send email",
+              "action": "Email the total",
+              "integration": "gmail",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.gmail", "parameters": {} }
+            }
+          ],
+          "integrations": ["gmail"],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "daily email", "required": true }],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "basic-form-sheets",
+      "category": "basic",
+      "input": "When someone submits the contact form, add a row to Google Sheets.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "valid plan with a webhook trigger and sheets step",
+      "offline": {
+        "kind": "validate-workflow",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Form to sheets",
+          "goal": "Log contact form submissions in Sheets",
+          "summary": "Webhook to sheets",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Receive submission",
+              "action": "Receive the form payload",
+              "config": {},
+              "requirementIds": ["R1"],
+              "expectedOutput": "form payload",
+              "nodeHint": { "type": "n8n-nodes-base.webhook", "parameters": {} }
+            },
+            {
+              "id": "S2",
+              "name": "Append row",
+              "action": "Append the submission to Sheets",
+              "integration": "google_sheets",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.googleSheets", "parameters": {} }
+            }
+          ],
+          "integrations": ["google_sheets"],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "log submissions", "required": true }],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "basic-missing-trigger",
+      "category": "basic",
+      "input": "Do something with my orders.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "plan without a trigger is rejected",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Vague orders",
+          "goal": "Do something",
+          "summary": "Vague",
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Mystery",
+              "action": "Do things",
+              "config": {},
+              "requirementIds": []
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [],
+        "expectedValid": false,
+        "expectedErrorCodes": ["INVALID_PLAN"]
+      }
+    },
+    {
+      "id": "basic-chat-manual",
+      "category": "basic",
+      "input": "When I ask, look up the customer and draft a reply.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "valid plan with a chat trigger",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Lookup on demand",
+          "goal": "Look up customers on demand",
+          "summary": "Chat to lookup",
+          "trigger": { "type": "chat", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Lookup",
+              "action": "Look up the customer",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.httpRequest", "parameters": {} }
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "lookup", "required": true }],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "mapping-nested-json",
+      "category": "mapping",
+      "input": "Take the nested customer object from the webhook and forward the email field.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "balanced nested expression validates",
+      "offline": {
+        "kind": "validate-workflow",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Forward email",
+          "goal": "Forward nested customer email",
+          "summary": "Map nested JSON",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Receive",
+              "action": "Receive the payload",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.webhook", "parameters": {} }
+            },
+            {
+              "id": "S2",
+              "name": "Forward",
+              "action": "Forward the email",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": {
+                "type": "n8n-nodes-base.code",
+                "parameters": {
+                  "jsCode": "return { json: { email: {{ $json.customer.email }} } };"
+                }
+              }
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "forward", "required": true }],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "mapping-array-items",
+      "category": "mapping",
+      "input": "For each line item in the order, create a ledger row.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "array expression validates",
+      "offline": {
+        "kind": "validate-workflow",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Line items",
+          "goal": "Ledger rows per line item",
+          "summary": "Array mapping",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Receive",
+              "action": "Receive the order",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.webhook", "parameters": {} }
+            },
+            {
+              "id": "S2",
+              "name": "Split",
+              "action": "Split line items",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": {
+                "type": "n8n-nodes-base.code",
+                "parameters": { "jsCode": "return {{ $json.items }}.map(i => ({ json: i }));" }
+              }
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "rows", "required": true }],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "mapping-unknown-node",
+      "category": "mapping",
+      "input": "Use the hallucinator node to process the payload.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "hallucinated node type is rejected, never provisioned",
+      "offline": {
+        "kind": "validate-workflow",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Bad node",
+          "goal": "Use a fake node",
+          "summary": "Hallucination",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Magic",
+              "action": "Do magic",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.hallucinated", "parameters": {} }
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "magic", "required": true }],
+        "expectedValid": false,
+        "expectedErrorCodes": ["INVALID_PLAN"]
+      }
+    },
+    {
+      "id": "mapping-forward-ref",
+      "category": "mapping",
+      "input": "First step reads the output of the third step.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "forward node reference is rejected",
+      "offline": {
+        "kind": "validate-workflow",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Forward ref",
+          "goal": "Read the future",
+          "summary": "Forward reference",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "First",
+              "action": "Read later output",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": {
+                "type": "n8n-nodes-base.code",
+                "parameters": { "jsCode": "return {{ $('Second').json }};" }
+              }
+            },
+            {
+              "id": "S2",
+              "name": "Second",
+              "action": "Produce output",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": {
+                "type": "n8n-nodes-base.code",
+                "parameters": { "jsCode": "return {};" }
+              }
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "chain", "required": true }],
+        "expectedValid": false,
+        "expectedErrorCodes": ["INVALID_PLAN"]
+      }
+    },
+    {
+      "id": "mapping-unbalanced",
+      "category": "mapping",
+      "input": "Map the name with a broken expression.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "unbalanced delimiters are rejected",
+      "offline": {
+        "kind": "validate-workflow",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Broken expr",
+          "goal": "Map with broken syntax",
+          "summary": "Unbalanced",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Map",
+              "action": "Map the name",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": {
+                "type": "n8n-nodes-base.code",
+                "parameters": { "jsCode": "return { json: { name: {{ $json.name } } };" }
+              }
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "map", "required": true }],
+        "expectedValid": false,
+        "expectedErrorCodes": ["INVALID_PLAN"]
+      }
+    },
+    {
+      "id": "logic-if-branch",
+      "category": "logic",
+      "input": "If the order total is above $500, notify sales, otherwise just log it.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "conditional step gates the branch",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Big order branch",
+          "goal": "Branch on order total",
+          "summary": "IF branch",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Receive",
+              "action": "Receive the order",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.webhook", "parameters": {} }
+            },
+            {
+              "id": "S2",
+              "name": "Check total",
+              "action": "Branch on total",
+              "config": {},
+              "requirementIds": ["R1"],
+              "condition": "order total above $500",
+              "expectedOutput": "branch decision",
+              "nodeHint": { "type": "n8n-nodes-base.if", "parameters": {} }
+            },
+            {
+              "id": "S3",
+              "name": "Notify",
+              "action": "Notify sales",
+              "integration": "slack",
+              "config": {},
+              "requirementIds": ["R2"],
+              "nodeHint": { "type": "n8n-nodes-base.slack", "parameters": {} }
+            }
+          ],
+          "integrations": ["slack"],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [
+          { "id": "R1", "field": "branch", "required": true },
+          { "id": "R2", "field": "notify", "required": true }
+        ],
+        "conditions": ["order total above $500"],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "logic-threshold",
+      "category": "logic",
+      "input": "Flag customers with more than 3 failed payments.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "threshold condition is explicit on a step",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Flag risky",
+          "goal": "Flag risky customers",
+          "summary": "Threshold",
+          "trigger": { "type": "schedule", "config": { "every": 1, "unit": "days" } },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Scan",
+              "action": "Scan customers",
+              "config": {},
+              "requirementIds": ["R1"],
+              "condition": "failed payments > 3",
+              "nodeHint": { "type": "n8n-nodes-base.httpRequest", "parameters": {} }
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "scan", "required": true }],
+        "conditions": ["failed payments > 3"],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "logic-condition-unrepresented",
+      "category": "logic",
+      "input": "Only process orders from the EU region.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "valid plan with a warning that no step gates the condition",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "EU filter missing",
+          "goal": "Process EU orders",
+          "summary": "No gate",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Process",
+              "action": "Process the order",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.code", "parameters": {} }
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "process", "required": true }],
+        "conditions": ["EU region only"],
+        "expectedValid": true,
+        "expectedWarningCodes": ["CONDITION_UNREPRESENTED"]
+      }
+    },
+    {
+      "id": "logic-multi-branch",
+      "category": "logic",
+      "input": "Route VIP customers to the priority queue and everyone else to the standard queue.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "both branches covered by steps",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Route customers",
+          "goal": "Route by tier",
+          "summary": "Two branches",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Classify",
+              "action": "Classify the tier",
+              "config": {},
+              "requirementIds": ["R1"],
+              "condition": "tier is VIP",
+              "nodeHint": { "type": "n8n-nodes-base.if", "parameters": {} }
+            },
+            {
+              "id": "S2",
+              "name": "Priority",
+              "action": "Enqueue priority",
+              "config": {},
+              "requirementIds": ["R1"],
+              "condition": "tier is VIP",
+              "nodeHint": { "type": "n8n-nodes-base.code", "parameters": {} }
+            },
+            {
+              "id": "S3",
+              "name": "Standard",
+              "action": "Enqueue standard",
+              "config": {},
+              "requirementIds": ["R2"],
+              "nodeHint": { "type": "n8n-nodes-base.code", "parameters": {} }
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [
+          { "id": "R1", "field": "vip branch", "required": true },
+          { "id": "R2", "field": "standard branch", "required": true }
+        ],
+        "conditions": ["tier is VIP"],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "logic-delete-risknotes",
+      "category": "logic",
+      "input": "Delete contacts that bounced twice, and note the risk.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "side-effecting plan without risk notes warns",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Delete bounces",
+          "goal": "Delete bounced contacts",
+          "summary": "Deletion",
+          "trigger": { "type": "manual", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Delete",
+              "action": "Delete bounced contacts",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.code", "parameters": {} }
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "delete", "required": true }],
+        "expectedValid": true,
+        "expectedWarningCodes": ["SIDE_EFFECT_UNACKNOWLEDGED"]
+      }
+    },
+    {
+      "id": "integrations-known",
+      "category": "integrations",
+      "input": "Sync Shopify customers with Zoho.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "connected integrations pass review",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Shopify to Zoho",
+          "goal": "Sync customers",
+          "summary": "CRM sync",
+          "trigger": { "type": "schedule", "config": { "every": 1, "unit": "days" } },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Fetch",
+              "action": "Fetch Shopify customers",
+              "integration": "shopify",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.httpRequest", "parameters": {} }
+            },
+            {
+              "id": "S2",
+              "name": "Upsert",
+              "action": "Upsert Zoho contacts",
+              "integration": "zoho",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.httpRequest", "parameters": {} }
+            }
+          ],
+          "integrations": ["shopify", "zoho"],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "sync", "required": true }],
+        "capabilities": [
+          {
+            "provider": "shopify",
+            "displayName": "Shopify",
+            "source": "n8n",
+            "connectionStatus": "CONNECTED",
+            "credentialsAvailable": true
+          },
+          {
+            "provider": "zoho",
+            "displayName": "Zoho",
+            "source": "n8n",
+            "connectionStatus": "CONNECTED",
+            "credentialsAvailable": true
+          }
+        ],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "integrations-unknown",
+      "category": "integrations",
+      "input": "Sync orders with the ERP nobody connected.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "unconnected integration blocks the plan with a clear error",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "ERP sync",
+          "goal": "Sync with ERP",
+          "summary": "Missing integration",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Push",
+              "action": "Push to ERP",
+              "integration": "acme_erp",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.httpRequest", "parameters": {} }
+            }
+          ],
+          "integrations": ["acme_erp"],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "push", "required": true }],
+        "capabilities": [
+          {
+            "provider": "slack",
+            "displayName": "Slack",
+            "source": "n8n",
+            "connectionStatus": "CONNECTED",
+            "credentialsAvailable": true
+          }
+        ],
+        "expectedValid": false,
+        "expectedErrorCodes": ["UNKNOWN_INTEGRATION"]
+      }
+    },
+    {
+      "id": "integrations-fallback-step",
+      "category": "integrations",
+      "input": "Log the payload somewhere useful.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "steps without a node choice warn but stay valid",
+      "offline": {
+        "kind": "validate-workflow",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Log it",
+          "goal": "Log payloads",
+          "summary": "Fallback",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Log",
+              "action": "Log the payload",
+              "config": {},
+              "requirementIds": ["R1"]
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "log", "required": true }],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "integrations-no-capabilities",
+      "category": "integrations",
+      "input": "Build with whatever is available.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "review skips integration checks when the registry is unreachable",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Loose",
+          "goal": "Build loosely",
+          "summary": "No registry",
+          "trigger": { "type": "manual", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Do",
+              "action": "Do the thing",
+              "integration": "whatever",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.code", "parameters": {} }
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "thing", "required": true }],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "integrations-datatable",
+      "category": "integrations",
+      "input": "Deduplicate webhook events in a data table.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "declared data tables validate",
+      "offline": {
+        "kind": "validate-workflow",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Dedupe",
+          "goal": "Dedupe events",
+          "summary": "Data tables",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Check",
+              "action": "Check the dedupe table",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": {
+                "type": "n8n-nodes-base.dataTable",
+                "parameters": { "operation": "lookup", "tableName": "seen_events" }
+              }
+            }
+          ],
+          "dataTables": [
+            { "name": "seen_events", "columns": [{ "name": "event_id", "type": "string" }] }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "dedupe", "required": true }],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "failure-credential-401",
+      "category": "failure",
+      "input": "Provisioning fails because the n8n API key is rejected.",
+      "expectedOutcome": "CREDENTIAL_ERROR with a reconnect action, not retryable",
+      "offline": {
+        "kind": "classify-error",
+        "message": "n8n API key rejected",
+        "stage": "provision",
+        "statusCode": 401,
+        "expectedCode": "CREDENTIAL_ERROR",
+        "expectedRetryable": false,
+        "expectedActionContains": "Reconnect"
+      }
+    },
+    {
+      "id": "failure-rate-limit",
+      "category": "failure",
+      "input": "The test call hits HTTP 429.",
+      "expectedOutcome": "RATE_LIMIT, retryable",
+      "offline": {
+        "kind": "classify-error",
+        "message": "n8n workflow returned HTTP 429",
+        "stage": "test",
+        "statusCode": 429,
+        "expectedCode": "RATE_LIMIT",
+        "expectedRetryable": true
+      }
+    },
+    {
+      "id": "failure-timeout",
+      "category": "failure",
+      "input": "The webhook call times out.",
+      "expectedOutcome": "TIMEOUT, retryable",
+      "offline": {
+        "kind": "classify-error",
+        "message": "n8n workflow execution failed: timeout of 60000ms exceeded",
+        "stage": "test",
+        "expectedCode": "TIMEOUT",
+        "expectedRetryable": true
+      }
+    },
+    {
+      "id": "failure-instance-502",
+      "category": "failure",
+      "input": "n8n returns 502 during verification.",
+      "expectedOutcome": "API_ERROR, retryable",
+      "offline": {
+        "kind": "classify-error",
+        "message": "n8n API returned HTTP 502",
+        "stage": "verify",
+        "statusCode": 502,
+        "expectedCode": "API_ERROR",
+        "expectedRetryable": true
+      }
+    },
+    {
+      "id": "failure-unreachable",
+      "category": "failure",
+      "input": "The n8n host is down.",
+      "expectedOutcome": "API_ERROR, retryable",
+      "offline": {
+        "kind": "classify-error",
+        "message": "fetch failed: ECONNREFUSED",
+        "stage": "test",
+        "expectedCode": "API_ERROR",
+        "expectedRetryable": true
+      }
+    },
+    {
+      "id": "failure-static-invalid",
+      "category": "failure",
+      "input": "The plan fails static validation.",
+      "expectedOutcome": "INVALID_CONFIGURATION, not retryable, replan strategy",
+      "offline": {
+        "kind": "classify-error",
+        "message": "Automation plan failed static validation: bad node",
+        "stage": "build",
+        "expectedCode": "INVALID_CONFIGURATION",
+        "expectedRetryable": false
+      }
+    },
+    {
+      "id": "failure-expression",
+      "category": "failure",
+      "input": "A step has unbalanced delimiters.",
+      "expectedOutcome": "INVALID_EXPRESSION with patch strategy",
+      "offline": {
+        "kind": "classify-error",
+        "message": "Step has unbalanced expression delimiters",
+        "stage": "build",
+        "expectedCode": "INVALID_EXPRESSION",
+        "expectedRetryable": false
+      }
+    },
+    {
+      "id": "failure-permission",
+      "category": "failure",
+      "input": "Zoho refuses contact creation.",
+      "expectedOutcome": "PERMISSION_ERROR with a permission action",
+      "offline": {
+        "kind": "classify-error",
+        "message": "Zoho API: permission denied for contact creation",
+        "stage": "test",
+        "expectedCode": "PERMISSION_ERROR",
+        "expectedActionContains": "permission"
+      }
+    },
+    {
+      "id": "failure-missing-table",
+      "category": "failure",
+      "input": "The referenced data table does not exist.",
+      "expectedOutcome": "MISSING_DATA with adjust strategy",
+      "offline": {
+        "kind": "classify-error",
+        "message": "data table \"log\" not found",
+        "stage": "provision",
+        "expectedCode": "MISSING_DATA",
+        "expectedRetryable": false
+      }
+    },
+    {
+      "id": "failure-unknown",
+      "category": "failure",
+      "input": "Something unrecognized breaks.",
+      "expectedOutcome": "UNKNOWN escalates without retry",
+      "offline": {
+        "kind": "classify-error",
+        "message": "something deeply weird happened",
+        "stage": "test",
+        "expectedCode": "UNKNOWN",
+        "expectedRetryable": false
+      }
+    },
+    {
+      "id": "reliability-duplicate-steps",
+      "category": "reliability",
+      "input": "A plan with two identical steps.",
+      "expectedOutcome": "duplicate steps rejected",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Dupes",
+          "goal": "Do twice",
+          "summary": "Duplicates",
+          "trigger": { "type": "manual", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Same",
+              "action": "Do A",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.code", "parameters": {} }
+            },
+            {
+              "id": "S2",
+              "name": "Same",
+              "action": "Do B",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.code", "parameters": {} }
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "thing", "required": true }],
+        "expectedValid": false,
+        "expectedErrorCodes": ["DUPLICATE_STEP"]
+      }
+    },
+    {
+      "id": "reliability-unbalanced-blocks",
+      "category": "reliability",
+      "input": "A blueprint with broken syntax never reaches n8n.",
+      "expectedOutcome": "static validation blocks provisioning",
+      "offline": {
+        "kind": "validate-workflow",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Broken",
+          "goal": "Break things",
+          "summary": "Broken syntax",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Break",
+              "action": "Break syntax",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": {
+                "type": "n8n-nodes-base.code",
+                "parameters": { "jsCode": "return {{ $json.x };" }
+              }
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "break", "required": true }],
+        "expectedValid": false,
+        "expectedErrorCodes": ["INVALID_PLAN"]
+      }
+    },
+    {
+      "id": "reliability-timeout-retries",
+      "category": "reliability",
+      "input": "Transient timeouts retry without a repair cycle.",
+      "expectedOutcome": "TIMEOUT is retryable",
+      "offline": {
+        "kind": "classify-error",
+        "message": "webhook call timed out after 60000ms",
+        "stage": "test",
+        "expectedCode": "TIMEOUT",
+        "expectedRetryable": true
+      }
+    },
+    {
+      "id": "reliability-invalid-no-retry",
+      "category": "reliability",
+      "input": "Invalid plans never blind-retry.",
+      "expectedOutcome": "INVALID_CONFIGURATION is not retryable",
+      "offline": {
+        "kind": "classify-error",
+        "message": "Automation failed static validation: missing trigger",
+        "stage": "build",
+        "expectedCode": "INVALID_CONFIGURATION",
+        "expectedRetryable": false
+      }
+    },
+    {
+      "id": "reliability-credential-action",
+      "category": "reliability",
+      "input": "Credential failures tell the user exactly what to do.",
+      "expectedOutcome": "user action names reconnecting",
+      "offline": {
+        "kind": "classify-error",
+        "message": "n8n API key rejected",
+        "stage": "provision",
+        "statusCode": 401,
+        "expectedCode": "CREDENTIAL_ERROR",
+        "expectedActionContains": "Reconnect"
+      }
+    },
+    {
+      "id": "ambiguous-safe-default",
+      "category": "ambiguous",
+      "input": "Notify me somewhere when orders arrive (Slack is the only channel connected).",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "safe reversible default proceeds without questions",
+      "offline": {
+        "kind": "assumption-policy",
+        "assumptions": [
+          {
+            "statement": "Notify in #sales",
+            "rationale": "only channel connected",
+            "reversible": true,
+            "risk": "low"
+          }
+        ],
+        "expectedClarification": false
+      }
+    },
+    {
+      "id": "ambiguous-money",
+      "category": "ambiguous",
+      "input": "Refund the customer and clean up.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "money involvement forces confirmation naming the assumption",
+      "offline": {
+        "kind": "assumption-policy",
+        "assumptions": [
+          {
+            "statement": "Refund order 123 for $49",
+            "rationale": "latest order",
+            "reversible": false,
+            "risk": "high"
+          }
+        ],
+        "expectedClarification": true,
+        "expectedQuestionContains": "Refund order 123"
+      }
+    },
+    {
+      "id": "ambiguous-deletion",
+      "category": "ambiguous",
+      "input": "Clean up old contacts.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "irreversible deletion forces confirmation",
+      "offline": {
+        "kind": "assumption-policy",
+        "assumptions": [
+          {
+            "statement": "Delete contacts older than a year",
+            "rationale": "user said clean up",
+            "reversible": false,
+            "risk": "high"
+          }
+        ],
+        "expectedClarification": true,
+        "expectedQuestionContains": "Delete contacts"
+      }
+    },
+    {
+      "id": "ambiguous-missing-credential",
+      "category": "ambiguous",
+      "input": "Post to the ERP that was never connected.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "missing credential with no alternative forces confirmation",
+      "offline": {
+        "kind": "assumption-policy",
+        "assumptions": [
+          {
+            "statement": "Use the Acme ERP credential",
+            "rationale": "named in request",
+            "reversible": true,
+            "risk": "high"
+          }
+        ],
+        "expectedClarification": true,
+        "expectedQuestionContains": "Acme ERP"
+      }
+    },
+    {
+      "id": "ambiguous-required-input",
+      "category": "ambiguous",
+      "input": "Create the automation (channel unknown).",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "required missing input asks its focused question",
+      "offline": {
+        "kind": "assumption-policy",
+        "assumptions": [],
+        "missingInputs": [
+          {
+            "field": "channel",
+            "description": "Target channel",
+            "question": "Which channel should receive the messages?",
+            "required": true
+          }
+        ],
+        "expectedClarification": true,
+        "expectedQuestionContains": "Which channel"
+      }
+    },
+    {
+      "id": "complex-crm-multistep",
+      "category": "complex",
+      "input": "When a lead fills the demo form, score it, create the CRM contact, assign an owner, and notify sales.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "multi-step CRM plan covers every requirement",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Lead flow",
+          "goal": "Handle demo leads end to end",
+          "summary": "Lead qualification",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Receive lead",
+              "action": "Receive the demo form",
+              "config": {},
+              "requirementIds": ["R1"],
+              "expectedOutput": "lead payload",
+              "nodeHint": { "type": "n8n-nodes-base.webhook", "parameters": {} }
+            },
+            {
+              "id": "S2",
+              "name": "Score",
+              "action": "Score the lead",
+              "config": {},
+              "requirementIds": ["R2"],
+              "nodeHint": { "type": "n8n-nodes-base.code", "parameters": {} }
+            },
+            {
+              "id": "S3",
+              "name": "Create contact",
+              "action": "Create the CRM contact",
+              "integration": "zoho",
+              "config": {},
+              "requirementIds": ["R2"],
+              "nodeHint": { "type": "n8n-nodes-base.httpRequest", "parameters": {} }
+            },
+            {
+              "id": "S4",
+              "name": "Notify",
+              "action": "Notify the owner",
+              "integration": "slack",
+              "config": {},
+              "requirementIds": ["R3"],
+              "nodeHint": { "type": "n8n-nodes-base.slack", "parameters": {} }
+            }
+          ],
+          "integrations": ["zoho", "slack"],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [
+          { "id": "R1", "field": "receive", "required": true },
+          { "id": "R2", "field": "crm", "required": true },
+          { "id": "R3", "field": "notify", "required": true }
+        ],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "complex-ecommerce",
+      "category": "complex",
+      "input": "New Shopify order over $500: find the customer in Zoho, create them if missing, and ping sales.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "conditional e-commerce plan validates end to end",
+      "offline": {
+        "kind": "validate-workflow",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Big orders",
+          "goal": "Handle big Shopify orders",
+          "summary": "E-commerce",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Receive",
+              "action": "Receive the order",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.webhook", "parameters": {} }
+            },
+            {
+              "id": "S2",
+              "name": "Gate",
+              "action": "Check the total",
+              "config": {},
+              "requirementIds": ["R1"],
+              "condition": "total above $500",
+              "nodeHint": { "type": "n8n-nodes-base.if", "parameters": {} }
+            },
+            {
+              "id": "S3",
+              "name": "Upsert",
+              "action": "Find or create the Zoho contact",
+              "integration": "zoho",
+              "config": {},
+              "requirementIds": ["R2"],
+              "nodeHint": { "type": "n8n-nodes-base.httpRequest", "parameters": {} }
+            },
+            {
+              "id": "S4",
+              "name": "Ping",
+              "action": "Ping sales on Slack",
+              "integration": "slack",
+              "config": {},
+              "requirementIds": ["R2"],
+              "nodeHint": { "type": "n8n-nodes-base.slack", "parameters": {} }
+            }
+          ],
+          "integrations": ["shopify", "zoho", "slack"],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [
+          { "id": "R1", "field": "gate", "required": true },
+          { "id": "R2", "field": "crm+notify", "required": true }
+        ],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "complex-lead-qualification",
+      "category": "complex",
+      "input": "Qualify inbound leads with AI before they reach sales.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "AI classification step plans cleanly",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "AI qualify",
+          "goal": "AI-qualify leads",
+          "summary": "AI classification",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Receive",
+              "action": "Receive the lead",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.webhook", "parameters": {} }
+            },
+            {
+              "id": "S2",
+              "name": "Classify",
+              "action": "Classify with AI",
+              "config": {},
+              "requirementIds": ["R1"],
+              "expectedOutput": "score + tier",
+              "nodeHint": { "type": "n8n-nodes-base.code", "parameters": {} }
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "qualify", "required": true }],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "complex-multi-branch",
+      "category": "complex",
+      "input": "VIP orders get a call task, standard orders get an email, failed payments get flagged.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "three branches stay covered",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Order router",
+          "goal": "Route orders three ways",
+          "summary": "Multi-branch",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Branch",
+              "action": "Branch on tier and payment",
+              "config": {},
+              "requirementIds": ["R1"],
+              "condition": "tier and payment status",
+              "nodeHint": { "type": "n8n-nodes-base.if", "parameters": {} }
+            },
+            {
+              "id": "S2",
+              "name": "VIP call",
+              "action": "Create a call task",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.code", "parameters": {} }
+            },
+            {
+              "id": "S3",
+              "name": "Email",
+              "action": "Send the email",
+              "integration": "gmail",
+              "config": {},
+              "requirementIds": ["R2"],
+              "nodeHint": { "type": "n8n-nodes-base.gmail", "parameters": {} }
+            },
+            {
+              "id": "S4",
+              "name": "Flag",
+              "action": "Flag failed payments",
+              "config": {},
+              "requirementIds": ["R3"],
+              "nodeHint": { "type": "n8n-nodes-base.code", "parameters": {} }
+            }
+          ],
+          "integrations": ["gmail"],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [
+          { "id": "R1", "field": "vip", "required": true },
+          { "id": "R2", "field": "email", "required": true },
+          { "id": "R3", "field": "flag", "required": true }
+        ],
+        "conditions": ["tier and payment status"],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "complex-expression-chain",
+      "category": "complex",
+      "input": "Chain three transforms passing data forward by step name.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "backward references validate",
+      "offline": {
+        "kind": "validate-workflow",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Chain",
+          "goal": "Chain transforms",
+          "summary": "Backward refs",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Fetch",
+              "action": "Fetch data",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.webhook", "parameters": {} }
+            },
+            {
+              "id": "S2",
+              "name": "Shape",
+              "action": "Shape the payload",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": {
+                "type": "n8n-nodes-base.code",
+                "parameters": { "jsCode": "return { json: {{ $('Fetch').json }} };" }
+              }
+            },
+            {
+              "id": "S3",
+              "name": "Send",
+              "action": "Send shaped data",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": {
+                "type": "n8n-nodes-base.code",
+                "parameters": { "jsCode": "return { json: {{ $('Shape').json }} };" }
+              }
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "chain", "required": true }],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "complex-schedule-cron",
+      "category": "complex",
+      "input": "Every weekday at 9am, post the standup reminder.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "cron schedules validate",
+      "offline": {
+        "kind": "validate-workflow",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Standup",
+          "goal": "Weekday standup reminder",
+          "summary": "Cron",
+          "trigger": { "type": "schedule", "config": { "cron": "0 9 * * 1-5" } },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Remind",
+              "action": "Post the reminder",
+              "integration": "slack",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.slack", "parameters": {} }
+            }
+          ],
+          "integrations": ["slack"],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "remind", "required": true }],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "complex-idempotent-webhook",
+      "category": "complex",
+      "input": "Stripe webhooks must never double-charge on redelivery.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "dedupe storage is part of the plan",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Idempotent charges",
+          "goal": "Charge once per event",
+          "summary": "Dedupe",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Dedupe",
+              "action": "Record the event id",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": {
+                "type": "n8n-nodes-base.dataTable",
+                "parameters": { "operation": "lookup", "tableName": "seen_events" }
+              }
+            },
+            {
+              "id": "S2",
+              "name": "Charge",
+              "action": "Charge the customer",
+              "integration": "stripe",
+              "config": {},
+              "requirementIds": ["R1"],
+              "nodeHint": { "type": "n8n-nodes-base.httpRequest", "parameters": {} }
+            }
+          ],
+          "dataTables": [
+            { "name": "seen_events", "columns": [{ "name": "event_id", "type": "string" }] }
+          ],
+          "integrations": ["stripe"],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": ["Charges are side-effecting; dedupe table is the guard."]
+        },
+        "requirements": [{ "id": "R1", "field": "charge once", "required": true }],
+        "expectedValid": true
+      }
+    },
+    {
+      "id": "complex-live-pipeline",
+      "category": "complex",
+      "input": "Build the full order pipeline on a live instance and watch it verify.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "live run provisions, tests, and completes without repairs",
+      "offline": null
+    },
+    {
+      "id": "complex-live-credential-recovery",
+      "category": "complex",
+      "input": "Break the n8n credential mid-run, fix it, and retry from the failed stage.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "retry continues without rebuilding and completes",
+      "offline": null
+    },
+    {
+      "id": "complex-live-multi-integration",
+      "category": "complex",
+      "input": "Shopify plus Zoho plus Slack on a live instance, all three verified.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "multi-integration plan provisions and validates live",
+      "offline": null
+    },
+    {
+      "id": "native-whatsapp-http-rejected",
+      "category": "integrations",
+      "input": "When a new order arrives, send the customer a WhatsApp message.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "HTTP for WhatsApp is rejected while the native node is available",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Order WhatsApp alerts",
+          "goal": "Notify customers on WhatsApp for new orders",
+          "summary": "Order to WhatsApp",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Send message",
+              "action": "Send the WhatsApp message",
+              "integration": "whatsapp",
+              "config": {},
+              "requirementIds": ["R1"],
+              "expectedOutput": "message id",
+              "nodeHint": { "type": "n8n-nodes-base.httpRequest", "parameters": {} }
+            }
+          ],
+          "integrations": ["whatsapp"],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "send message", "required": true }],
+        "capabilities": [
+          {
+            "provider": "whatsapp",
+            "displayName": "WhatsApp",
+            "source": "n8n",
+            "connectionStatus": "CONNECTED",
+            "credentialsAvailable": true,
+            "nodeTypes": ["n8n-nodes-base.whatsApp"],
+            "suggestedNodeType": "n8n-nodes-base.whatsApp"
+          }
+        ],
+        "instanceNodeTypes": ["n8n-nodes-base.webhook", "n8n-nodes-base.whatsApp"],
+        "expectedValid": false,
+        "expectedErrorCodes": ["NATIVE_NODE_AVAILABLE"]
+      }
+    },
+    {
+      "id": "native-hubspot-code-rejected",
+      "category": "integrations",
+      "input": "Create a HubSpot contact for every new signup.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "Code for HubSpot is rejected while the native node is available",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Signup to HubSpot",
+          "goal": "Create HubSpot contacts for signups",
+          "summary": "Signup to HubSpot",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Create contact",
+              "action": "Create the HubSpot contact",
+              "integration": "hubspot",
+              "config": {},
+              "requirementIds": ["R1"],
+              "expectedOutput": "contact id",
+              "nodeHint": { "type": "n8n-nodes-base.code", "parameters": {} }
+            }
+          ],
+          "integrations": ["hubspot"],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "create contact", "required": true }],
+        "capabilities": [
+          {
+            "provider": "hubspot",
+            "displayName": "HubSpot",
+            "source": "n8n",
+            "connectionStatus": "CONNECTED",
+            "credentialsAvailable": true,
+            "nodeTypes": ["n8n-nodes-base.hubSpot"]
+          }
+        ],
+        "expectedValid": false,
+        "expectedErrorCodes": ["NATIVE_NODE_AVAILABLE"]
+      }
+    },
+    {
+      "id": "native-whatsapp-explicit-http-override",
+      "category": "integrations",
+      "input": "Use HTTP to send the WhatsApp message for new orders.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "explicit HTTP request is honored without a native-node error",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Order HTTP alerts",
+          "goal": "Send WhatsApp messages via explicit HTTP",
+          "summary": "Order to WhatsApp via HTTP",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Send message",
+              "action": "POST the WhatsApp message via HTTP",
+              "integration": "whatsapp",
+              "config": {},
+              "requirementIds": ["R1"],
+              "expectedOutput": "message id",
+              "nodeHint": { "type": "n8n-nodes-base.httpRequest", "parameters": {} }
+            }
+          ],
+          "integrations": ["whatsapp"],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "send message", "required": true }],
+        "capabilities": [
+          {
+            "provider": "whatsapp",
+            "displayName": "WhatsApp",
+            "source": "n8n",
+            "connectionStatus": "CONNECTED",
+            "credentialsAvailable": true,
+            "nodeTypes": ["n8n-nodes-base.whatsApp"]
+          }
+        ],
+        "instanceNodeTypes": ["n8n-nodes-base.webhook", "n8n-nodes-base.whatsApp"],
+        "genericOverride": { "requested": true, "type": "httpRequest" },
+        "expectedValid": true,
+        "expectedErrorCodes": []
+      }
+    },
+    {
+      "id": "native-custom-api-http-allowed",
+      "category": "integrations",
+      "input": "POST new orders to our internal ledger API.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "HTTP is allowed for custom APIs with no native node",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Order ledger post",
+          "goal": "Post orders to the ledger API",
+          "summary": "Order to ledger",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Post ledger",
+              "action": "POST the order to the ledger API",
+              "config": { "url": "https://ledger.example.com/hook" },
+              "requirementIds": ["R1"],
+              "expectedOutput": "receipt",
+              "nodeHint": { "type": "n8n-nodes-base.httpRequest", "parameters": {} }
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "post ledger", "required": true }],
+        "capabilities": [
+          {
+            "provider": "whatsapp",
+            "displayName": "WhatsApp",
+            "source": "n8n",
+            "connectionStatus": "CONNECTED",
+            "credentialsAvailable": true
+          }
+        ],
+        "expectedValid": true,
+        "expectedErrorCodes": []
+      }
+    },
+    {
+      "id": "native-unverified-instance-warning",
+      "category": "integrations",
+      "input": "When a new order arrives, send the customer a WhatsApp message.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "unreadable instance warns instead of hard-failing the plan",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Order WhatsApp alerts",
+          "goal": "Notify customers on WhatsApp for new orders",
+          "summary": "Order to WhatsApp",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Send message",
+              "action": "Send the WhatsApp message",
+              "integration": "whatsapp",
+              "config": {},
+              "requirementIds": ["R1"],
+              "expectedOutput": "message id",
+              "nodeHint": { "type": "n8n-nodes-base.httpRequest", "parameters": {} }
+            }
+          ],
+          "integrations": ["whatsapp"],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "send message", "required": true }],
+        "capabilities": [
+          {
+            "provider": "whatsapp",
+            "displayName": "WhatsApp",
+            "source": "n8n",
+            "connectionStatus": "CONNECTED",
+            "credentialsAvailable": true,
+            "suggestedNodeType": "n8n-nodes-base.whatsApp"
+          }
+        ],
+        "expectedValid": true,
+        "expectedErrorCodes": [],
+        "expectedWarningCodes": ["UNMAPPED_STEP"]
+      }
+    },
+    {
+      "id": "native-logic-code-allowed",
+      "category": "logic",
+      "input": "Normalize the incoming order payload before storing it.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "Code stays valid for pure transformation steps",
+      "offline": {
+        "kind": "review-plan",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Normalize orders",
+          "goal": "Normalize order payloads",
+          "summary": "Normalize",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Normalize payload",
+              "action": "Reshape the order payload",
+              "config": {},
+              "requirementIds": ["R1"],
+              "expectedOutput": "normalized payload",
+              "nodeHint": { "type": "n8n-nodes-base.code", "parameters": {} }
+            }
+          ],
+          "integrations": [],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "normalize", "required": true }],
+        "expectedValid": true,
+        "expectedErrorCodes": []
+      }
+    },
+    {
+      "id": "native-builder-backstop-whatsapp",
+      "category": "integrations",
+      "input": "When a new order arrives, send the customer a WhatsApp message.",
+      "expectedIntent": "automation_design",
+      "expectedOutcome": "static validation backstop rejects generic nodes for proven natives",
+      "offline": {
+        "kind": "validate-workflow",
+        "blueprint": {
+          "ready": true,
+          "missingRequirements": [],
+          "name": "Order WhatsApp alerts",
+          "goal": "Notify customers on WhatsApp for new orders",
+          "summary": "Order to WhatsApp",
+          "trigger": { "type": "webhook", "config": {} },
+          "steps": [
+            {
+              "id": "S1",
+              "name": "Send message",
+              "action": "Send the WhatsApp message",
+              "integration": "whatsapp",
+              "config": {},
+              "requirementIds": ["R1"],
+              "expectedOutput": "message id",
+              "nodeHint": { "type": "n8n-nodes-base.httpRequest", "parameters": {} }
+            }
+          ],
+          "integrations": ["whatsapp"],
+          "inputContract": {},
+          "outputContract": {},
+          "riskNotes": []
+        },
+        "requirements": [{ "id": "R1", "field": "send message", "required": true }],
+        "capabilities": [
+          {
+            "provider": "whatsapp",
+            "displayName": "WhatsApp",
+            "source": "n8n",
+            "connectionStatus": "CONNECTED",
+            "credentialsAvailable": true,
+            "nodeTypes": ["n8n-nodes-base.whatsApp"]
+          }
+        ],
+        "expectedValid": false,
+        "expectedErrorCodes": ["NATIVE_NODE_AVAILABLE"]
+      }
+    }
+  ]
+}

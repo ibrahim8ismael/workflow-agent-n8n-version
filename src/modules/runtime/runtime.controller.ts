@@ -7,6 +7,7 @@ import {
   NotFoundException,
   Param,
   Post,
+  Query,
   Res,
   UseGuards,
 } from '@nestjs/common';
@@ -16,12 +17,11 @@ import { TenantAccessGuard } from '../../common/guards/tenant-access.guard';
 import { JwtAuthGuard } from '../auth/guards/auth.guard';
 import { ConversationsService } from '../conversations/services/conversations.service';
 import { RunsService } from '../runs/runs.service';
-import {
-  type ConfirmAutomationDesignDto,
-  confirmAutomationDesignSchema,
-} from './dto/confirm-automation-design.dto';
 import { type ExecuteRunDto, executeRunSchema } from './dto/execute-run.dto';
+import { AgentRunTraceService } from './services/agent-run-trace.service';
+import { JaafarQualityMetricsService } from './services/jaafar-quality-metrics.service';
 import { JaafarRuntimeService } from './services/jaafar-runtime.service';
+import { runtimeUserErrorMessage } from './shared/runtime-user-message';
 import { RuntimeMode } from './types/runtime.types';
 
 @Controller('runs')
@@ -31,6 +31,8 @@ export class RuntimeController {
     private readonly jaafarRuntime: JaafarRuntimeService,
     private readonly runsService: RunsService,
     private readonly conversationsService: ConversationsService,
+    private readonly traceService: AgentRunTraceService,
+    private readonly metricsService: JaafarQualityMetricsService,
   ) {}
 
   @Post()
@@ -63,11 +65,28 @@ export class RuntimeController {
     response.setHeader('Connection', 'keep-alive');
     response.flushHeaders();
 
+    const disconnectGraceTimers = new Map<string, NodeJS.Timeout>();
     let activeRunId: string | undefined;
     let terminal = false;
+    // Flaky connections must not kill the run instantly — give the client a
+    // grace window to reconnect before cancelling.
     const cancelOnDisconnect = () => {
       if (!terminal && activeRunId) {
-        void this.jaafarRuntime.cancel(activeRunId, this.scope(user));
+        const runId = activeRunId;
+        disconnectGraceTimers.set(
+          runId,
+          setTimeout(async () => {
+            disconnectGraceTimers.delete(runId);
+            try {
+              const run = await this.runsService.findById(runId);
+              if (!['COMPLETED', 'FAILED', 'CANCELLED', 'TIMEOUT'].includes(run.status)) {
+                await this.jaafarRuntime.cancel(runId, this.scope(user));
+              }
+            } catch {
+              /* run already terminal or gone */
+            }
+          }, 10_000),
+        );
       }
     };
     response.once('close', cancelOnDisconnect);
@@ -80,6 +99,22 @@ export class RuntimeController {
           event.type === 'run.waiting' ||
           event.type === 'run.failed' ||
           event.type === 'run.cancelled';
+        if (terminal) {
+          const timer = disconnectGraceTimers.get(event.runId);
+          if (timer) clearTimeout(timer);
+          disconnectGraceTimers.delete(event.runId);
+        }
+        if (event.type === 'run.failed') {
+          // The client only renders token/run.completed payloads — surface a
+          // human message as a token so failures are never a silent freeze.
+          response.write(
+            `event: token\ndata: ${JSON.stringify({
+              type: 'token',
+              runId: event.runId,
+              content: runtimeUserErrorMessage(failureMessage(event)),
+            })}\n\n`,
+          );
+        }
         response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
       }
     } finally {
@@ -106,23 +141,32 @@ export class RuntimeController {
     return this.jaafarRuntime.reject(id, body?.reason, this.scope(user));
   }
 
-  @Post(':id/confirm')
+  @Post(':id/retry')
   @HttpCode(HttpStatus.ACCEPTED)
-  async confirm(
-    @Param('id') id: string,
-    @Body() dto: ConfirmAutomationDesignDto,
+  async retry(@Param('id') id: string, @CurrentUser() user: RuntimeUser) {
+    await this.assertRunAccess(id, user);
+    return this.jaafarRuntime.retryAutomation(id, this.scope(user));
+  }
+
+  @Get(':id/trace')
+  async trace(@Param('id') id: string, @CurrentUser() user: RuntimeUser) {
+    const run = await this.assertRunAccess(id, user);
+    return this.traceService.trace(run.id);
+  }
+
+  @Get('metrics/summary')
+  async metricsSummary(
+    @Query('since') since: string | undefined,
+    @Query('agentId') agentId: string | undefined,
     @CurrentUser() user: RuntimeUser,
   ) {
-    const run = await this.assertRunAccess(id, user);
-    const confirmation = confirmAutomationDesignSchema.parse(dto);
-    return this.jaafarRuntime.confirmAutomationDesign(
-      run.id,
-      {
-        userId: user.id,
-        organizationId: user.activeContext === 'organization' ? user.organizationId : undefined,
-      },
-      confirmation,
-    );
+    return this.metricsService.metrics({
+      ...(since ? { since: new Date(since) } : {}),
+      ...(user.activeContext === 'organization' && user.organizationId
+        ? { organizationId: user.organizationId }
+        : {}),
+      ...(agentId ? { agentId } : {}),
+    });
   }
 
   @Get(':id')
@@ -180,3 +224,14 @@ type RuntimeUser = {
   activeContext?: string;
   organizationId?: string;
 };
+
+type RuntimeStreamEvent = {
+  type: string;
+  runId: string;
+  payload?: { error?: { message?: string } };
+  message?: string;
+};
+
+function failureMessage(event: RuntimeStreamEvent): string {
+  return event.payload?.error?.message ?? event.message ?? 'Run failed';
+}

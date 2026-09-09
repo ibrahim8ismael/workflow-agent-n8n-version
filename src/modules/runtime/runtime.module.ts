@@ -16,15 +16,24 @@ import { MemoryModule } from '../memory/memory.module';
 import { PlannerModule } from '../planner/planner.module';
 import { RunsModule } from '../runs/runs.module';
 import { ConversationRuntimeService } from './conversation/conversation-runtime.service';
+import { JaafarEvalService } from './eval/jaafar-eval.service';
+import { JaafarFailureEvalService } from './eval/jaafar-failure-eval.service';
 import { IdempotencyRepository } from './repositories/idempotency.repository';
 import { RuntimeRepository } from './repositories/runtime.repository';
 import { RuntimeController } from './runtime.controller';
-import { AutomationDesignSessionService } from './services/automation-design-session.service';
+import { AgentRunTraceService } from './services/agent-run-trace.service';
+import { AutomationErrorClassifierService } from './services/automation-error-classifier.service';
+import { AutomationPlanReviewService } from './services/automation-plan-review.service';
+import { AutomationRepairService } from './services/automation-repair.service';
+import { AutomationRuntimeValidatorService } from './services/automation-runtime-validator.service';
 import { AutomationToolResolverService } from './services/automation-tool-resolver.service';
+import { AutomationWorkflowBuilderService } from './services/automation-workflow-builder.service';
 import { ContextBuilderService } from './services/context-builder.service';
+import { IntegrationRegistryService } from './services/integration-registry.service';
 import { JaafarApprovalService } from './services/jaafar-approval.service';
-import { JaafarAutomationDesignGraphService } from './services/jaafar-automation-design-graph.service';
+import { JaafarAutomationGraphService } from './services/jaafar-automation-graph.service';
 import { JaafarContextLoaderService } from './services/jaafar-context-loader.service';
+import { JaafarContextManagerService } from './services/jaafar-context-manager.service';
 import { JaafarConversationGraphService } from './services/jaafar-conversation-graph.service';
 import { JaafarEventNormalizerService } from './services/jaafar-event-normalizer.service';
 import { JaafarExecutionGraphService } from './services/jaafar-execution-graph.service';
@@ -34,9 +43,11 @@ import { JaafarHarnessService } from './services/jaafar-harness.service';
 import { JaafarIdempotencyService } from './services/jaafar-idempotency.service';
 import { JaafarMemoryPolicyService } from './services/jaafar-memory-policy.service';
 import { JaafarPlanningService } from './services/jaafar-planning.service';
+import { JaafarQualityMetricsService } from './services/jaafar-quality-metrics.service';
 import { JaafarRequestUnderstandingService } from './services/jaafar-request-understanding.service';
 import { JaafarRuntimeService } from './services/jaafar-runtime.service';
 import { JaafarUnderstandingGraphService } from './services/jaafar-understanding-graph.service';
+import { NodeResolverService } from './services/node-resolver.service';
 import { RuntimeService } from './services/runtime.service';
 import { RuntimeBillingAccountingService } from './services/runtime-billing-accounting.service';
 import { RuntimeEventJournalService } from './services/runtime-event-journal.service';
@@ -89,10 +100,21 @@ import { RuntimeCacheService } from './shared/runtime-cache.service';
     JaafarUnderstandingGraphService,
     JaafarExecutionGraphService,
     JaafarConversationGraphService,
-    JaafarAutomationDesignGraphService,
+    JaafarAutomationGraphService,
     JaafarFinalResponseService,
     JaafarGraphService,
-    AutomationDesignSessionService,
+    AutomationPlanReviewService,
+    AgentRunTraceService,
+    JaafarEvalService,
+    JaafarFailureEvalService,
+    JaafarQualityMetricsService,
+    AutomationErrorClassifierService,
+    AutomationRuntimeValidatorService,
+    AutomationRepairService,
+    AutomationWorkflowBuilderService,
+    IntegrationRegistryService,
+    NodeResolverService,
+    JaafarContextManagerService,
     AutomationToolResolverService,
     ToolAuditService,
     ToolPermissionService,

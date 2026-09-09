@@ -109,7 +109,7 @@ export class JaafarConversationGraphService {
         conversationId: request.conversationId,
         mode: 'conversation',
         status: 'FAILED',
-        response: message,
+        response: runtimeUserErrorMessage(error),
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       };
     }
@@ -127,6 +127,15 @@ export class JaafarConversationGraphService {
     const startedAt = Date.now();
     try {
       await this.runs.transitionStatus(run.id, 'PREPARING');
+      // Persist the user turn BEFORE generating — otherwise a mid-stream
+      // failure erases it from history and every following turn loses context.
+      if (request.conversationId) {
+        await this.conversations.addMessage(request.conversationId, {
+          role: 'user',
+          content: request.userMessage,
+        });
+        await this.conversations.titleFromFirstMessage(request.conversationId, request.userMessage);
+      }
       yield { type: 'graph.node.started', runId: run.id, node: 'load_context' };
       const loaded = await this.contextLoader.load({
         agentId: request.agentId,
@@ -161,6 +170,7 @@ export class JaafarConversationGraphService {
       const stream = this.llmRuntime.generateStream({
         mode: request.effort ?? 'medium',
         timeoutMs: 20_000,
+        firstByteTimeoutMs: 45_000,
         systemPrompt: context.system,
         messages: context.messages.map((message) => ({
           role: message.role as 'system' | 'user' | 'assistant',
@@ -184,6 +194,29 @@ export class JaafarConversationGraphService {
         if (chunk.type === 'finish') usage = chunk.usage ?? usage;
       }
       response += thinkFilter.flush();
+      // The model may spend the whole stream inside a reasoning block
+      // (think-tag filter erases it) or the stream may die mid-think. One
+      // non-stream retry; fall back to RAW content when stripping it clears
+      // everything too — an imperfect answer beats a silent stop.
+      if (!response.trim()) {
+        try {
+          const retry = await this.llmRuntime.generateText({
+            mode: request.effort ?? 'medium',
+            systemPrompt: context.system,
+            messages: context.messages.map((message) => ({
+              role: message.role as 'system' | 'user' | 'assistant',
+              content: message.content,
+            })),
+            temperature: 0.7,
+            maxTokens: 1200,
+          });
+          const stripped = stripThinkTags(retry.content);
+          response = stripped.trim() ? stripped : retry.content;
+          usage = retry.usage;
+        } catch {
+          response = response || '';
+        }
+      }
       if (typeof this.runs.recordModelUsage === 'function') {
         await this.runs.recordModelUsage(run.id, usage);
       } else {
@@ -191,11 +224,6 @@ export class JaafarConversationGraphService {
       }
       await this.runs.updateMetadata(run.id, { intent: 'conversation', transport: 'sse' });
       if (request.conversationId) {
-        await this.conversations.addMessage(request.conversationId, {
-          role: 'user',
-          content: request.userMessage,
-        });
-        await this.conversations.titleFromFirstMessage(request.conversationId, request.userMessage);
         await this.conversations.addMessage(request.conversationId, {
           role: 'assistant',
           content: response,
@@ -250,8 +278,9 @@ export class JaafarConversationGraphService {
           temperature: 0.7,
           maxTokens: 1200,
         });
+        const stripped = stripThinkTags(result.content);
         return {
-          response: stripThinkTags(result.content),
+          response: stripped.trim() ? stripped : result.content,
           usage: result.usage,
           execution: result.execution,
         };

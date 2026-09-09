@@ -22,7 +22,8 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "prisma:studio": "prisma studio",
     "runtime:checkpoint:setup": "tsx scripts/setup-langgraph-checkpoints.ts",
-    "postinstall": "command -v lefthook >/dev/null 2>&1 && lefthook install || true"
+    "postinstall": "command -v lefthook >/dev/null 2>&1 && lefthook install || true",
+    "eval": "vitest run src/modules/runtime/eval"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.24",

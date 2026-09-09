@@ -3,6 +3,7 @@ import { LangGraphCheckpointError } from '../../../infrastructure/langgraph/lang
 import { QuotaEnforcerService } from '../../billing/services/quota-enforcer.service';
 import { SubscriptionService } from '../../billing/services/subscription.service';
 import { ConversationsService } from '../../conversations/services/conversations.service';
+import { isTerminalRunStatus } from '../../runs/agent-run-phase';
 import { RunsService } from '../../runs/runs.service';
 import type { JaafarRuntimeServiceContract } from '../interfaces/jaafar-runtime.interface';
 import { RuntimeMode, type RuntimeRequest } from '../types/runtime.types';
@@ -17,9 +18,10 @@ import type {
   StartRunRequest,
 } from '../types/runtime-contract.types';
 import {
-  type JaafarAutomationDesignGraphInput,
-  JaafarAutomationDesignGraphService,
-} from './jaafar-automation-design-graph.service';
+  type AutomationGraphStreamEvent,
+  type JaafarAutomationGraphInput,
+  JaafarAutomationGraphService,
+} from './jaafar-automation-graph.service';
 import {
   type ConversationGraphStreamEvent,
   JaafarConversationGraphService,
@@ -45,7 +47,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     @Optional() @Inject(RuntimeService) private readonly runtime: RuntimeService | undefined,
     private readonly runs: RunsService,
     private readonly conversations: ConversationsService,
-    private readonly automationDesignGraph: JaafarAutomationDesignGraphService,
+    private readonly automationGraph: JaafarAutomationGraphService,
     private readonly executionGraph: JaafarExecutionGraphService,
     private readonly conversationGraph: JaafarConversationGraphService,
     private readonly jaafarGraph: JaafarGraphService,
@@ -154,15 +156,15 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           effort: runtimeRequest.effort,
           ...(pendingContext ? { pendingContext } : {}),
         };
-        const result = (await this.automationDesignGraph
-          .build()
-          .invoke(
-            { input: automationInput },
-            this.automationDesignGraph.graphConfig(run.id, runtimeRequest),
-          )) as Record<string, unknown>;
-        const mapped = this.mapDesignGraphResult(result);
-        if (mapped.route === 'waiting') {
-          await this.runs.transitionStatus(run.id, 'WAITING');
+        // V2 automation graph (Phase 3 cutover): the legacy design graph is retired.
+        const result = await this.automationGraph.run(automationInput);
+        if (result.status === 'WAITING') {
+          // The V2 graph parks the row as WAITING itself; mirror it here
+          // only when the row has not caught up yet (WAITING→WAITING is invalid).
+          const current = await this.runs.findById(run.id);
+          if (current.status !== 'WAITING') {
+            await this.runs.transitionStatus(run.id, 'WAITING');
+          }
           await this.recordEvent({
             type: 'run.waiting',
             runId: run.id,
@@ -174,7 +176,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
             mode: RuntimeMode.AUTOMATION_DESIGN,
             status: 'WAITING',
             response: result.response as string | undefined,
-            plan: result.blueprint as unknown as Record<string, unknown>,
+            plan: result.plan as unknown as Record<string, unknown>,
             usage: result.usage as RuntimeUsage | undefined,
           });
         }
@@ -203,7 +205,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           mode: RuntimeMode.AUTOMATION_DESIGN,
           status: 'COMPLETED',
           response: result.response as string | undefined,
-          plan: result.blueprint as unknown as Record<string, unknown>,
+          plan: result.plan as unknown as Record<string, unknown>,
           usage: result.usage as RuntimeUsage | undefined,
         });
       }
@@ -425,26 +427,17 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           effort: runtimeRequest.effort,
           ...(pendingContext ? { pendingContext } : {}),
         };
-        const stream = await this.automationDesignGraph.build().stream(
-          { input: automationInput },
-          {
-            ...this.automationDesignGraph.graphConfig(run.id, runtimeRequest),
-            streamMode: 'updates',
-          },
-        );
-        for await (const update of stream) {
-          const events = this.mapAutomationDesignEvents(run.id, update as Record<string, unknown>);
-          for (const event of events) {
-            terminal =
-              event.type === 'run.completed' ||
-              event.type === 'run.waiting' ||
-              event.type === 'run.failed' ||
-              event.type === 'run.cancelled';
-            await this.applyTerminalStreamStatus(event);
-            await this.recordEvent(event);
-            if (terminal) await this.recordBilling(event.runId);
-            yield event;
-          }
+        for await (const event of this.automationGraph.stream(automationInput)) {
+          const mapped = this.mapAutomationGraphEvent(event);
+          terminal =
+            mapped.type === 'run.completed' ||
+            mapped.type === 'run.waiting' ||
+            mapped.type === 'run.failed' ||
+            mapped.type === 'run.cancelled';
+          await this.applyTerminalStreamStatus(mapped);
+          await this.recordEvent(mapped);
+          if (terminal) await this.recordBilling(mapped.runId);
+          yield mapped;
         }
         return;
       }
@@ -520,7 +513,11 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     const run = await this.runs.findById(runId);
     if (!this.matchesScope(run, scope)) return this.failure(runId, 'Run scope does not match.');
 
-    await this.runs.transitionStatus(runId, 'EXECUTING');
+    // V2 automation runs resume through their own approval gate, which
+    // expects the WAITING status — only execution runs pre-transition here.
+    if (!this.isAutomationDesignRun(run)) {
+      await this.runs.transitionStatus(runId, 'EXECUTING');
+    }
     try {
       const result = await this.resumeGraphBranch(runId, true, scope);
       const mode =
@@ -530,9 +527,9 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
         runId,
         mode,
         status:
-          result.route === 'failed'
+          result.status === 'FAILED' || result.route === 'failed'
             ? 'FAILED'
-            : result.route === 'waiting'
+            : result.status === 'WAITING' || result.route === 'waiting'
               ? 'WAITING'
               : 'COMPLETED',
         response: result.response as string | undefined,
@@ -581,19 +578,34 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       return normalized;
     } catch (error) {
       const code = this.checkpointErrorCode(error);
-      await this.runs.fail(
-        runId,
-        code === ('CHECKPOINT_INCOMPATIBLE' as RuntimeErrorCode)
-          ? 'Checkpoint state is incompatible.'
-          : 'Checkpoint could not be loaded.',
-      );
+      // The graph usually fails the row itself first (V2 failRun) — only
+      // mark FAILED when the row is still open, never crash a double-fail.
+      try {
+        await this.runs.fail(
+          runId,
+          code === ('CHECKPOINT_INCOMPATIBLE' as RuntimeErrorCode)
+            ? 'Checkpoint state is incompatible.'
+            : 'Checkpoint could not be loaded.',
+        );
+      } catch {
+        /* row already terminal */
+      }
+      // Prefer the row's recorded reason (e.g. the V2 provisioning error)
+      // over the generic checkpoint message.
+      let message = 'The run checkpoint could not be resumed safely.';
+      try {
+        const failed = await this.runs.findById(runId);
+        if (failed.error) message = failed.error;
+      } catch {
+        /* keep generic */
+      }
       return {
         runId,
         mode: RuntimeMode.EXECUTION,
         status: 'FAILED',
         error: {
           code,
-          message: 'The run checkpoint could not be resumed safely.',
+          message,
           retryable: false,
         },
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
@@ -610,7 +622,11 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     if (!this.matchesScope(run, scope)) return this.failure(runId, 'Run scope does not match.');
 
     if (!decision.approved) {
-      await this.runs.cancel(runId);
+      // Rejection parks the run as CANCELLED — but never re-closes a row
+      // that already reached a terminal state.
+      if (!isTerminalRunStatus(run.status)) {
+        await this.runs.cancel(runId);
+      }
       return {
         runId,
         mode: RuntimeMode.EXECUTION,
@@ -620,7 +636,11 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       };
     }
 
-    const isGraphRun = this.isGraphDesign(run) || this.isGraphExecution(run);
+    // All automation designs resume through the V2 graph (which answers
+    // gracefully when the run is no longer waiting); execution graph runs
+    // resume through the execution graph; anything else is legacy.
+    if (this.isAutomationDesignRun(run)) return this.resume(runId, scope);
+    const isGraphRun = this.isGraphExecution(run);
     if (!isGraphRun && this.runtime) {
       const legacyResult = decision.approved
         ? await this.runtime.approve(runId)
@@ -640,6 +660,89 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     return this.approve(runId, { approved: false, reason }, scope);
   }
 
+  /**
+   * Retries a FAILED automation run from its failed stage (§43) — e.g. after
+   * the user reconnects a credential. Non-automation and non-repairable runs
+   * get a plain explanation instead of a retry.
+   */
+  async retryAutomation(runId: string, scope?: RuntimeScope): Promise<RuntimeResult> {
+    const run = await this.runs.findById(runId);
+    if (!this.matchesScope(run, scope)) return this.failure(runId, 'Run scope does not match.');
+    if (!this.isAutomationDesignRun(run)) {
+      return {
+        runId,
+        status: 'FAILED',
+        response: 'Only automation runs can be retried. Send a new message to start another run.',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        error: {
+          code: 'INVALID_REQUEST' as RuntimeErrorCode,
+          message: `Run ${runId} is not an automation run`,
+          retryable: false,
+        },
+      };
+    }
+    try {
+      const result = await this.automationGraph.retryFromFailure(runId, scope);
+      const normalized = this.normalize({
+        runId,
+        mode: RuntimeMode.AUTOMATION_DESIGN,
+        status: result.status ?? 'FAILED',
+        response: result.response as string | undefined,
+        plan: result.plan as unknown as Record<string, unknown>,
+        usage: (result.usage as RuntimeUsage) ?? {
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+        },
+      });
+      if (normalized.status === 'FAILED') {
+        await this.recordEvent({
+          type: 'run.failed',
+          runId,
+          occurredAt: new Date().toISOString(),
+          payload: {
+            error: normalized.error ?? {
+              code: 'UNKNOWN_RUNTIME_FAILURE' as RuntimeErrorCode,
+              message: normalized.response ?? 'Retry failed',
+              retryable: false,
+            },
+          },
+        });
+      } else {
+        await this.recordEvent({
+          type: 'run.completed',
+          runId,
+          occurredAt: new Date().toISOString(),
+          payload: { response: normalized.response ?? '', usage: normalized.usage },
+        });
+      }
+      await this.recordBilling(runId);
+      return normalized;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Automation retry failed';
+      await this.recordEvent({
+        type: 'run.failed',
+        runId,
+        occurredAt: new Date().toISOString(),
+        payload: {
+          error: {
+            code: 'UNKNOWN_RUNTIME_FAILURE' as RuntimeErrorCode,
+            message,
+            retryable: false,
+          },
+        },
+      });
+      await this.recordBilling(runId);
+      return this.normalize({
+        runId,
+        mode: RuntimeMode.AUTOMATION_DESIGN,
+        status: 'FAILED',
+        response: message,
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      });
+    }
+  }
+
   async cancel(runId: string, scope?: RuntimeScope): Promise<RuntimeResult> {
     const run = await this.runs.findById(runId);
     if (!this.matchesScope(run, scope)) return this.failure(runId, 'Run scope does not match.');
@@ -657,146 +760,6 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     };
   }
 
-  async confirmAutomationDesign(
-    runId: string,
-    scope?: RuntimeScope,
-    confirmation?: { blueprintRevision?: string },
-  ): Promise<RuntimeResult> {
-    const run = await this.runs.findById(runId);
-    if (!this.matchesScope(run, scope)) return this.failure(runId, 'Run scope does not match.');
-
-    const isAutomationDesign = this.isAutomationDesignRun(run);
-
-    if (isAutomationDesign && run.status === 'WAITING') {
-      try {
-        const resumeResult = await this.resumeGraphBranch(
-          runId,
-          true,
-          scope,
-          confirmation?.blueprintRevision,
-        );
-        const normalized = this.normalize({
-          runId,
-          mode: RuntimeMode.AUTOMATION_DESIGN,
-          status:
-            resumeResult.route === 'failed'
-              ? 'FAILED'
-              : resumeResult.route === 'waiting'
-                ? 'WAITING'
-                : 'COMPLETED',
-          response: resumeResult.response as string | undefined,
-          plan: resumeResult.plan as unknown as Record<string, unknown>,
-          usage: (resumeResult.usage as RuntimeUsage) ?? {
-            promptTokens: 0,
-            completionTokens: 0,
-            totalTokens: 0,
-          },
-        });
-        if (normalized.status === 'FAILED') {
-          await this.recordEvent({
-            type: 'run.failed',
-            runId,
-            occurredAt: new Date().toISOString(),
-            payload: {
-              error: normalized.error ?? {
-                code: 'UNKNOWN_RUNTIME_FAILURE' as RuntimeErrorCode,
-                message: normalized.response ?? 'Runtime failed',
-                retryable: false,
-              },
-            },
-          });
-        } else {
-          await this.recordEvent({
-            type: 'run.completed',
-            runId,
-            occurredAt: new Date().toISOString(),
-            payload: { response: normalized.response ?? '', usage: normalized.usage },
-          });
-        }
-        await this.recordBilling(runId);
-        return normalized;
-      } catch (error) {
-        // Provisioning failure keeps the design recoverable in chat.
-        const message = error instanceof Error ? error.message : 'Automation provisioning failed';
-        await this.recordEvent({
-          type: 'run.failed',
-          runId,
-          occurredAt: new Date().toISOString(),
-          payload: {
-            error: {
-              code: 'UNKNOWN_RUNTIME_FAILURE' as RuntimeErrorCode,
-              message,
-              retryable: false,
-            },
-          },
-        });
-        await this.recordBilling(runId);
-        return this.normalize({
-          runId,
-          mode: RuntimeMode.AUTOMATION_DESIGN,
-          status: 'FAILED',
-          response: message,
-          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-        });
-      }
-    }
-
-    if (!isAutomationDesign) {
-      const mode =
-        ((run.metadata as Record<string, unknown> | null)?.runtimeMode as string) ?? 'unknown';
-      return {
-        runId,
-        status: 'FAILED',
-        response:
-          `This run is a "${mode}" run, not an automation design — there is no blueprint to confirm. ` +
-          (run.status === 'WAITING' && mode === String(RuntimeMode.EXECUTION)
-            ? 'Use POST /runs/:id/approve to approve the pending execution instead.'
-            : 'Describe the automation you want to build and Jaafar will prepare a design for approval.'),
-        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-        error: {
-          code: 'INVALID_REQUEST' as RuntimeErrorCode,
-          message: `Run ${runId} is not an automation design run (mode=${mode}, status=${run.status})`,
-          retryable: false,
-        },
-      };
-    }
-
-    const metadata = (run.metadata as Record<string, unknown> | null) ?? {};
-    const designSession = metadata.automationDesign as
-      | { status?: string; automationId?: string }
-      | undefined;
-    const designStatus =
-      (metadata.designStatus as string | undefined) ?? designSession?.status ?? undefined;
-
-    let reason: string;
-    if (designStatus === 'GATHERING_REQUIREMENTS') {
-      reason =
-        'Jaafar is still gathering requirements for this design — answer his questions in the chat and he will prepare the blueprint for approval.';
-    } else if (designStatus === 'PROVISIONED' || designSession?.automationId) {
-      reason = `This design was already approved and provisioned (automation ${designSession?.automationId ?? 'unknown'}). It is live in your n8n — nothing left to confirm.`;
-    } else if (
-      run.status === 'COMPLETED' ||
-      run.status === 'CANCELLED' ||
-      run.status === 'FAILED'
-    ) {
-      reason = `This automation design is no longer waiting for approval (status=${run.status}). Send a new message to start another design.`;
-    } else {
-      reason = `This automation design is not ready to confirm (status=${run.status}).`;
-    }
-
-    return {
-      runId,
-      status: 'FAILED',
-      response: reason,
-      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-      error: {
-        code: 'INVALID_REQUEST' as RuntimeErrorCode,
-        message: `Run ${runId} cannot be confirmed from status ${run.status} (designStatus=${designStatus ?? 'none'})`,
-        retryable: false,
-      },
-    };
-  }
-
   private async executeGraphBranch(
     runId: string,
     _plan: unknown,
@@ -810,16 +773,18 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     error?: { code: string; message: string; retryable: boolean };
   }> {
     if (route === 'automation_design') {
-      const result = await this.automationDesignGraph.build().invoke(
-        {
-          input: executionInput as JaafarAutomationDesignGraphInput,
-        },
-        this.automationDesignGraph.graphConfig(
-          runId,
-          executionInput as { userId?: string; organizationId?: string },
-        ),
-      );
-      return this.mapDesignGraphResult(result);
+      const result = await this.automationGraph.run(executionInput as JaafarAutomationGraphInput);
+      if (result.status === 'WAITING') return { route: 'waiting' };
+      if (result.status === 'FAILED') {
+        return { route: 'failed', response: result.response, error: undefined };
+      }
+      return {
+        route: 'completed',
+        response: result.response,
+        modelCalls: [],
+        usage: result.usage as RuntimeUsage | undefined,
+        error: undefined,
+      };
     }
 
     const result = await this.executionGraph.build({ durable: true }).invoke(
@@ -839,17 +804,13 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     runId: string,
     approved: boolean,
     scope?: RuntimeScope,
-    blueprintRevision?: string,
+    reason?: string,
   ): Promise<Record<string, unknown>> {
     const run = await this.runs.findById(runId);
     const isAutomationDesign = this.isAutomationDesignRun(run);
 
     if (isAutomationDesign) {
-      const result = await this.automationDesignGraph.resume(
-        runId,
-        { approved, blueprintRevision: blueprintRevision ?? '' },
-        scope,
-      );
+      const result = await this.automationGraph.resume(runId, { approved, reason }, scope);
       return result as unknown as Record<string, unknown>;
     }
 
@@ -874,29 +835,6 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       usage: result.usage as RuntimeUsage | undefined,
       error: result.error as { code: string; message: string; retryable: boolean } | undefined,
     };
-  }
-
-  private mapDesignGraphResult(result: Record<string, unknown>): {
-    route: string;
-    response?: string;
-    modelCalls?: unknown[];
-    usage?: RuntimeUsage;
-    error?: { code: string; message: string; retryable: boolean };
-  } {
-    if (this.isInterrupted(result)) {
-      return { route: 'waiting' };
-    }
-    return {
-      route: 'completed',
-      response: result.response as string | undefined,
-      modelCalls: [],
-      usage: result.usage as RuntimeUsage | undefined,
-      error: undefined,
-    };
-  }
-
-  private isInterrupted(value: unknown): boolean {
-    return Boolean(value && typeof value === 'object' && '__interrupt__' in value);
   }
 
   private mapExecutionStreamEvent(event: ExecutionGraphStreamEvent): RuntimeEvent | null {
@@ -977,6 +915,46 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     }
   }
 
+  private mapAutomationGraphEvent(event: AutomationGraphStreamEvent): RuntimeEvent {
+    const occurredAt = new Date().toISOString();
+    const runId = event.runId;
+    switch (event.type) {
+      case 'run.started':
+        return { type: 'run.started', runId, occurredAt, payload: { status: 'CREATED' } };
+      case 'token':
+        return { type: 'token', runId, occurredAt, payload: { content: event.content } };
+      case 'run.waiting':
+        return { type: 'run.waiting', runId, occurredAt, payload: { reason: event.reason } };
+      case 'run.completed':
+        return {
+          type: 'run.completed',
+          runId,
+          occurredAt,
+          payload: {
+            response: event.response,
+            usage: (event.usage as unknown as RuntimeUsage) ?? {
+              promptTokens: 0,
+              completionTokens: 0,
+              totalTokens: 0,
+            },
+          },
+        };
+      case 'run.failed':
+        return {
+          type: 'run.failed',
+          runId,
+          occurredAt,
+          payload: {
+            error: {
+              code: (event.code ?? 'UNKNOWN_RUNTIME_FAILURE') as RuntimeErrorCode,
+              message: event.message,
+              retryable: false,
+            },
+          },
+        };
+    }
+  }
+
   private mapConversationStreamEvent(event: ConversationGraphStreamEvent): RuntimeEvent {
     const occurredAt = new Date().toISOString();
     switch (event.type) {
@@ -1029,79 +1007,6 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           },
         };
     }
-  }
-
-  private mapAutomationDesignEvents(
-    runId: string,
-    update: Record<string, unknown>,
-  ): RuntimeEvent[] {
-    const events: RuntimeEvent[] = [];
-    const occurredAt = new Date().toISOString();
-
-    const pushApprovalWait = (): void => {
-      events.push({
-        type: 'approval.required',
-        runId,
-        occurredAt,
-        payload: { reason: 'Automation design requires approval before provisioning.' },
-      });
-      events.push({ type: 'run.waiting', runId, occurredAt, payload: { reason: 'approval' } });
-    };
-
-    // LangGraph surfaces interrupts as a top-level __interrupt__ entry in the
-    // updates stream (not always as the interrupting node's update).
-    if (this.isInterrupted(update)) {
-      pushApprovalWait();
-      return events;
-    }
-
-    for (const [node, value] of Object.entries(update)) {
-      const state = (value ?? {}) as Record<string, unknown> & { __interrupt__?: unknown };
-
-      if (
-        (node === 'await_approval' || node === 'provision_automation') &&
-        (state.__interrupt__ || this.isInterrupted(state))
-      ) {
-        pushApprovalWait();
-      } else if (node === 'provision_automation' && state.response) {
-        events.push({
-          type: 'run.completed',
-          runId,
-          occurredAt,
-          payload: {
-            response: state.response as string,
-            usage: (state.usage as RuntimeUsage) ?? {
-              promptTokens: 0,
-              completionTokens: 0,
-              totalTokens: 0,
-            },
-          },
-        });
-      } else if (node === 'persist_design_turn' && state.response) {
-        const sessionStatus = (state.session as { status?: string } | undefined)?.status;
-        if (sessionStatus === 'READY_FOR_REVIEW') {
-          // Ready designs continue into await_approval — the interrupt event
-          // below carries the waiting state; emitting run.completed here would
-          // close the run before the user can approve.
-          continue;
-        }
-        events.push({
-          type: 'run.completed',
-          runId,
-          occurredAt,
-          payload: {
-            response: state.response as string,
-            usage: (state.usage as RuntimeUsage) ?? {
-              promptTokens: 0,
-              completionTokens: 0,
-              totalTokens: 0,
-            },
-          },
-        });
-      }
-    }
-
-    return events;
   }
 
   private async handleGraphCompletion(
@@ -1320,10 +1225,6 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       Boolean(metadata.blueprint) ||
       Boolean(metadata.designStatus)
     );
-  }
-
-  private isGraphDesign(run: { metadata: unknown; status: string }): boolean {
-    return this.isAutomationDesignRun(run) && run.status === 'WAITING';
   }
 
   private isGraphExecution(run: { metadata: unknown; status: string }): boolean {

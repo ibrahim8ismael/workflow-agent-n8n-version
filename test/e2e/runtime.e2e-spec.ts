@@ -188,6 +188,44 @@ describe('Runtime (e2e)', () => {
       expect(conversationRes.body.id).toBe(res.body.conversationId);
     });
 
+    it('should refuse to retry a non-automation run', async () => {
+      const res = await http
+        .post('/api/v1/runs')
+        .send({ userMessage: 'Say hello', agentId: 'agent-1', mode: 'execution' });
+      expect(res.status).toBe(202);
+
+      const retry = await http.post(`/api/v1/runs/${res.body.runId}/retry`).send({}).expect(202);
+      expect(retry.body.status).toBe('FAILED');
+      expect(retry.body.response).toContain('Only automation runs can be retried');
+    });
+
+    it('should return 404 when retrying an unknown run', async () => {
+      await http.post('/api/v1/runs/does-not-exist/retry').send({}).expect(404);
+    });
+
+    describe('GET /api/v1/runs/:id/trace', () => {
+      it('should assemble the run trace document', async () => {
+        const res = await http
+          .post('/api/v1/runs')
+          .send({ userMessage: 'Say hello', agentId: 'agent-1', mode: 'execution' });
+        expect(res.status).toBe(202);
+
+        const trace = await http.get(`/api/v1/runs/${res.body.runId}/trace`).expect(200);
+        expect(trace.body).toMatchObject({
+          runId: res.body.runId,
+          agentId: 'agent-1',
+          usage: expect.objectContaining({ totalTokens: expect.any(Number) }),
+        });
+        expect(Array.isArray(trace.body.transitions)).toBe(true);
+        expect(Array.isArray(trace.body.events)).toBe(true);
+        expect(trace.body.automation).toBeDefined();
+      });
+
+      it('should return 404 for an unknown run trace', async () => {
+        await http.get('/api/v1/runs/does-not-exist/trace').expect(404);
+      });
+    });
+
     it('should handle an unknown agent gracefully', async () => {
       const res = await http
         .post('/api/v1/runs')

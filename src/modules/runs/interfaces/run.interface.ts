@@ -1,3 +1,5 @@
+import type { AgentRunPhase } from '../agent-run-phase';
+
 export const RUN_STATUS = {
   CREATED: 'CREATED',
   PREPARING: 'PREPARING',
@@ -25,6 +27,19 @@ export interface IRun {
   result?: string;
   error?: string;
   metadata?: Record<string, unknown>;
+  /** Jaafar V2 lifecycle (§1). Null/undefined only on pre-V2 rows. */
+  currentPhase?: AgentRunPhase | null;
+  businessContext?: unknown;
+  requirements?: unknown;
+  assumptions?: unknown;
+  constraints?: unknown;
+  automationPlan?: unknown;
+  workflowId?: string | null;
+  workflowVersion?: number | null;
+  validationResult?: unknown;
+  executionResults?: unknown;
+  repairAttempts?: unknown;
+  metrics?: unknown;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
@@ -33,4 +48,15 @@ export interface IRun {
   version: number;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface IAgentRunTransition {
+  id: string;
+  runId: string;
+  fromStatus?: string | null;
+  toStatus?: string | null;
+  fromPhase?: AgentRunPhase | null;
+  toPhase?: AgentRunPhase | null;
+  reason?: string | null;
+  createdAt: Date;
 }

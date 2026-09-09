@@ -572,6 +572,12 @@ model Automation {
   webhookPath        String?
   lastSyncedAt       DateTime?
   lastError          String?
+  // ── Jaafar V2 workflow versioning (§28) ──
+  // Every successful provision bumps `version` and pushes the prior
+  // {blueprint, externalWorkflowId} onto `blueprintHistory` (bounded audit
+  // trail — rollback re-provisions a history entry as a new version).
+  version            Int       @default(1)
+  blueprintHistory   Json?
   userId             String?
   organizationId     String? // exactly one populated (owner XOR)
   createdAt          DateTime  @default(now())
@@ -641,6 +647,23 @@ enum RunStatus {
   TIMEOUT
 }
 
+// Jaafar V2 agent lifecycle phases (docs/Jaafar-improve.md §2).
+// A phase describes WHERE the run is in the automation pipeline;
+// RunStatus describes the technical row state. Repair sub-states
+// (DIAGNOSING/REPAIRING) live here so a FAILED-status row can still resume.
+enum AgentRunPhase {
+  UNDERSTANDING
+  PLANNING
+  BUILDING
+  STATIC_VALIDATION
+  EXECUTING
+  RUNTIME_VALIDATION
+  COMPLETED
+  FAILED
+  DIAGNOSING
+  REPAIRING
+}
+
 model Run {
   id              String    @id @default(uuid())
   agentId         String
@@ -655,6 +678,20 @@ model Run {
   result          String?
   error           String?
   metadata        Json?
+  // ── Jaafar V2 AgentRun lifecycle (§1) ──
+  // Dynamic stage payloads (structure varies per stage) — JSONB per DB rules.
+  currentPhase     AgentRunPhase @default(UNDERSTANDING)
+  businessContext  Json?
+  requirements     Json?
+  assumptions      Json?
+  constraints      Json?
+  automationPlan   Json?
+  workflowId       String?
+  workflowVersion  Int?
+  validationResult Json?
+  executionResults Json?
+  repairAttempts   Json?
+  metrics          Json?
   startedAt       DateTime?
   completedAt     DateTime?
   promptTokens    Int       @default(0)
@@ -668,14 +705,34 @@ model Run {
   deletedAt       DateTime?
 
   idempotencyKeys RuntimeIdempotencyKey[]
+  transitions     AgentRunTransition[]
 
   @@index([agentId])
   @@index([conversationId])
   @@index([userId])
   @@index([organizationId])
   @@index([status])
+  @@index([currentPhase])
   @@index([agentId, status])
   @@map("runs")
+}
+
+// Append-only audit of every AgentRun status/phase change — the durable
+// trace Phase 1 promises ("persist every state transition") and the
+// transition history Phase 5 observability reads from.
+model AgentRunTransition {
+  id         String         @id @default(uuid())
+  runId      String
+  run        Run            @relation(fields: [runId], references: [id])
+  fromStatus RunStatus?
+  toStatus   RunStatus?
+  fromPhase  AgentRunPhase?
+  toPhase    AgentRunPhase?
+  reason     String?
+  createdAt  DateTime       @default(now())
+
+  @@index([runId])
+  @@map("agent_run_transitions")
 }
 
 model RuntimeIdempotencyKey {

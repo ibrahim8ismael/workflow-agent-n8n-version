@@ -1,4 +1,3 @@
-import type { AutomationDesignSession } from '../services/automation-design-session.service';
 import type { JaafarModelCall } from '../types/jaafar-model.types';
 import type { JaafarPlan } from '../types/jaafar-plan.types';
 import type { JaafarUnderstanding } from '../types/jaafar-understanding.types';
@@ -47,7 +46,7 @@ export interface JaafarState {
     clarificationRequired?: boolean;
     clarificationQuestion?: string;
   };
-  automationDesign?: AutomationDesignSession;
+  automationDesign?: Record<string, unknown>;
   context: {
     skills: ToolDefinition[];
     memoryReferences: string[];

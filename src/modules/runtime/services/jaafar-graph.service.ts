@@ -4,9 +4,11 @@ import { Injectable, Optional } from '@nestjs/common';
 import { LangGraphPostgresCheckpointerService } from '../../../infrastructure/langgraph/langgraph-postgres-checkpointer.service';
 import type { JaafarModelCall } from '../types/jaafar-model.types';
 import type { JaafarPlan } from '../types/jaafar-plan.types';
+import type { JaafarUnderstanding } from '../types/jaafar-understanding.types';
 import { RuntimeMode, type RuntimeRequest } from '../types/runtime.types';
 import type { PendingQuestionContext } from '../types/runtime-contract.types';
 import { JaafarContextLoaderService } from './jaafar-context-loader.service';
+import { JaafarPlanningService } from './jaafar-planning.service';
 import { JaafarUnderstandingGraphService } from './jaafar-understanding-graph.service';
 
 export type JaafarGraphRoute =
@@ -116,6 +118,8 @@ const JaafarGraphState = Annotation.Root({
     reducer: (_left, right) => right,
   }),
   context: Annotation<{
+    agentName?: string;
+    agentInstructions?: string;
     skills: Array<{
       id: string;
       name: string;
@@ -214,6 +218,7 @@ export class JaafarGraphService {
   constructor(
     private readonly understandingGraph: JaafarUnderstandingGraphService,
     private readonly contextLoader: JaafarContextLoaderService,
+    private readonly planningService: JaafarPlanningService,
     @Optional() private readonly postgresCheckpointer?: LangGraphPostgresCheckpointerService,
   ) {}
 
@@ -230,6 +235,8 @@ export class JaafarGraphService {
         });
         return {
           context: {
+            agentName: loaded.agent.name,
+            agentInstructions: loaded.agent.instructions,
             skills: loaded.tools,
             memoryReferences: loaded.memoryReferences,
             knowledgeReferences: loaded.knowledgeReferences,
@@ -285,38 +292,44 @@ export class JaafarGraphService {
                 clarificationQuestion: u.clarificationQuestion,
               }
             : undefined,
-          context: result.context,
+          // Normalize the loaded context (and keep agent identity explicit so
+          // plan_task can prompt without re-loading context).
+          context: {
+            agentName: result.context?.agent?.name ?? state.context?.agentName,
+            agentInstructions:
+              result.context?.agent?.instructions ?? state.context?.agentInstructions,
+            skills: result.context?.tools ?? state.context?.skills ?? [],
+            memoryReferences:
+              result.context?.memoryReferences ?? state.context?.memoryReferences ?? [],
+            knowledgeReferences:
+              result.context?.knowledgeReferences ?? state.context?.knowledgeReferences ?? [],
+            integrationReferences:
+              result.context?.readiness ?? state.context?.integrationReferences ?? [],
+          },
           plan: result.plan,
           modelCalls: result.modelCalls ?? [],
         };
       })
       .addNode('plan_task', async (state: typeof JaafarGraphState.State) => {
-        if (!state.context || !state.understanding) {
+        if (!state.context || !state.understanding?.structured) {
           throw new Error('Planning requires loaded context and understanding');
         }
-        const planningResult = await this.understandingGraph
-          .build({ durable: options.durable })
-          .invoke(
-            {
-              input: {
-                runId: state.run.runId,
-                agentId: state.run.agentId,
-                userMessage: state.request.userMessage,
-                conversationId: state.run.conversationId,
-                userId: state.run.userId,
-                organizationId: state.run.organizationId,
-                effort: state.request.effort,
-              },
-            },
-            state.run.runId
-              ? this.understandingGraph.graphConfig(state.run.runId, {
-                  userId: state.run.userId,
-                  organizationId: state.run.organizationId,
-                })
-              : undefined,
-          );
-
-        return { plan: planningResult.plan, modelCalls: planningResult.modelCalls ?? [] };
+        // Plan directly from the understanding produced by understand_request.
+        // Re-invoking the full understanding graph here doubled the LLM chain
+        // (4 sequential calls), multiplied flakiness, and could drift to a
+        // different route than the one already classified.
+        const planningResult = await this.planningService.createPlanResult({
+          understanding: state.understanding.structured as JaafarUnderstanding,
+          tools: state.context.skills as Parameters<
+            JaafarPlanningService['createPlanResult']
+          >[0]['tools'],
+          userMessage: state.request.userMessage,
+          agentName: state.context.agentName,
+          agentInstructions: state.context.agentInstructions,
+          history: state.conversation.history,
+          effort: state.request.effort,
+        });
+        return { plan: planningResult.plan, modelCalls: [planningResult.modelCall] };
       })
       .addEdge(START, 'load_context')
       .addEdge('load_context', 'understand_request')
