@@ -3,6 +3,10 @@ import { N8nClientApiError } from '../../../infrastructure/n8n/n8n-client-api.se
 import { N8nNodeInventoryService } from '../../../infrastructure/n8n/n8n-node-inventory.service';
 import { N8nProvisionerService } from '../../../infrastructure/n8n/n8n-provisioner.service';
 import { N8nConnectionsService } from '../../integrations/n8n/services/n8n-connections.service';
+import {
+  parseReadinessBlockers,
+  type ReadinessBlocker,
+} from '../constants/automation-readiness.constants';
 import { AUTOMATION_STATUS, type AutomationStatus } from '../constants/automation-status.constants';
 import type { CreateAutomationFromBlueprintDto } from '../dto/automation.dto';
 import type { OwnerScope } from '../repositories/automations.repository';
@@ -26,6 +30,11 @@ export interface AutomationView {
   name: string;
   description: string | null;
   blueprint: unknown;
+  /**
+   * Lifecycle status. `ACTIVE` means the workflow was successfully
+   * created/provisioned in n8n — it does NOT imply credentials are ready.
+   * Check `readyToRun` before execution/activation.
+   */
   status: string;
   connectionId: string;
   externalWorkflowId: string | null;
@@ -35,6 +44,10 @@ export interface AutomationView {
   lastError: string | null;
   /** Incremented on every successful provision (§28). */
   version: number;
+  /** Credential-independent readiness (dynamic, never part of the blueprint). */
+  buildable: boolean;
+  readyToRun: boolean;
+  readinessBlockers: ReadinessBlocker[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -179,6 +192,61 @@ export class AutomationsService {
 
   // ── internals ──────────────────────────────────────────────
 
+  /**
+   * Re-evaluates credential readiness for an existing automation WITHOUT
+   * recreating the workflow. When all blockers clear and an external
+   * workflow exists, the existing workflow is activated in n8n.
+   */
+  async refreshReadiness(id: string, scope: OwnerScope): Promise<AutomationView> {
+    const automation = await this.getOwned(id, scope);
+    const blueprint = automationBlueprintSchema.parse(automation.blueprint);
+    const credentials = await this.connections.resolveCredentials(automation.connectionId);
+    if (!credentials) {
+      throw new NotFoundException(
+        `n8n connection for automation "${id}" is not ACTIVE — reconnect the client instance first`,
+      );
+    }
+    let instance: Awaited<ReturnType<N8nNodeInventoryService['inventory']>> | undefined;
+    try {
+      instance = this.nodeInventory ? await this.nodeInventory.inventory(credentials) : undefined;
+    } catch {
+      instance = undefined;
+    }
+    const readiness = await this.provisioner.inspectReadiness({
+      blueprint,
+      ...(instance ? { instance } : {}),
+      connection: credentials,
+    });
+    const updated = await this.repository.update(automation.id, {
+      buildable: true,
+      readyToRun: readiness.readyToRun,
+      readinessBlockers: readiness.readinessBlockers as never,
+      lastError: null,
+    });
+    if (readiness.readyToRun && automation.externalWorkflowId) {
+      try {
+        await this.provisioner.activateWorkflow(credentials, automation.externalWorkflowId);
+      } catch (error) {
+        const message =
+          error instanceof N8nClientApiError
+            ? `n8n activation failed (${error.code}): ${error.message}`
+            : error instanceof Error
+              ? error.message
+              : 'n8n activation failed unexpectedly';
+        const failed = await this.repository.update(automation.id, {
+          lastError: message,
+        });
+        this.logger.warn({
+          event: 'n8n.automation_activation_failed',
+          automationId: automation.id,
+          message,
+        });
+        return this.toView(failed);
+      }
+    }
+    return this.toView(updated);
+  }
+
   private async provision(
     automation: Awaited<ReturnType<AutomationsRepository['findById']>> & object,
   ): Promise<AutomationView> {
@@ -218,6 +286,9 @@ export class AutomationsService {
         instance,
       });
       const nextVersion = (automation.version ?? 0) + 1;
+      // Missing provider credentials are readiness blockers, not failures:
+      // the workflow is created/saved (ACTIVE) but stays inactive in n8n
+      // until `readyToRun` becomes true.
       const active = await this.repository.update(automation.id, {
         status: AUTOMATION_STATUS.ACTIVE,
         externalWorkflowId: result.externalWorkflowId,
@@ -225,6 +296,9 @@ export class AutomationsService {
         lastSyncedAt: new Date(),
         lastError: null,
         version: nextVersion,
+        buildable: true,
+        readyToRun: result.readyToRun,
+        readinessBlockers: result.readinessBlockers as never,
         blueprintHistory: [
           ...this.readHistory(automation.blueprintHistory),
           {
@@ -282,10 +356,20 @@ export class AutomationsService {
     lastSyncedAt: Date | null;
     lastError: string | null;
     version?: number | null;
+    buildable?: boolean | null;
+    readyToRun?: boolean | null;
+    readinessBlockers?: unknown;
     createdAt: Date;
     updatedAt: Date;
   }): AutomationView {
     const revision = this.safeRevision(automation.blueprint);
+    const blockers = parseReadinessBlockers(automation.readinessBlockers);
+    // Legacy rows predate readiness columns: an ACTIVE row with an external
+    // workflow id implies a previously successful provision.
+    const buildable = automation.buildable ?? automation.status === AUTOMATION_STATUS.ACTIVE;
+    const readyToRun =
+      automation.readyToRun ??
+      (automation.status === AUTOMATION_STATUS.ACTIVE && blockers.length === 0);
     return {
       id: automation.id,
       name: automation.name,
@@ -299,6 +383,9 @@ export class AutomationsService {
       blueprintRevision: revision,
       lastError: automation.lastError,
       version: automation.version ?? 1,
+      buildable,
+      readyToRun,
+      readinessBlockers: blockers,
       createdAt: automation.createdAt,
       updatedAt: automation.updatedAt,
     };

@@ -1,4 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
+import type {
+  ReadinessBlocker,
+  WorkflowReadiness,
+} from '../../modules/automations/constants/automation-readiness.constants';
+import {
+  blockedReadiness,
+  CREDENTIAL_STATUS,
+} from '../../modules/automations/constants/automation-readiness.constants';
 import {
   type AutomationBlueprint,
   automationWebhookSlug,
@@ -10,11 +18,13 @@ import {
 } from './n8n-client-api.service';
 import type { N8nInstanceInventory } from './n8n-node-inventory.service';
 
-export interface ProvisionResult {
+export interface ProvisionResult extends WorkflowReadiness {
   externalWorkflowId: string;
   webhookPath: string;
   /** Data tables created (or reused) during provisioning, by name. */
   dataTableIds: Record<string, string>;
+  /** True when the workflow was activated in n8n (only when readyToRun). */
+  activated: boolean;
 }
 
 interface ProvisionRequest {
@@ -75,6 +85,11 @@ export class N8nProvisionerService {
 
   constructor(private readonly clientApi: N8nClientApiService) {}
 
+  /**
+   * Creates the workflow in n8n, then activates it ONLY when credential
+   * readiness allows (`readyToRun`). Missing provider credentials produce a
+   * successful build with `readyToRun=false` — never a provisioning failure.
+   */
   async provision(request: ProvisionRequest): Promise<ProvisionResult> {
     const { automationId, blueprint, connection, instance } = request;
     const webhookPath = automationWebhookSlug(automationId, blueprint.name);
@@ -82,7 +97,7 @@ export class N8nProvisionerService {
     const dataTableIds = await this.ensureDataTables(blueprint, instance, connection);
     const credentialFallback = await this.loadCredentialFallback(connection);
 
-    const workflow = this.toWorkflowJson({
+    const { payload: workflow, readinessBlockers } = this.buildWorkflow({
       automationId,
       blueprint,
       webhookPath,
@@ -90,14 +105,20 @@ export class N8nProvisionerService {
       instance,
       credentialFallback,
     });
+    const readiness = blockedReadiness(readinessBlockers);
 
-    const created = await this.clientApi.createWorkflow(connection, workflow);
-    await this.clientApi.activateWorkflow(connection, created.id);
+    const created = await this.createWorkflow(connection, workflow);
 
     // Read back to capture the effective webhook path (drift/collision safety).
-    const detail = await this.clientApi.getWorkflow(connection, created.id);
+    const detail = await this.getWorkflow(connection, created.id);
     const hooks = N8nClientApiService.extractWebhookPaths(detail);
     const effectivePath = hooks[0]?.path ?? webhookPath;
+
+    let activated = false;
+    if (readiness.readyToRun) {
+      await this.activateWorkflow(connection, created.id);
+      activated = true;
+    }
 
     this.logger.log({
       event: 'n8n.automation_provisioned',
@@ -105,8 +126,51 @@ export class N8nProvisionerService {
       workflowId: created.id,
       webhookPath: effectivePath,
       dataTables: Object.keys(dataTableIds),
+      activated,
+      readinessBlockers: readiness.readinessBlockers.length,
     });
-    return { externalWorkflowId: created.id, webhookPath: effectivePath, dataTableIds };
+    return {
+      externalWorkflowId: created.id,
+      webhookPath: effectivePath,
+      dataTableIds,
+      activated,
+      ...readiness,
+    };
+  }
+
+  /** Creation and activation are separate operations (create ≠ activate). */
+  async createWorkflow(
+    connection: N8nClientConnection,
+    payload: Record<string, unknown>,
+  ): Promise<{ id: string }> {
+    return this.clientApi.createWorkflow(connection, payload);
+  }
+
+  async activateWorkflow(connection: N8nClientConnection, id: string): Promise<void> {
+    await this.clientApi.activateWorkflow(connection, id);
+  }
+
+  async getWorkflow(connection: N8nClientConnection, id: string) {
+    return this.clientApi.getWorkflow(connection, id);
+  }
+
+  /**
+   * Re-evaluates credential readiness for an existing blueprint without
+   * recreating the workflow (used by readiness refresh after the user
+   * connects credentials).
+   */
+  async inspectReadiness(input: {
+    blueprint: AutomationBlueprint;
+    instance?: N8nInstanceInventory;
+    credentialFallback?: CredentialFallbackEntry[];
+    connection?: N8nClientConnection;
+  }): Promise<WorkflowReadiness> {
+    let fallback = input.credentialFallback;
+    if (!fallback && input.connection) {
+      fallback = await this.loadCredentialFallback(input.connection);
+    }
+    const blockers = this.computeReadinessBlockers(input.blueprint, input.instance, fallback ?? []);
+    return blockedReadiness(blockers);
   }
 
   // ── internals ──────────────────────────────────────────────
@@ -189,14 +253,14 @@ export class N8nProvisionerService {
     return ids;
   }
 
-  private toWorkflowJson(input: {
+  private buildWorkflow(input: {
     automationId: string;
     blueprint: AutomationBlueprint;
     webhookPath: string;
     dataTableIds: Record<string, string>;
     instance?: N8nInstanceInventory;
     credentialFallback?: CredentialFallbackEntry[];
-  }): Record<string, unknown> {
+  }): { payload: Record<string, unknown>; readinessBlockers: ReadinessBlocker[] } {
     const { automationId, blueprint, webhookPath, dataTableIds, instance, credentialFallback } =
       input;
     const isSchedule = blueprint.trigger.type === 'schedule';
@@ -256,12 +320,84 @@ export class N8nProvisionerService {
       };
     }
 
+    const readinessBlockers = this.computeReadinessBlockers(
+      blueprint,
+      instance,
+      credentialFallback ?? [],
+    );
+
     return {
-      name: `Woops - ${blueprint.name} (${automationId.slice(0, 8)})`,
-      nodes,
-      connections,
-      settings: { executionOrder: 'v1' },
+      payload: {
+        name: `Woops - ${blueprint.name} (${automationId.slice(0, 8)})`,
+        nodes,
+        connections,
+        settings: { executionOrder: 'v1' },
+      },
+      readinessBlockers,
     };
+  }
+
+  /**
+   * Credential readiness for every generated integration node.
+   *
+   * - Plumbing nodes (webhook/code/http/…) never require provider credentials.
+   * - Native integration nodes without an attached credential become
+   *   NEEDS_CREDENTIAL blockers — the workflow is still created.
+   * - Ambiguous fallback matches become blockers (with detail), not build
+   *   failures: the workflow can be created, the user resolves credentials.
+   */
+  private computeReadinessBlockers(
+    blueprint: AutomationBlueprint,
+    instance: N8nInstanceInventory | undefined,
+    credentialFallback: CredentialFallbackEntry[],
+  ): ReadinessBlocker[] {
+    const blockers: ReadinessBlocker[] = [];
+    blueprint.steps.forEach((step, index) => {
+      const hint = step.nodeHint;
+      if (!hint || !NODE_TYPE_PATTERN.test(hint.type)) return;
+      if (NO_CREDENTIAL_FALLBACK_TYPES.has(hint.type)) return;
+      const nodeId = step.id ?? `step-${index + 1}`;
+      const integration = (step.integration ?? '').trim() || hint.type.split('.').pop()!;
+      let attached: Record<string, { id: string; name: string }> | undefined;
+      let ambiguousDetail: string | undefined;
+      try {
+        attached = this.reuseCredentials(hint.type, instance, credentialFallback);
+      } catch (error) {
+        ambiguousDetail = error instanceof Error ? error.message : String(error);
+        attached = undefined;
+      }
+      if (attached && Object.keys(attached).length > 0) return;
+      const observed = instance?.nodeTypes.find((n) => n.type === hint.type);
+      const observedType = observed?.credentials ? Object.keys(observed.credentials)[0] : undefined;
+      const credentialType =
+        hint.credentialType ??
+        observedType ??
+        this.inferCredentialType(hint.type, fallbackTypes(credentialFallback));
+      blockers.push({
+        nodeId,
+        integration:
+          integration
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '_')
+            .replace(/^_+|_+$/g, '') || integration,
+        credentialStatus: CREDENTIAL_STATUS.NEEDS_CREDENTIAL,
+        ...(credentialType ? { credentialType } : {}),
+        ...(ambiguousDetail ? { detail: ambiguousDetail } : {}),
+      });
+    });
+    return blockers;
+  }
+
+  private inferCredentialType(nodeType: string, fallbackTypes: string[]): string | undefined {
+    const normalize = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const dot = nodeType.lastIndexOf('.');
+    const suffix = normalize(dot >= 0 ? nodeType.slice(dot + 1) : nodeType);
+    if (!suffix) return undefined;
+    const match = fallbackTypes.find((type) => {
+      const credNorm = normalize(type);
+      return credNorm === suffix || credNorm.startsWith(suffix) || suffix.startsWith(credNorm);
+    });
+    return match;
   }
 
   private webhookNode(automationId: string, webhookPath: string): BuiltNode {
@@ -368,12 +504,20 @@ export class N8nProvisionerService {
         };
         delete parameters.tableName;
       }
+      // Ambiguous fallback matches become unconfigured nodes + readiness
+      // blockers (handled in computeReadinessBlockers), not build failures.
+      let credentials: BuiltNode['credentials'];
+      try {
+        credentials = this.reuseCredentials(hint.type, instance, credentialFallback);
+      } catch {
+        credentials = undefined;
+      }
       const node: BuiltNode = {
         ...base,
         type: hint.type,
         typeVersion: hint.typeVersion ?? 1,
         parameters,
-        credentials: this.reuseCredentials(hint.type, instance, credentialFallback),
+        ...(credentials ? { credentials } : {}),
       };
       return node;
     }
@@ -439,8 +583,9 @@ export class N8nProvisionerService {
    * never used but the instance holds a uniquely matching credential (by
    * normalized credential-type ↔ node-suffix similarity), attach it.
    * Structural/plumbing nodes never take fallback credentials. Ambiguous
-   * matches throw a clear resolution error instead of provisioning an
-   * unauthenticated native node. Users can swap credentials in the n8n editor.
+   * matches throw so readiness inspection can record a NEEDS_CREDENTIAL
+   * blocker with detail; `stepNode()` catches this and still creates the
+   * node unconfigured. Users can swap credentials in the n8n editor.
    */
   private reuseCredentials(
     nodeType: string,
@@ -472,4 +617,8 @@ export class N8nProvisionerService {
     }
     return undefined;
   }
+}
+
+function fallbackTypes(fallback: CredentialFallbackEntry[]): string[] {
+  return (fallback ?? []).map((entry) => entry.type).filter((type) => typeof type === 'string');
 }

@@ -25,6 +25,12 @@ export const nodeHintSchema = z.object({
    * auditable in review, approval, and evals.
    */
   nodeChoiceReason: z.string().max(500).optional(),
+  /**
+   * STATIC required credential TYPE (e.g. `gmailOAuth2`). Describes the
+   * requirement only — never a credential id/secret, and never mutable
+   * readiness state (`NEEDS_CREDENTIAL` lives on Automation, not here).
+   */
+  credentialType: z.string().min(1).max(80).optional(),
 });
 
 export const dataTableColumnSchema = z.object({

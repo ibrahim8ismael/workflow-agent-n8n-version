@@ -1,6 +1,9 @@
 import { Injectable } from '@nestjs/common';
+import type { ReadinessBlocker } from '../../automations/constants/automation-readiness.constants';
+import { CREDENTIAL_STATUS } from '../../automations/constants/automation-readiness.constants';
 import type { AutomationBlueprint } from '../../automations/schemas/automation-blueprint.schema';
 import type { IntegrationCapability } from './integration-registry.service';
+import { canonicalProvider, expectedCredentialTypes } from './known-providers.catalog';
 
 export type PlanReviewErrorCode =
   | 'INVALID_PLAN'
@@ -16,10 +19,13 @@ export interface PlanReviewIssue {
     | PlanReviewErrorCode
     | 'UNMAPPED_STEP'
     | 'CONDITION_UNREPRESENTED'
-    | 'SIDE_EFFECT_UNACKNOWLEDGED';
+    | 'SIDE_EFFECT_UNACKNOWLEDGED'
+    | 'CREDENTIAL_REQUIRED';
   message: string;
   stepId?: string;
   requirementId?: string;
+  /** Provider key for credential-readiness warnings (never a secret). */
+  integration?: string;
 }
 
 export interface RequirementCoverage {
@@ -53,6 +59,12 @@ export interface PlanReviewResult {
   errors: PlanReviewIssue[];
   warnings: PlanReviewIssue[];
   coverage: RequirementCoverage[];
+  /**
+   * Credential readiness blockers for known-but-disconnected providers.
+   * Empty when every referenced integration is connected or when no
+   * capabilities were provided. Never includes secrets.
+   */
+  readinessBlockers: ReadinessBlocker[];
 }
 
 const SIDE_EFFECT_PATTERN = /(delete|remove|destroy|charge|payment|refund|send money|transfer)/i;
@@ -140,22 +152,12 @@ export class AutomationPlanReviewService {
       });
     }
 
-    if (input.capabilities) {
-      const providers = new Set(input.capabilities.map((c) => c.provider.toLowerCase()));
-      const referenced = new Set<string>();
-      for (const integration of blueprint.integrations ?? []) referenced.add(integration);
-      for (const step of blueprint.steps) {
-        if (step.integration) referenced.add(step.integration);
-      }
-      for (const name of referenced) {
-        if (!providers.has(name.toLowerCase())) {
-          errors.push({
-            code: 'UNKNOWN_INTEGRATION',
-            message: `Integration "${name}" is not connected — connect it before building`,
-          });
-        }
-      }
-    }
+    const readinessBlockers = this.checkIntegrationReadiness(
+      blueprint,
+      input.capabilities,
+      errors,
+      warnings,
+    );
 
     this.checkNativeNodePreference(blueprint, input, errors, warnings);
 
@@ -169,7 +171,99 @@ export class AutomationPlanReviewService {
       });
     }
 
-    return { blueprint, valid: errors.length === 0, errors, warnings, coverage };
+    return {
+      blueprint,
+      valid: errors.length === 0,
+      errors,
+      warnings,
+      coverage,
+      readinessBlockers,
+    };
+  }
+
+  /**
+   * Credential-independent integration check.
+   *
+   * - Connected provider (capability with credentialsAvailable) → no issue.
+   * - Known provider without credentials → CREDENTIAL_REQUIRED warning +
+   *   readiness blocker. The plan stays VALID so the workflow can be built.
+   * - Unknown provider → UNKNOWN_INTEGRATION error (hallucination guard).
+   *
+   * Credential availability never proves provider existence; the
+   * known-provider catalog is the existence authority.
+   */
+  private checkIntegrationReadiness(
+    blueprint: AutomationBlueprint,
+    capabilities: IntegrationCapability[] | undefined,
+    errors: PlanReviewIssue[],
+    warnings: PlanReviewIssue[],
+  ): ReadinessBlocker[] {
+    if (!capabilities) return [];
+    const connected = new Set(
+      capabilities.filter((c) => c.credentialsAvailable).map((c) => c.provider.toLowerCase()),
+    );
+    const blockers: ReadinessBlocker[] = [];
+    const warned = new Set<string>();
+
+    const stepsByIntegration = new Map<string, Array<{ id: string; name: string }>>();
+    for (const step of blueprint.steps) {
+      if (!step.integration) continue;
+      const list = stepsByIntegration.get(step.integration) ?? [];
+      list.push({ id: step.id ?? step.name, name: step.name });
+      stepsByIntegration.set(step.integration, list);
+    }
+    const referenced = new Set<string>([
+      ...(blueprint.integrations ?? []),
+      ...stepsByIntegration.keys(),
+    ]);
+
+    for (const name of referenced) {
+      const lowered = name.toLowerCase();
+      if (connected.has(lowered)) continue;
+      // A capability row exists but reports no credentials (e.g. platform
+      // DISCONNECTED) — still a known provider, not an unknown one.
+      const capabilityExists = capabilities.some((c) => c.provider.toLowerCase() === lowered);
+      const canonical = canonicalProvider(name);
+      if (capabilityExists || canonical) {
+        const canonicalKey = canonical ?? name.toLowerCase();
+        const credentialTypes = expectedCredentialTypes(canonicalKey);
+        const steps = stepsByIntegration.get(name) ?? [];
+        if (steps.length === 0) {
+          // Blueprint-level reference without a step: one workflow-level blocker.
+          blockers.push({
+            nodeId: canonicalKey,
+            integration: canonicalKey,
+            credentialStatus: CREDENTIAL_STATUS.NEEDS_CREDENTIAL,
+            ...(credentialTypes[0] ? { credentialType: credentialTypes[0] } : {}),
+          });
+        } else {
+          for (const step of steps) {
+            blockers.push({
+              nodeId: step.id,
+              integration: canonicalKey,
+              credentialStatus: CREDENTIAL_STATUS.NEEDS_CREDENTIAL,
+              ...(credentialTypes[0] ? { credentialType: credentialTypes[0] } : {}),
+            });
+          }
+        }
+        if (!warned.has(lowered)) {
+          warned.add(lowered);
+          const stepRef = steps[0];
+          warnings.push({
+            code: 'CREDENTIAL_REQUIRED',
+            message: `Integration "${name}" is not connected — building anyway; connect it before running`,
+            ...(stepRef ? { stepId: stepRef.id } : {}),
+            integration: canonicalKey,
+          });
+        }
+        continue;
+      }
+      errors.push({
+        code: 'UNKNOWN_INTEGRATION',
+        message: `Integration "${name}" is not a known provider — use a connected integration or a supported provider`,
+      });
+    }
+    return blockers;
   }
 
   /**

@@ -92,6 +92,16 @@ interface AutomationGraphState {
   automationId?: string;
   externalWorkflowId?: string | null;
   webhookPath?: string | null;
+  /** Credential-independent readiness carried from provision → complete. */
+  buildable?: boolean;
+  readyToRun?: boolean;
+  readinessBlockers?: Array<{
+    nodeId: string;
+    integration: string;
+    credentialStatus: string;
+    credentialType?: string;
+    detail?: string;
+  }>;
   verifyOk?: boolean;
   testOk?: boolean;
   lastFailure?: { stage: RepairStage; message: string; code: string };
@@ -137,6 +147,18 @@ const AutomationGraphState = Annotation.Root({
     reducer: (_left, right) => right,
   }),
   webhookPath: Annotation<string | null | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  buildable: Annotation<boolean | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  readyToRun: Annotation<boolean | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  readinessBlockers: Annotation<AutomationGraphState['readinessBlockers']>({
     default: () => undefined,
     reducer: (_left, right) => right,
   }),
@@ -635,12 +657,15 @@ export class JaafarAutomationGraphService {
             ? { genericOverride: state.understanding.genericNodeOverride }
             : {}),
         });
+        // Credential independence: known-but-disconnected providers are
+        // warnings (CREDENTIAL_REQUIRED), never errors — the graph continues
+        // to build. Only genuinely UNKNOWN integrations block here.
         if (!reviewed.valid) {
-          // Missing connection and nothing else (§12): asking the user to
-          // connect it beats burning the replan budget on an unfixable plan.
-          // The invalid names never reach the builder. Placeholder-ish values
-          // (PENDING, TODO, "X (must be connected)") are model formatting
-          // failures, not real providers — those go back for a replan.
+          // Unknown provider and nothing else: asking the user to clarify
+          // beats burning the replan budget on an unfixable plan. The invalid
+          // names never reach the builder. Placeholder-ish values (PENDING,
+          // TODO, "X (must be connected)") are model formatting failures,
+          // not real providers — those go back for a replan.
           const unknownIntegrations = reviewed.errors.filter(
             (e) => e.code === 'UNKNOWN_INTEGRATION',
           );
@@ -679,9 +704,8 @@ export class JaafarAutomationGraphService {
               blueprint: reviewed.blueprint,
               planFeedback: undefined,
               clarificationOverride:
-                `To build "${state.blueprint.name}" I need ${nameList} connected ` +
-                `to your n8n first — I can't provision steps for tools I can't see. ` +
-                `Connect ${nameList} (or tell me which connected tool to use instead) and I'll continue the design.`,
+                `"${state.blueprint.name}" refers to ${nameList}, which isn't a supported provider I can build. ` +
+                `Tell me which connected tool to use instead (or the exact provider you mean) and I'll continue the design.`,
             };
           }
           if (state.planAttempts >= MAX_PLAN_ATTEMPTS) {
@@ -844,6 +868,10 @@ export class JaafarAutomationGraphService {
           automationId: built.automation.id,
           externalWorkflowId: built.automation.externalWorkflowId,
           webhookPath: built.automation.webhookPath,
+          buildable: built.automation.buildable,
+          readyToRun: built.automation.readyToRun,
+          readinessBlockers: built.automation
+            .readinessBlockers as AutomationGraphState['readinessBlockers'],
         };
       })
       .addNode('verify', async (state) => {
@@ -867,6 +895,30 @@ export class JaafarAutomationGraphService {
       .addNode('test_execute', async (state) => {
         const blueprint = state.blueprint ?? state.input.blueprint;
         if (!blueprint) throw new Error('Test execution requires a blueprint');
+        // Credential independence: a built-but-not-ready workflow is a
+        // successful build. Skip live execution — it would fail on missing
+        // provider auth — and let `complete` report readiness instead.
+        if (state.readyToRun === false) {
+          await this.agentRuns.recordArtifacts(
+            state.input.runId,
+            {
+              executionResults: {
+                automationId: state.automationId ?? state.input.automationId ?? null,
+                externalWorkflowId:
+                  state.externalWorkflowId ?? state.input.externalWorkflowId ?? null,
+                webhookPath: state.webhookPath ?? state.input.webhookPath ?? null,
+                testPassed: false,
+                testSkipped: true,
+                testSkipReason: 'CREDENTIALS_REQUIRED',
+                buildable: state.buildable ?? true,
+                readyToRun: false,
+                readinessBlockers: (state.readinessBlockers ?? []) as never,
+              } as never,
+            },
+            'runtime validation skipped (credentials required)',
+          );
+          return { testOk: true as const };
+        }
         const connection = await this.resolveConnection(state.input);
         const webhookPath = state.webhookPath ?? state.input.webhookPath ?? undefined;
         if (!connection || !webhookPath) {
@@ -1035,17 +1087,38 @@ export class JaafarAutomationGraphService {
         };
       })
       .addNode('complete', async (state) => {
+        const blockers = state.readinessBlockers ?? [];
+        const awaitingCredentials = state.readyToRun === false;
         await this.agentRuns.advance(state.input.runId, {
           toPhase: AGENT_RUN_PHASE.COMPLETED,
           toStatus: 'COMPLETED',
-          reason: 'automation tested and verified in n8n',
+          reason: awaitingCredentials
+            ? 'automation built but awaiting credentials'
+            : 'automation tested and verified in n8n',
         });
         const attempts = state.repairAttempt || state.input.repairAttempt || 0;
-        const response =
-          `Automation "${state.blueprint?.name ?? state.input.blueprint?.name}" is now ACTIVE in your n8n instance` +
-          `${(state.webhookPath ?? state.input.webhookPath) ? ` (webhook: ${state.webhookPath ?? state.input.webhookPath})` : ''}. ` +
-          `It was statically validated, executed against test data, and verified live` +
-          `${attempts > 0 ? ` (after ${attempts} automatic repair${attempts === 1 ? '' : 's'})` : ''} — no success was reported before verification.`;
+        const automationName = state.blueprint?.name ?? state.input.blueprint?.name ?? 'Automation';
+        const webhookSuffix =
+          (state.webhookPath ?? state.input.webhookPath)
+            ? ` (webhook: ${state.webhookPath ?? state.input.webhookPath})`
+            : '';
+        const missing = [...new Set(blockers.map((b) => b.integration))]
+          .map((name) =>
+            name
+              .split(/[_-]+/)
+              .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+              .join(' '),
+          )
+          .filter(Boolean);
+        const missingList =
+          missing.length > 1
+            ? `${missing.slice(0, -1).join(', ')} and ${missing[missing.length - 1]}`
+            : (missing[0] ?? '');
+        const response = awaitingCredentials
+          ? `I've built "${automationName}"${webhookSuffix}. It is saved in your n8n instance but remains inactive — ${missingList || 'required credentials'} still need${missing.length === 1 ? 's' : ''} to be connected before it can run.`
+          : `Automation "${automationName}" is now ACTIVE in your n8n instance${webhookSuffix}. ` +
+            `It was statically validated, executed against test data, and verified live` +
+            `${attempts > 0 ? ` (after ${attempts} automatic repair${attempts === 1 ? '' : 's'})` : ''} — no success was reported before verification.`;
         if (state.input.conversationId) {
           await this.conversations.addMessage(state.input.conversationId, {
             role: 'assistant',
@@ -1393,11 +1466,11 @@ export class JaafarAutomationGraphService {
       return `- ${type}${version}${creds}`;
     });
     return [
-      'You are Jaafar designing a business automation as an n8n blueprint. Never guess — every step must trace to the request, and every integration must come from the connected list.',
+      'You are Jaafar designing a business automation as an n8n blueprint. Never guess — every step must trace to the request, and every integration must be a real, supported provider key.',
       'Return steps with stable requirementIds (R1, R2, …) matching the requirements below, explicit conditions for branches, and expectedOutput per step.',
       'Choose steps[].nodeHint = { type, typeVersion?, parameters, nodeChoiceReason? } using REAL node types from the instance list. Put concrete business values (message text, recipients, intervals, urls…) into parameters. Never invent credential names or ids.',
-      "<node_selection_policy>Jaafar builds against the user's connected n8n instance, the source of truth for node availability. Priority: 1. Native integration node — if a compatible native node is listed below, prefer it. If the requested operation is verified as supported, MUST use it. If the operation is unverified, still prefer the native node and record nodeChoiceReason. 2. HTTP Request — only when no compatible native node is listed, when the native node is verified not to support the operation, or when the user explicitly requests direct HTTP/API usage (genericNodeOverride). 3. Code / Set / IF — only for transformation, logic, calculations, parsing, branching. NEVER as an integration substitute. Forbidden: HTTP Request for an integration with a listed compatible native node; Code calling an external API when a native or HTTP node fits. Do not assume a native exists because n8n generally supports the provider. Generic choices MUST include nodeChoiceReason.</node_selection_policy>",
-      'Name every step[].integration and blueprint integration with the EXACT provider key from the connected list above (e.g. "slack", never "Slack channel" or "Slack (must be connected)"). Leave step[].integration EMPTY for structural steps (webhook, schedule, code, set, httpRequest, if, respond) and for generic HTTP calls — set it ONLY when the step calls a real third-party service. If the automation needs an integration that is NOT connected, do NOT invent a name for it — omit it from the steps and state the missing connection plainly in the summary instead.',
+      "<node_selection_policy>Jaafar builds against the user's connected n8n instance, the source of truth for node availability. Priority: 1. Native integration node — if a compatible native node is listed below, prefer it. If the requested operation is verified as supported, MUST use it. If the operation is unverified, still prefer the native node and record nodeChoiceReason. 2. HTTP Request — only when no compatible native node is listed, when the native node is verified not to support the operation, or when the user explicitly requests direct HTTP/API usage (genericNodeOverride). 3. Code / Set / IF — only for transformation, logic, calculations, parsing, branching. NEVER as an integration substitute. Forbidden: HTTP Request for an integration with a listed compatible native node; Code calling an external API when a native or HTTP node fits. Do not assume a native exists because n8n generally supports the provider. Generic choices MUST include nodeChoiceReason. Missing provider credentials NEVER change node selection — still choose the native node; credentials are a runtime concern, not a design concern.</node_selection_policy>",
+      'Name every step[].integration and blueprint integration with the EXACT provider key (e.g. "slack", "gmail", never "Slack channel" or "Slack (must be connected)"). Leave step[].integration EMPTY for structural steps (webhook, schedule, code, set, httpRequest, if, respond) and for generic HTTP calls — set it ONLY when the step calls a real third-party service. If the automation needs a supported integration that is NOT connected, KEEP it in the plan with its native node — do NOT omit, replace, or invent a different name for it. State the missing connection plainly in the summary instead; the workflow will be built anyway and marked as needing credentials.',
       'In n8n expressions reference earlier steps by their step NAME (e.g. {{$node["Receive order"].json}}), never by id. Keep every {{ }} balanced inside each string.',
       '<request_context>',
       this.contextManager.renderToPromptText(planContext),

@@ -384,4 +384,25 @@ describe('ToolExecutorService', () => {
     });
     expect(n8n.execute).not.toHaveBeenCalled();
   });
+
+  it('returns CREDENTIALS_REQUIRED without executing when provider credentials are missing', async () => {
+    const n8n = { execute: vi.fn() };
+    const { service } = setup();
+    (service as unknown as { n8n: unknown }).n8n = n8n;
+
+    const result = await service.execute(
+      tool({
+        id: 'invoice-sync-b7e2c1aa',
+        executionMode: 'n8n' as const,
+        unavailableReason: 'CREDENTIALS_REQUIRED' as const,
+      }),
+      request(),
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { code: 'CREDENTIALS_REQUIRED', retryable: false },
+    });
+    expect(n8n.execute).not.toHaveBeenCalled();
+  });
 });

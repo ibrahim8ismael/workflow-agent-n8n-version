@@ -27,6 +27,7 @@ export interface BuilderValidationResult {
   warnings: PlanReviewIssue[];
   coverage: Array<{ requirementId: string; field: string; required: boolean; stepIds: string[] }>;
   nodeTypes: string[];
+  readinessBlockers: import('../../automations/constants/automation-readiness.constants').ReadinessBlocker[];
 }
 
 export interface BuilderInput {
@@ -120,10 +121,18 @@ export class AutomationWorkflowBuilderService {
       warnings,
       coverage: reviewed.coverage,
       nodeTypes,
+      readinessBlockers: reviewed.readinessBlockers,
     };
   }
 
-  /** Validates, provisions, versions, and records — or throws. */
+  /**
+   * Validates, provisions, versions, and records — or throws on REAL failures.
+   *
+   * Missing provider credentials (NEEDS_CREDENTIAL) are NOT failures: they
+   * return a successful build with `buildable=true, readyToRun=false`.
+   * Only static validation errors, n8n connection failures, workflow
+   * creation/persistence failures, and structural provisioning failures throw.
+   */
   async build(input: BuilderInput): Promise<BuiltAutomation> {
     const validation = await this.validateOnly(input);
     if (!validation.valid) {
@@ -151,7 +160,12 @@ export class AutomationWorkflowBuilderService {
         provisioned.lastError ?? 'Automation provisioning failed in the client n8n instance',
       );
     }
+    // Credential blockers are successful builds that are not yet runnable —
+    // do NOT throw when `readyToRun=false`.
     if (input.runId) {
+      const readyNote = provisioned.readyToRun
+        ? `automation provisioned (workflow v${provisioned.version})`
+        : `automation built but awaiting credentials (workflow v${provisioned.version})`;
       await this.agentRuns.recordArtifacts(
         input.runId,
         {
@@ -160,17 +174,21 @@ export class AutomationWorkflowBuilderService {
             valid: true,
             warnings: validation.warnings,
             coverage: validation.coverage,
+            readinessBlockers: provisioned.readinessBlockers,
           } as never,
           executionResults: {
             automationId: provisioned.id,
             externalWorkflowId: provisioned.externalWorkflowId,
             webhookPath: provisioned.webhookPath,
             automationVersion: provisioned.version,
+            buildable: provisioned.buildable,
+            readyToRun: provisioned.readyToRun,
+            readinessBlockers: provisioned.readinessBlockers,
           } as never,
           workflowId: provisioned.externalWorkflowId,
           workflowVersion: provisioned.version,
         },
-        `automation provisioned (workflow v${provisioned.version})`,
+        readyNote,
       );
     }
     return { automation: provisioned, validation };
@@ -244,13 +262,16 @@ export class AutomationWorkflowBuilderService {
 
   /**
    * Every step must resolve to a real node: steps without a nodeHint fall
-   * back to HTTP/Code skeletons at provisioning (warning, not error), steps
-   * with a malformed or inventory-unknown node type are hard errors —
-   * hallucinated nodes never reach n8n. A generic HTTP/Code pick for a
-   * connected integration with a proven native node is also a hard error —
-   * unless review already reported it for this step (intra-call dedup: the
-   * same violation must not burn the replan budget twice) or the user
-   * explicitly requested the generic node.
+   * back to HTTP/Code skeletons at provisioning (warning, not error).
+   * Malformed node types are hard errors. Inventory-unknown node types are
+   * hard errors UNLESS the step references a known provider and the hint is
+   * a plausible native node for it (e.g. gmail → gmailTrigger): in that case
+   * the missing inventory observation is likely caused by never-connected
+   * credentials, not hallucination — retain the node with a verification
+   * warning and let n8n validate at createWorkflow(). A generic HTTP/Code
+   * pick for a connected integration with a proven native node is also a
+   * hard error — unless review already reported it for this step
+   * (intra-call dedup) or the user explicitly requested the generic node.
    */
   private async validateNodes(
     blueprint: AutomationBlueprint,

@@ -19,6 +19,8 @@ const CACHE_TTL_MS = 30_000;
  * tools, with a short-TTL cache. Automations whose connection is missing or
  * not ACTIVE are still listed — flagged INTEGRATION_UNAVAILABLE — so the
  * planner reacts instead of silently losing the capability (PLAN Step 10).
+ * Automations built but awaiting provider credentials (`readyToRun=false`)
+ * are flagged CREDENTIALS_REQUIRED: the workflow exists but must not execute.
  */
 @Injectable()
 export class AutomationToolResolverService {
@@ -62,10 +64,16 @@ export class AutomationToolResolverService {
     description: string | null;
     blueprint: unknown;
     webhookPath: string | null;
+    buildable?: boolean | null;
+    readyToRun?: boolean | null;
+    readinessBlockers?: unknown;
     connection: { id: string; baseUrl: string; status: string; deletedAt: Date | null } | null;
   }): ToolDefinition {
     const connectionUsable =
       row.connection && !row.connection.deletedAt && row.connection.status === 'ACTIVE';
+    // Legacy rows predate readiness columns: ACTIVE + external workflow
+    // implies previously successful provision; otherwise require explicit flag.
+    const readyToRun = row.readyToRun ?? true;
     const blueprint = (row.blueprint ?? {}) as {
       goal?: string;
       summary?: string;
@@ -91,10 +99,15 @@ export class AutomationToolResolverService {
       idempotent: true,
       successCriteria: [],
       permissionScope: 'automation',
-      binding: connectionUsable
-        ? { baseUrl: row.connection!.baseUrl, webhookPath: row.webhookPath ?? row.id }
-        : undefined,
-      unavailableReason: connectionUsable ? undefined : 'INTEGRATION_UNAVAILABLE',
+      binding:
+        connectionUsable && readyToRun
+          ? { baseUrl: row.connection!.baseUrl, webhookPath: row.webhookPath ?? row.id }
+          : undefined,
+      unavailableReason: !connectionUsable
+        ? 'INTEGRATION_UNAVAILABLE'
+        : !readyToRun
+          ? 'CREDENTIALS_REQUIRED'
+          : undefined,
     };
   }
 

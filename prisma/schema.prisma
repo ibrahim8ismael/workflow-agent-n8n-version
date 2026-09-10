@@ -578,6 +578,13 @@ model Automation {
   // trail — rollback re-provisions a history entry as a new version).
   version            Int       @default(1)
   blueprintHistory   Json?
+  // ── Credential-independent readiness ──
+  // STATIC blueprint (nodes/integrations) vs DYNAMIC readiness (credential
+  // state). `status=ACTIVE` means the workflow was created/provisioned; it
+  // does NOT imply credentials are ready — check `readyToRun` instead.
+  buildable          Boolean   @default(false)
+  readyToRun         Boolean   @default(false)
+  readinessBlockers  Json?
   userId             String?
   organizationId     String? // exactly one populated (owner XOR)
   createdAt          DateTime  @default(now())

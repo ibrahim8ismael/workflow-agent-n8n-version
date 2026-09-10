@@ -286,6 +286,13 @@ export class ToolExecutorService {
         `Automation "${tool.name}" is unavailable: its n8n connection is not ACTIVE`,
       );
     }
+    // Credential independence: the workflow exists but provider credentials
+    // are missing. Never execute — report CREDENTIALS_REQUIRED explicitly.
+    if (tool.unavailableReason === 'CREDENTIALS_REQUIRED') {
+      throw new CredentialsRequiredError(
+        `Automation "${tool.name}" is built but awaiting credentials: connect the required accounts before running`,
+      );
+    }
     return this.n8n.execute({
       workflow: tool.slug,
       input,
@@ -370,6 +377,9 @@ export class ToolExecutorService {
   private normalizeError(error: unknown): ToolError {
     if (error instanceof IntegrationUnavailableError) {
       return { code: 'INTEGRATION_UNAVAILABLE', message: error.message, retryable: false };
+    }
+    if (error instanceof CredentialsRequiredError) {
+      return { code: 'CREDENTIALS_REQUIRED', message: error.message, retryable: false };
     }
     if (error instanceof ApprovalRequiredError) {
       return { code: 'APPROVAL_REQUIRED', message: error.message, retryable: false };
@@ -483,6 +493,13 @@ export class IntegrationUnavailableError extends Error {
   constructor(message: string) {
     super(message);
     this.name = IntegrationUnavailableError.name;
+  }
+}
+
+export class CredentialsRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = CredentialsRequiredError.name;
   }
 }
 

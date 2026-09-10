@@ -152,9 +152,16 @@ describe('JaafarAutomationGraphService', () => {
         errors: [],
         warnings: [],
         coverage: [],
+        readinessBlockers: [],
       }),
     );
-    builder.validateOnly.mockResolvedValue({ valid: true, errors: [], warnings: [], coverage: [] });
+    builder.validateOnly.mockResolvedValue({
+      valid: true,
+      errors: [],
+      warnings: [],
+      coverage: [],
+      readinessBlockers: [],
+    });
     builder.build.mockResolvedValue({
       automation: {
         id: 'auto-1',
@@ -162,6 +169,9 @@ describe('JaafarAutomationGraphService', () => {
         externalWorkflowId: 'wf-1',
         webhookPath: 'orders-auto',
         version: 1,
+        buildable: true,
+        readyToRun: true,
+        readinessBlockers: [],
       },
       validation: { valid: true },
     });
@@ -330,23 +340,63 @@ describe('JaafarAutomationGraphService', () => {
     expect(builder.build).not.toHaveBeenCalled();
   });
 
-  it('asks to connect the integration instead of burning the replan budget', async () => {
+  it('asks to clarify unknown integrations instead of burning the replan budget', async () => {
     planReview.review.mockReturnValue({
       blueprint,
       valid: false,
-      errors: [{ code: 'UNKNOWN_INTEGRATION', message: 'Integration "whatsapp" is not connected' }],
+      errors: [
+        {
+          code: 'UNKNOWN_INTEGRATION',
+          message: 'Integration "fakecrmpro" is not a known provider',
+        },
+      ],
       warnings: [],
       coverage: [],
+      readinessBlockers: [],
     });
 
     const result = await service().run(input());
 
     expect(result.status).toBe('WAITING');
-    expect(result.response).toContain('whatsapp');
-    expect(result.response).toContain('connect');
+    expect(result.response).toContain('fakecrmpro');
     // No replan, no build, no throw — one plan call total.
     expect(llmRuntime.generateObject).toHaveBeenCalledTimes(1);
     expect(builder.build).not.toHaveBeenCalled();
+  });
+
+  it('completes with a credential message when the build is not ready to run', async () => {
+    builder.build.mockResolvedValue({
+      automation: {
+        id: 'auto-1',
+        status: 'ACTIVE',
+        externalWorkflowId: 'wf-1',
+        webhookPath: 'orders-auto',
+        version: 1,
+        buildable: true,
+        readyToRun: false,
+        readinessBlockers: [
+          { nodeId: 'S1', integration: 'gmail', credentialStatus: 'NEEDS_CREDENTIAL' },
+          { nodeId: 'S2', integration: 'slack', credentialStatus: 'NEEDS_CREDENTIAL' },
+        ],
+      },
+      validation: { valid: true },
+    });
+    validator.validate.mockResolvedValue({
+      ok: true,
+      checks: [{ name: 'workflow_responded', passed: true }],
+      durationMs: 5,
+      testInput: { test: true },
+    });
+
+    const svc = service();
+    await svc.run(input());
+    const resumed = await svc.resume('run-1', { approved: true }, { userId: 'user-1' });
+
+    expect(resumed.status).toBe('COMPLETED');
+    expect(resumed.response).toContain("I've built");
+    expect(resumed.response).toContain('Gmail');
+    expect(resumed.response).toContain('Slack');
+    expect(validator.validate).not.toHaveBeenCalled();
   });
 
   it('replans with static feedback instead of failing the run', async () => {

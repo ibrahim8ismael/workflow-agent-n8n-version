@@ -36,6 +36,9 @@ const automationRow = (overrides: Record<string, unknown> = {}) => ({
   lastError: null,
   version: 1,
   blueprintHistory: [],
+  buildable: false,
+  readyToRun: false,
+  readinessBlockers: [],
   userId: 'user-1',
   organizationId: null,
   createdAt: new Date(),
@@ -53,7 +56,11 @@ describe('AutomationsService', () => {
     softDelete: ReturnType<typeof vi.fn>;
     findActiveConnectionId: ReturnType<typeof vi.fn>;
   };
-  let provisioner: { provision: ReturnType<typeof vi.fn> };
+  let provisioner: {
+    provision: ReturnType<typeof vi.fn>;
+    inspectReadiness: ReturnType<typeof vi.fn>;
+    activateWorkflow: ReturnType<typeof vi.fn>;
+  };
   let connections: { resolveCredentials: ReturnType<typeof vi.fn> };
   let service: AutomationsService;
 
@@ -68,9 +75,21 @@ describe('AutomationsService', () => {
       findActiveConnectionId: vi.fn().mockResolvedValue('conn-1'),
     } as never;
     provisioner = {
-      provision: vi
-        .fn()
-        .mockResolvedValue({ externalWorkflowId: 'wf-1', webhookPath: 'invoice-sync-b7e2c1aa' }),
+      provision: vi.fn().mockResolvedValue({
+        externalWorkflowId: 'wf-1',
+        webhookPath: 'invoice-sync-b7e2c1aa',
+        buildable: true,
+        readyToRun: true,
+        readinessBlockers: [],
+        activated: true,
+        dataTableIds: {},
+      }),
+      inspectReadiness: vi.fn().mockResolvedValue({
+        buildable: true,
+        readyToRun: true,
+        readinessBlockers: [],
+      }),
+      activateWorkflow: vi.fn().mockResolvedValue(undefined),
     } as never;
     connections = {
       resolveCredentials: vi
@@ -243,5 +262,66 @@ describe('AutomationsService', () => {
       service.updateBlueprint('auto-1', { name: '' } as never, { userId: 'user-1' }),
     ).rejects.toThrow();
     expect(repository.update).not.toHaveBeenCalled();
+  });
+
+  it('saves missing provider credentials as readiness blockers instead of FAILED', async () => {
+    provisioner.provision = vi.fn().mockResolvedValue({
+      externalWorkflowId: 'wf-1',
+      webhookPath: 'invoice-sync-b7e2c1aa',
+      buildable: true,
+      readyToRun: false,
+      readinessBlockers: [
+        { nodeId: 'S1', integration: 'gmail', credentialStatus: 'NEEDS_CREDENTIAL' },
+      ],
+      activated: false,
+      dataTableIds: {},
+    });
+
+    const result = await service.approve('auto-1', { userId: 'user-1' });
+
+    expect(result.status).toBe(AUTOMATION_STATUS.ACTIVE);
+    expect(result.buildable).toBe(true);
+    expect(result.readyToRun).toBe(false);
+    expect(result.readinessBlockers).toHaveLength(1);
+    expect(repository.update).toHaveBeenCalledWith(
+      'auto-1',
+      expect.objectContaining({ buildable: true, readyToRun: false }),
+    );
+  });
+
+  it('refreshes readiness and activates the existing workflow without recreating it', async () => {
+    const stored = automationRow({
+      status: AUTOMATION_STATUS.ACTIVE,
+      externalWorkflowId: 'wf-1',
+      buildable: true,
+      readyToRun: false,
+      readinessBlockers: [
+        { nodeId: 'S1', integration: 'gmail', credentialStatus: 'NEEDS_CREDENTIAL' },
+      ],
+    });
+    repository.findById = vi.fn().mockResolvedValue(stored);
+    const updates: Array<Record<string, unknown>> = [];
+    repository.update = vi.fn().mockImplementation(async (_id, data) => {
+      updates.push(data as Record<string, unknown>);
+      Object.assign(stored, data);
+      return stored;
+    });
+    provisioner.inspectReadiness = vi.fn().mockResolvedValue({
+      buildable: true,
+      readyToRun: true,
+      readinessBlockers: [],
+    });
+
+    const result = await service.refreshReadiness('auto-1', { userId: 'user-1' });
+
+    expect(provisioner.inspectReadiness).toHaveBeenCalled();
+    expect(provisioner.provision).not.toHaveBeenCalled();
+    expect(provisioner.activateWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ baseUrl: 'https://client.example.com' }),
+      'wf-1',
+    );
+    expect(result.buildable).toBe(true);
+    expect(result.readyToRun).toBe(true);
+    expect(result.readinessBlockers).toEqual([]);
   });
 });

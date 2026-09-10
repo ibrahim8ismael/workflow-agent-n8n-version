@@ -69,6 +69,10 @@ describe('N8nProvisionerService', () => {
       externalWorkflowId: 'wf-123',
       webhookPath: 'invoice-sync-b7e2c1aa',
       dataTableIds: {},
+      buildable: true,
+      readyToRun: true,
+      readinessBlockers: [],
+      activated: true,
     });
     expect(clientApi.createWorkflow).toHaveBeenCalledWith(
       { baseUrl: 'https://client.example.com', apiKey: 'key' },
@@ -390,7 +394,7 @@ describe('N8nProvisionerService', () => {
     });
   });
 
-  it('fails clearly when first-use credentials are ambiguous', async () => {
+  it('records a readiness blocker instead of failing when first-use credentials are ambiguous', async () => {
     const service = new N8nProvisionerService(clientApi);
     vi.mocked(clientApi.listCredentials).mockResolvedValueOnce([
       { id: 'cred-1', name: 'WA one', type: 'whatsAppCloudApi' },
@@ -402,25 +406,78 @@ describe('N8nProvisionerService', () => {
       dataTablesSupported: false,
     };
 
-    await expect(
-      service.provision({
-        automationId: 'b7e2c1aa-1234-5678',
-        blueprint: {
-          ...blueprint,
-          trigger: { type: 'webhook', config: {} },
-          steps: [
-            {
-              name: 'Send WhatsApp',
-              action: 'Send a WhatsApp message',
-              integration: 'whatsapp',
-              config: {},
-              nodeHint: { type: 'n8n-nodes-base.whatsApp', typeVersion: 1, parameters: {} },
-            },
-          ],
-        },
-        connection: { baseUrl: 'https://client.example.com', apiKey: 'key' },
-        instance,
-      }),
-    ).rejects.toThrow('Cannot uniquely resolve a credential');
+    const result = await service.provision({
+      automationId: 'b7e2c1aa-1234-5678',
+      blueprint: {
+        ...blueprint,
+        trigger: { type: 'webhook', config: {} },
+        steps: [
+          {
+            name: 'Send WhatsApp',
+            action: 'Send a WhatsApp message',
+            integration: 'whatsapp',
+            config: {},
+            nodeHint: { type: 'n8n-nodes-base.whatsApp', typeVersion: 1, parameters: {} },
+          },
+        ],
+      },
+      connection: { baseUrl: 'https://client.example.com', apiKey: 'key' },
+      instance,
+    });
+
+    expect(result.buildable).toBe(true);
+    expect(result.readyToRun).toBe(false);
+    expect(result.activated).toBe(false);
+    expect(result.readinessBlockers).toHaveLength(1);
+    expect(result.readinessBlockers[0]).toMatchObject({
+      integration: 'whatsapp',
+      credentialStatus: 'NEEDS_CREDENTIAL',
+    });
+    expect(result.readinessBlockers[0]?.detail).toContain('Cannot uniquely resolve');
+    // Workflow is still created in n8n even though credentials are ambiguous.
+    expect(clientApi.createWorkflow).toHaveBeenCalled();
+  });
+
+  it('creates the workflow but skips activation when provider credentials are missing', async () => {
+    const service = new N8nProvisionerService(clientApi);
+    vi.mocked(clientApi.listCredentials).mockResolvedValueOnce([]);
+    vi.mocked(clientApi.activateWorkflow).mockClear();
+
+    const result = await service.provision({
+      automationId: 'b7e2c1aa-1234-5678',
+      blueprint: {
+        ...blueprint,
+        trigger: { type: 'webhook', config: {} },
+        steps: [
+          {
+            id: 'S1',
+            name: 'Watch Gmail',
+            action: 'Watch for new Gmail messages',
+            integration: 'gmail',
+            config: {},
+            nodeHint: { type: 'n8n-nodes-base.gmailTrigger', typeVersion: 1, parameters: {} },
+          },
+          {
+            id: 'S2',
+            name: 'Send Slack',
+            action: 'Send a Slack notification',
+            integration: 'slack',
+            config: {},
+            nodeHint: { type: 'n8n-nodes-base.slack', typeVersion: 2, parameters: {} },
+          },
+        ],
+        integrations: ['gmail', 'slack'],
+      },
+      connection: { baseUrl: 'https://client.example.com', apiKey: 'key' },
+      instance: { nodeTypes: [], dataTables: [], dataTablesSupported: false },
+    });
+
+    expect(result.buildable).toBe(true);
+    expect(result.readyToRun).toBe(false);
+    expect(result.activated).toBe(false);
+    expect(result.externalWorkflowId).toBe('wf-123');
+    expect(result.readinessBlockers.map((b) => b.integration).sort()).toEqual(['gmail', 'slack']);
+    expect(clientApi.createWorkflow).toHaveBeenCalled();
+    expect(clientApi.activateWorkflow).not.toHaveBeenCalled();
   });
 });

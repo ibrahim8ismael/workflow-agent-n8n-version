@@ -54,8 +54,14 @@ export interface ToolDefinition {
   permissionScope: string;
   /** Present for automation-sourced tools bound to a client n8n webhook. */
   binding?: ToolN8nBinding;
-  /** Set when the automation exists but its n8n connection is unusable. */
-  unavailableReason?: 'INTEGRATION_UNAVAILABLE';
+  /**
+   * Set when the automation exists but cannot execute:
+   * - INTEGRATION_UNAVAILABLE: n8n connection missing/not ACTIVE.
+   * - CREDENTIALS_REQUIRED: workflow built but provider credentials missing
+   *   (`readyToRun=false`). The workflow exists; connect credentials, refresh
+   *   readiness, then execute.
+   */
+  unavailableReason?: 'INTEGRATION_UNAVAILABLE' | 'CREDENTIALS_REQUIRED';
 }
 
 export interface ToolCall {

@@ -48,6 +48,12 @@ export class AutomationsController {
     return this.automations.reprovision(id, this.scope(user));
   }
 
+  @Post(':id/readiness/refresh')
+  @HttpCode(HttpStatus.OK)
+  async refreshReadiness(@Param('id') id: string, @CurrentUser() user: ControllerUser) {
+    return this.automations.refreshReadiness(id, this.scope(user));
+  }
+
   @Delete(':id')
   async remove(@Param('id') id: string, @CurrentUser() user: ControllerUser) {
     return this.automations.softDelete(id, this.scope(user));

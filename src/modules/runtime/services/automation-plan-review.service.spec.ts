@@ -80,7 +80,20 @@ describe('AutomationPlanReviewService', () => {
 
   it('rejects unknown integrations when capabilities are provided', () => {
     const result = service.review({
-      blueprint: blueprint(),
+      blueprint: blueprint({
+        steps: [
+          {
+            name: 'Create customer',
+            action: 'Create the customer in FakeCRMPro',
+            integration: 'fakecrmpro',
+            requirementIds: ['R1'],
+            expectedOutput: 'customer id',
+            config: {},
+            nodeHint: { type: 'n8n-nodes-base.httpRequest', parameters: {} },
+          },
+        ],
+        integrations: ['fakecrmpro'],
+      }),
       requirements,
       capabilities: [
         {
@@ -95,6 +108,68 @@ describe('AutomationPlanReviewService', () => {
 
     expect(result.valid).toBe(false);
     expect(result.errors.some((e) => e.code === 'UNKNOWN_INTEGRATION')).toBe(true);
+  });
+
+  it('keeps known-but-disconnected providers as valid plans with readiness blockers', () => {
+    const result = service.review({
+      blueprint: blueprint(),
+      requirements,
+      capabilities: [
+        {
+          provider: 'shopify',
+          displayName: 'Shopify',
+          source: 'n8n',
+          connectionStatus: 'CONNECTED',
+          credentialsAvailable: true,
+        },
+      ],
+    });
+
+    // zoho is a known provider without credentials → valid + warning, not error.
+    expect(result.valid).toBe(true);
+    expect(result.errors.some((e) => e.code === 'UNKNOWN_INTEGRATION')).toBe(false);
+    expect(result.warnings.some((w) => w.code === 'CREDENTIAL_REQUIRED')).toBe(true);
+    expect(result.readinessBlockers.some((b) => b.integration === 'zoho')).toBe(true);
+    // Original integration info is preserved for the build.
+    expect(result.blueprint.steps.map((s) => s.integration)).toContain('zoho');
+    expect(result.blueprint.integrations).toContain('zoho');
+  });
+
+  it('marks disconnected Gmail+Slack as buildable with two blockers', () => {
+    const result = service.review({
+      blueprint: blueprint({
+        steps: [
+          {
+            name: 'Watch Gmail',
+            action: 'Watch for new Gmail messages',
+            integration: 'gmail',
+            requirementIds: ['R1'],
+            expectedOutput: 'message',
+            config: {},
+            nodeHint: { type: 'n8n-nodes-base.gmailTrigger', parameters: {} },
+          },
+          {
+            name: 'Send Slack',
+            action: 'Send a Slack notification',
+            integration: 'slack',
+            requirementIds: ['R2'],
+            expectedOutput: 'message id',
+            config: {},
+            nodeHint: { type: 'n8n-nodes-base.slack', parameters: {} },
+          },
+        ],
+        integrations: ['gmail', 'slack'],
+      }),
+      requirements,
+      capabilities: [],
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.readinessBlockers).toHaveLength(2);
+    expect(result.readinessBlockers.map((b) => b.integration).sort()).toEqual(['gmail', 'slack']);
+    expect(result.readinessBlockers.every((b) => b.credentialStatus === 'NEEDS_CREDENTIAL')).toBe(
+      true,
+    );
   });
 
   it('rejects missing triggers and duplicate steps', () => {

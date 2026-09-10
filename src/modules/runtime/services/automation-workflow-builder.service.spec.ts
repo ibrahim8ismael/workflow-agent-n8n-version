@@ -81,6 +81,9 @@ describe('AutomationWorkflowBuilderService', () => {
       externalWorkflowId: 'wf-1',
       webhookPath: 'orders-auto',
       version: 1,
+      buildable: true,
+      readyToRun: true,
+      readinessBlockers: [],
     });
   });
 
@@ -330,6 +333,35 @@ describe('AutomationWorkflowBuilderService', () => {
     await expect(service().build(input())).rejects.toThrow('credential rejected');
   });
 
+  it('returns buildable-but-not-ready instead of throwing on missing credentials', async () => {
+    automations.approve.mockResolvedValue({
+      id: 'auto-1',
+      status: 'ACTIVE',
+      externalWorkflowId: 'wf-1',
+      webhookPath: 'orders-auto',
+      version: 1,
+      buildable: true,
+      readyToRun: false,
+      readinessBlockers: [
+        { nodeId: 'S1', integration: 'gmail', credentialStatus: 'NEEDS_CREDENTIAL' },
+      ],
+    });
+
+    const { automation, validation } = await service().build(input());
+
+    expect(validation.valid).toBe(true);
+    expect(automation.buildable).toBe(true);
+    expect(automation.readyToRun).toBe(false);
+    expect(automation.readinessBlockers).toHaveLength(1);
+    expect(agentRuns.recordArtifacts).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        executionResults: expect.objectContaining({ readyToRun: false }),
+      }),
+      expect.stringContaining('awaiting credentials'),
+    );
+  });
+
   it('rolls back through automation versions and records the run', async () => {
     automations.rollbackToVersion.mockResolvedValue({
       id: 'auto-1',
@@ -467,5 +499,64 @@ describe('AutomationWorkflowBuilderService native backstop', () => {
     });
 
     expect(validation.errors.some((e) => e.message.includes('native'))).toBe(false);
+  });
+
+  it('builds known native nodes missing from inventory with a verification warning', async () => {
+    nodeInventory.describeNodeType.mockRejectedValue(
+      new N8nNodeSchemaError('Unknown n8n node type', 'NODE_NOT_FOUND', {}),
+    );
+    const validation = await service().validateOnly({
+      blueprint: blueprint({
+        steps: [
+          {
+            id: 'S1',
+            name: 'Watch Gmail',
+            action: 'Watch for new Gmail messages',
+            integration: 'gmail',
+            config: {},
+            requirementIds: ['R1'],
+            expectedOutput: 'message',
+            nodeHint: { type: 'n8n-nodes-base.gmailTrigger', parameters: {} },
+          },
+        ],
+        integrations: ['gmail'],
+      }),
+      scope: { organizationId: 'org-1' },
+      requirements: [{ id: 'R1', field: 'watch gmail', required: true }],
+      capabilities: [],
+    });
+
+    expect(validation.valid).toBe(true);
+    expect(validation.warnings.some((w) => w.message.includes('building anyway'))).toBe(true);
+    expect(validation.nodeTypes).toContain('n8n-nodes-base.gmailTrigger');
+  });
+
+  it('still rejects hallucinated nodes for unknown providers', async () => {
+    nodeInventory.describeNodeType.mockRejectedValue(
+      new N8nNodeSchemaError('Unknown n8n node type', 'NODE_NOT_FOUND', {}),
+    );
+    const validation = await service().validateOnly({
+      blueprint: blueprint({
+        steps: [
+          {
+            id: 'S1',
+            name: 'Create customer',
+            action: 'Create the customer',
+            integration: 'fakecrmpro',
+            config: {},
+            requirementIds: ['R1'],
+            expectedOutput: 'customer id',
+            nodeHint: { type: 'n8n-nodes-base.fakeCrmPro', parameters: {} },
+          },
+        ],
+        integrations: ['fakecrmpro'],
+      }),
+      scope: { organizationId: 'org-1' },
+      requirements: [{ id: 'R1', field: 'create customer', required: true }],
+      capabilities: [],
+    });
+
+    expect(validation.valid).toBe(false);
+    expect(validation.errors.some((e) => e.code === 'INVALID_PLAN')).toBe(true);
   });
 });

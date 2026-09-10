@@ -62,6 +62,19 @@ describe('AutomationToolResolverService', () => {
     expect(tools[0]?.unavailableReason).toBe('INTEGRATION_UNAVAILABLE');
   });
 
+  it('flags buildable-but-not-ready automations as CREDENTIALS_REQUIRED', async () => {
+    automations.listForToolResolution = vi
+      .fn()
+      .mockResolvedValue([
+        automationRow({ buildable: true, readyToRun: false, readinessBlockers: [] }),
+      ]);
+
+    const tools = await service.listTools({ organizationId: 'org-1' });
+
+    expect(tools[0]?.binding).toBeUndefined();
+    expect(tools[0]?.unavailableReason).toBe('CREDENTIALS_REQUIRED');
+  });
+
   it('caches per scope with a short TTL', async () => {
     await service.listTools({ organizationId: 'org-1' });
     await service.listTools({ organizationId: 'org-1' });
