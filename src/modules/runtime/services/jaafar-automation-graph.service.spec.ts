@@ -206,13 +206,14 @@ describe('JaafarAutomationGraphService', () => {
     expect(agentRuns.createAgentRun).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: 'agent-1' }),
     );
-    // Phase walk: UNDERSTANDING handled at creation; PLANNING → BUILDING →
-    // STATIC_VALIDATION recorded; WAITING status parked.
+    // Phase walk: UNDERSTANDING handled at creation; PLANNING →
+    // STATIC_VALIDATION → BUILDING recorded (BUILDING only after validation
+    // passes, so replans never need BUILDING → PLANNING); WAITING parked.
     const phases = agentRuns.advance.mock.calls.map((call) => call[1].toPhase).filter(Boolean);
     expect(phases).toEqual([
       AGENT_RUN_PHASE.PLANNING,
-      AGENT_RUN_PHASE.BUILDING,
       AGENT_RUN_PHASE.STATIC_VALIDATION,
+      AGENT_RUN_PHASE.BUILDING,
     ]);
     expect(conversations.addMessage).not.toHaveBeenCalledWith(
       'conv-1',
@@ -366,6 +367,89 @@ describe('JaafarAutomationGraphService', () => {
       messages: Array<{ content: string }>;
     };
     expect(secondPrompt.messages.map((m) => m.content).join('\n')).toContain('STATIC validation');
+  });
+
+  it('walks PLANNING → STATIC_VALIDATION → replan → BUILDING without backward hops', async () => {
+    builder.validateOnly
+      .mockResolvedValueOnce({
+        valid: false,
+        errors: [{ code: 'INVALID_PLAN', message: 'Schedule triggers need config.every' }],
+        warnings: [{ code: 'UNMAPPED_STEP', message: 'Prefer the native node' }],
+        coverage: [],
+      })
+      .mockResolvedValue({ valid: true, errors: [], warnings: [], coverage: [] });
+
+    const result = await service().run(input());
+
+    expect(result.status).toBe('WAITING');
+    const phases = agentRuns.advance.mock.calls.map((call) => call[1].toPhase).filter(Boolean);
+    // BUILDING is entered once, after the passing validation — never before
+    // the failed one, so no BUILDING → PLANNING hop exists.
+    expect(phases).toEqual([
+      AGENT_RUN_PHASE.PLANNING,
+      AGENT_RUN_PHASE.PLANNING,
+      AGENT_RUN_PHASE.STATIC_VALIDATION,
+      AGENT_RUN_PHASE.BUILDING,
+    ]);
+  });
+
+  it('persists validationResult before replanning a failed static check', async () => {
+    builder.validateOnly
+      .mockResolvedValueOnce({
+        valid: false,
+        errors: [{ code: 'INVALID_PLAN', message: 'Schedule triggers need config.every' }],
+        warnings: [{ code: 'UNMAPPED_STEP', message: 'Prefer the native node' }],
+        coverage: [{ requirementId: 'R1' }],
+      })
+      .mockResolvedValue({ valid: true, errors: [], warnings: [], coverage: [] });
+
+    await service().run(input());
+
+    expect(agentRuns.recordArtifacts).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        validationResult: expect.objectContaining({
+          valid: false,
+          errors: [{ code: 'INVALID_PLAN', message: 'Schedule triggers need config.every' }],
+          warnings: [{ code: 'UNMAPPED_STEP', message: 'Prefer the native node' }],
+          coverage: [{ requirementId: 'R1' }],
+        }),
+      }),
+      'static validation failed',
+    );
+  });
+
+  it('persists validationResult when the attempt budget is exhausted', async () => {
+    builder.validateOnly.mockResolvedValue({
+      valid: false,
+      errors: [{ code: 'INVALID_PLAN', message: 'bad node' }],
+      warnings: [],
+      coverage: [],
+    });
+
+    await expect(service().run(input())).rejects.toThrow('static validation');
+    expect(agentRuns.recordArtifacts).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({ validationResult: expect.objectContaining({ valid: false }) }),
+      'static validation failed',
+    );
+  });
+
+  it('records understanding failure diagnostics without swallowing the error', async () => {
+    understandingService.understand.mockRejectedValue(
+      Object.assign(new Error('No object generated: empty [structured-output:EMPTY]'), {
+        kind: 'EMPTY',
+        details: { rawSample: '', finishReason: 'stop' },
+      }),
+    );
+
+    await expect(service().run(input())).rejects.toThrow('No object generated');
+    expect(runs.updateMetadata).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        understandingFailure: expect.objectContaining({ kind: 'EMPTY', finishReason: 'stop' }),
+      }),
+    );
   });
 
   it('replans a generic node pick into the native node after NATIVE_NODE_AVAILABLE', async () => {

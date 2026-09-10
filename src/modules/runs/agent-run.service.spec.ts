@@ -361,4 +361,63 @@ describe('AgentRunService', () => {
       );
     });
   });
+
+  describe('validate-before-build ordering', () => {
+    it('allows PLANNING → STATIC_VALIDATION for the pre-build check', async () => {
+      vi.mocked(mockRepo.findById).mockResolvedValue(
+        run({ status: 'EXECUTING', currentPhase: AGENT_RUN_PHASE.PLANNING }) as never,
+      );
+
+      await service.advance('run-1', { toPhase: AGENT_RUN_PHASE.STATIC_VALIDATION });
+
+      expect(mockRepo.transitionRun).toHaveBeenCalledWith(
+        'run-1',
+        3,
+        expect.objectContaining({ currentPhase: AGENT_RUN_PHASE.STATIC_VALIDATION }),
+        expect.anything(),
+      );
+    });
+
+    it('allows BUILDING → EXECUTING for provisioning after validation', async () => {
+      vi.mocked(mockRepo.findById).mockResolvedValue(
+        run({ status: 'EXECUTING', currentPhase: AGENT_RUN_PHASE.BUILDING }) as never,
+      );
+
+      await service.advance('run-1', {
+        toPhase: AGENT_RUN_PHASE.EXECUTING,
+        toStatus: 'EXECUTING',
+      });
+
+      expect(mockRepo.transitionRun).toHaveBeenCalledWith(
+        'run-1',
+        3,
+        expect.objectContaining({ currentPhase: AGENT_RUN_PHASE.EXECUTING }),
+        expect.anything(),
+      );
+    });
+
+    it('still rejects BUILDING → PLANNING — replans never go backward', async () => {
+      vi.mocked(mockRepo.findById).mockResolvedValue(
+        run({ status: 'EXECUTING', currentPhase: AGENT_RUN_PHASE.BUILDING }) as never,
+      );
+
+      await expect(service.advance('run-1', { toPhase: AGENT_RUN_PHASE.PLANNING })).rejects.toThrow(
+        'Invalid agent phase transition: BUILDING → PLANNING',
+      );
+      expect(mockRepo.transitionRun).not.toHaveBeenCalled();
+    });
+
+    it('treats PLANNING → PLANNING replan as a no-op', async () => {
+      vi.mocked(mockRepo.findById).mockResolvedValue(
+        run({ status: 'EXECUTING', currentPhase: AGENT_RUN_PHASE.PLANNING }) as never,
+      );
+
+      await service.advance('run-1', {
+        toPhase: AGENT_RUN_PHASE.PLANNING,
+        reason: 'static validation failed — replanning',
+      });
+
+      expect(mockRepo.transitionRun).not.toHaveBeenCalled();
+    });
+  });
 });

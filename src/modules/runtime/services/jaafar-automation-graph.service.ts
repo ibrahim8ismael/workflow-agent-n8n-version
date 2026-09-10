@@ -526,16 +526,25 @@ export class JaafarAutomationGraphService {
           organizationId: state.input.organizationId,
           mode: 'planning',
         });
-        const understanding = await this.understandingService.understand({
-          userMessage: state.input.userMessage,
-          history: loaded.history,
-          agentName: loaded.agent.name,
-          agentInstructions: loaded.agent.instructions,
-          memoryReferences: loaded.memoryReferences,
-          knowledgeReferences: loaded.knowledgeReferences,
-          effort: state.input.effort,
-          ...(state.input.pendingContext ? { pendingContext: state.input.pendingContext } : {}),
-        });
+        let understanding: RequestUnderstandingResult;
+        try {
+          understanding = await this.understandingService.understand({
+            userMessage: state.input.userMessage,
+            history: loaded.history,
+            agentName: loaded.agent.name,
+            agentInstructions: loaded.agent.instructions,
+            memoryReferences: loaded.memoryReferences,
+            knowledgeReferences: loaded.knowledgeReferences,
+            effort: state.input.effort,
+            ...(state.input.pendingContext ? { pendingContext: state.input.pendingContext } : {}),
+          });
+        } catch (error) {
+          // Persist the failure diagnostic before the run fails — without
+          // this, structured-output failures are undebuggable (no raw
+          // sample, no classification, no finish reason anywhere).
+          await this.recordUnderstandingFailure(state.input.runId, error);
+          throw error;
+        }
         await this.recordUnderstanding(state.input.runId, understanding);
         await this.recordUsage(state.input.runId, understanding.modelCall.usage);
         return {
@@ -703,11 +712,11 @@ export class JaafarAutomationGraphService {
         }
         return { blueprint: reviewed.blueprint };
       })
-      .addNode('build', async (state) => {
-        await this.agentRuns.advance(state.input.runId, {
-          toPhase: AGENT_RUN_PHASE.BUILDING,
-          reason: 'plan valid — building workflow',
-        });
+      .addNode('build', () => {
+        // Passthrough: BUILDING is entered only after static validation
+        // passes (see static_validate) so a rejected plan can replan back
+        // to PLANNING without an invalid BUILDING → PLANNING transition.
+        // The node itself stays: edges and phase-progress tokens key on it.
         return {};
       })
       .addNode('static_validate', async (state) => {
@@ -733,6 +742,20 @@ export class JaafarAutomationGraphService {
         });
         if (!validation.valid) {
           const details = validation.errors.map((e) => `${e.code}: ${e.message}`).join('; ');
+          // Persist the diagnostics before replanning or failing — a run
+          // must never lose the validation result that rejected its plan.
+          await this.agentRuns.recordArtifacts(
+            state.input.runId,
+            {
+              validationResult: {
+                valid: false,
+                errors: validation.errors,
+                warnings: validation.warnings,
+                coverage: validation.coverage,
+              } as never,
+            },
+            'static validation failed',
+          );
           // Fixable statically-rejected plans loop back into planning with the
           // exact defects (§15: fix plan → validate again) while budget
           // remains; only the truly unfixable throw.
@@ -750,6 +773,10 @@ export class JaafarAutomationGraphService {
         await this.agentRuns.advance(state.input.runId, {
           toPhase: AGENT_RUN_PHASE.STATIC_VALIDATION,
           reason: 'workflow passed static validation',
+        });
+        await this.agentRuns.advance(state.input.runId, {
+          toPhase: AGENT_RUN_PHASE.BUILDING,
+          reason: 'validated plan — building workflow',
         });
         return {};
       })
@@ -1241,6 +1268,40 @@ export class JaafarAutomationGraphService {
     if (state.verifyOk) done.push('Provisioning verified live');
     if (state.testOk) done.push('Test execution passed');
     return done;
+  }
+
+  /**
+   * Persists a structured-output failure diagnostic into run metadata so the
+   * next debug answers empty/malformed/schema-invalid/truncated directly.
+   * Best-effort: never masks the original failure. Invalid understanding
+   * still never reaches the planner — the error is rethrown.
+   */
+  private async recordUnderstandingFailure(runId: string, error: unknown): Promise<void> {
+    try {
+      const structured =
+        error && typeof error === 'object' && 'kind' in error
+          ? (error as { kind?: unknown; details?: { rawSample?: unknown; finishReason?: unknown } })
+          : null;
+      const kind = typeof structured?.kind === 'string' ? structured.kind : 'MODEL_REQUEST_FAILED';
+      const rawSample =
+        typeof structured?.details?.rawSample === 'string' ? structured.details.rawSample : '';
+      const finishReason =
+        typeof structured?.details?.finishReason === 'string'
+          ? structured.details.finishReason
+          : 'unknown';
+      await this.runs.updateMetadata(runId, {
+        understandingFailure: {
+          kind,
+          rawSample,
+          finishReason,
+          message:
+            error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+          at: new Date().toISOString(),
+        },
+      });
+    } catch {
+      /* best-effort */
+    }
   }
 
   private async recordUnderstanding(runId: string, understanding: RequestUnderstandingResult) {

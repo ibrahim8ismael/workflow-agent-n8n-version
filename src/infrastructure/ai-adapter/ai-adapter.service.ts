@@ -16,6 +16,33 @@ import type {
 } from './ai-adapter.interface';
 import { createVercelProvider, parseModelString } from './providers/vercel-provider.factory';
 
+export type StructuredOutputFailureKind = 'EMPTY' | 'MALFORMED' | 'SCHEMA_INVALID';
+
+/** Bounded raw-output sample kept for failure diagnostics (metadata-safe). */
+export const STRUCTURED_OUTPUT_SAMPLE_LIMIT = 500;
+
+/**
+ * Classified structured-output failure thrown when object generation (plus
+ * the text repair fallback) ultimately fails. The message preserves the
+ * original SDK text so upstream retry/failover matching behaves exactly as
+ * before; machine-readable detail rides on `kind`/`rawSample`/`finishReason`.
+ */
+export class StructuredOutputError extends Error {
+  constructor(
+    readonly kind: StructuredOutputFailureKind,
+    message: string,
+    readonly details: { rawSample: string; finishReason: string },
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = StructuredOutputError.name;
+  }
+}
+
+export function isStructuredOutputError(error: unknown): error is StructuredOutputError {
+  return error instanceof StructuredOutputError;
+}
+
 @Injectable()
 export class AIAdapterService implements IAIAdapter {
   private toSdkSchema(schema: z.ZodSchema<unknown>): Schema<unknown> {
@@ -128,9 +155,37 @@ export class AIAdapterService implements IAIAdapter {
         temperature: params.temperature,
         maxOutputTokens: params.maxTokens,
       });
-      const parsed = this.parseJsonObject(fallback.text);
+      const rawSample = fallback.text.slice(0, STRUCTURED_OUTPUT_SAMPLE_LIMIT);
+      const finishReason = fallback.finishReason ?? 'unknown';
+      const originalMessage = error instanceof Error ? error.message : String(error);
+      if (!fallback.text.trim()) {
+        throw new StructuredOutputError(
+          'EMPTY',
+          `${originalMessage} [structured-output:EMPTY]`,
+          { rawSample: '', finishReason },
+          { cause: error },
+        );
+      }
+      let parsed: unknown;
+      try {
+        parsed = this.parseJsonObject(fallback.text);
+      } catch {
+        throw new StructuredOutputError(
+          'MALFORMED',
+          `${originalMessage} [structured-output:MALFORMED]`,
+          { rawSample, finishReason },
+          { cause: error },
+        );
+      }
       const validated = params.schema.safeParse(parsed);
-      if (!validated.success) throw error;
+      if (!validated.success) {
+        throw new StructuredOutputError(
+          'SCHEMA_INVALID',
+          `${originalMessage} [structured-output:SCHEMA_INVALID]`,
+          { rawSample, finishReason },
+          { cause: error },
+        );
+      }
 
       return {
         object: validated.data,

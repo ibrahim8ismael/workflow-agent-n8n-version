@@ -29,8 +29,8 @@ export type AgentRunPhase = (typeof AGENT_RUN_PHASE)[keyof typeof AGENT_RUN_PHAS
 /** Allowed phase hops. A missing entry means the phase is terminal. */
 export const AGENT_RUN_PHASE_TRANSITIONS: Record<AgentRunPhase, AgentRunPhase[]> = {
   UNDERSTANDING: ['PLANNING', 'FAILED'],
-  PLANNING: ['BUILDING', 'FAILED'],
-  BUILDING: ['STATIC_VALIDATION', 'FAILED'],
+  PLANNING: ['BUILDING', 'STATIC_VALIDATION', 'FAILED'],
+  BUILDING: ['STATIC_VALIDATION', 'EXECUTING', 'FAILED'],
   STATIC_VALIDATION: ['EXECUTING', 'BUILDING', 'FAILED'],
   EXECUTING: ['RUNTIME_VALIDATION', 'FAILED'],
   RUNTIME_VALIDATION: ['COMPLETED', 'FAILED'],
