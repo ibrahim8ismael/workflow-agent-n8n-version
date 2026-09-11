@@ -59,7 +59,22 @@ export class JaafarIdempotencyService {
   }
 
   private hash(input: JsonValue): string {
-    return createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    // Key-order independent: the same logical input re-hydrated through a
+    // different serialization path must hash identically, or replay detection
+    // misfires with "reused with different input".
+    return createHash('sha256').update(this.stableStringify(input)).digest('hex');
+  }
+
+  private stableStringify(value: JsonValue): string {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+    if (Array.isArray(value))
+      return `[${value.map((item) => this.stableStringify(item)).join(',')}]`;
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+    return `{${entries
+      .map(([key, item]) => `${JSON.stringify(key)}:${this.stableStringify(item as JsonValue)}`)
+      .join(',')}}`;
   }
 
   private toRecord(record: RuntimeIdempotencyKey): IdempotencyRecord {
@@ -70,7 +85,14 @@ export class JaafarIdempotencyService {
       logicalAction: record.logicalAction,
       inputHash: record.inputHash,
       status: record.status,
-      ...(record.result === null ? {} : { result: record.result as JsonValue }),
+      // A COMPLETED record with a JSON-null result must replay as COMPLETED
+      // with result null — omitting the field made the executor re-run the
+      // external side effect on every subsequent call with the same key.
+      ...(record.status === 'COMPLETED'
+        ? { result: (record.result ?? null) as JsonValue }
+        : record.result !== null
+          ? { result: record.result as JsonValue }
+          : {}),
       ...(record.error ? { error: record.error } : {}),
     };
   }

@@ -12,7 +12,8 @@ export interface LearningCandidate {
 export class JaafarMemoryPolicyService {
   filter(candidate: LearningCandidate): LearningCandidate | undefined {
     const content = candidate.content.trim();
-    if (!content || candidate.confidence < 0.8) return undefined;
+    // !(c >= 0.8) rejects NaN too (NaN < 0.8 is false and would pass).
+    if (!content || !(candidate.confidence >= 0.8)) return undefined;
     if (/password|secret|token|api[_ -]?key|oauth|credential|authorization/i.test(content)) {
       return undefined;
     }

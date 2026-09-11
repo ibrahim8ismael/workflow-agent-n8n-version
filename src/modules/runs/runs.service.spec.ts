@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunsRepository } from './runs.repository';
 import { RunsService } from './runs.service';
@@ -10,6 +10,7 @@ describe('RunsService', () => {
     id: 'run-1',
     agentId: 'agent-1',
     status: 'CREATED',
+    version: 1,
     result: null,
     error: null,
     promptTokens: 0,
@@ -27,6 +28,7 @@ describe('RunsService', () => {
     findByAgent: vi.fn(),
     findMany: vi.fn(),
     update: vi.fn(),
+    updateVersioned: vi.fn(),
     createTransition: vi.fn().mockResolvedValue({ id: 'trans-1' }),
   } as unknown as RunsRepository;
 
@@ -37,6 +39,9 @@ describe('RunsService', () => {
     vi.mocked(mockRepo.findByAgent).mockResolvedValue([run()] as never);
     vi.mocked(mockRepo.findMany).mockResolvedValue([] as never);
     vi.mocked(mockRepo.update).mockImplementation((_id, data) =>
+      Promise.resolve(run(data as never) as never),
+    );
+    vi.mocked(mockRepo.updateVersioned).mockImplementation((_id, _version, data) =>
       Promise.resolve(run(data as never) as never),
     );
     service = new RunsService(mockRepo);
@@ -118,23 +123,34 @@ describe('RunsService', () => {
   });
 
   describe('transitionStatus', () => {
-    it('should update status for a valid transition', async () => {
+    it('updates status through the version-guarded claim', async () => {
       const result = await service.transitionStatus('run-1', 'PREPARING');
 
-      expect(mockRepo.update).toHaveBeenCalledWith(
+      expect(mockRepo.updateVersioned).toHaveBeenCalledWith(
         'run-1',
+        1,
         expect.objectContaining({ status: 'PREPARING' }),
       );
       expect(result.status).toBe('PREPARING');
     });
 
-    it('should set completedAt when transitioning to COMPLETED', async () => {
+    it('sets completedAt when transitioning to COMPLETED', async () => {
       vi.mocked(mockRepo.findById).mockResolvedValue(run({ status: 'PERSISTING' }) as never);
 
       await service.transitionStatus('run-1', 'COMPLETED');
 
-      const updateCall = vi.mocked(mockRepo.update).mock.calls[0][1] as { completedAt?: Date };
+      const updateCall = vi.mocked(mockRepo.updateVersioned).mock.calls[0][2] as {
+        completedAt?: Date;
+      };
       expect(updateCall.completedAt).toBeInstanceOf(Date);
+    });
+
+    it('throws ConflictException when a concurrent caller already claimed the row', async () => {
+      vi.mocked(mockRepo.updateVersioned).mockResolvedValue(null);
+
+      await expect(service.transitionStatus('run-1', 'PREPARING')).rejects.toThrow(
+        ConflictException,
+      );
     });
 
     it('should throw for an invalid transition', async () => {
@@ -155,11 +171,12 @@ describe('RunsService', () => {
   });
 
   describe('complete', () => {
-    it('should mark the run as COMPLETED with result and completedAt', async () => {
+    it('marks the run COMPLETED with result and completedAt via the CAS claim', async () => {
       await service.complete('run-1', 'final answer');
 
-      expect(mockRepo.update).toHaveBeenCalledWith(
+      expect(mockRepo.updateVersioned).toHaveBeenCalledWith(
         'run-1',
+        1,
         expect.objectContaining({ status: 'COMPLETED', result: 'final answer' }),
       );
       expect(mockRepo.createTransition).toHaveBeenCalledWith(
@@ -182,11 +199,12 @@ describe('RunsService', () => {
   });
 
   describe('fail', () => {
-    it('should mark the run as FAILED with error', async () => {
+    it('marks the run FAILED with error via the CAS claim', async () => {
       await service.fail('run-1', 'boom');
 
-      expect(mockRepo.update).toHaveBeenCalledWith(
+      expect(mockRepo.updateVersioned).toHaveBeenCalledWith(
         'run-1',
+        1,
         expect.objectContaining({ status: 'FAILED', error: 'boom' }),
       );
       expect(mockRepo.createTransition).toHaveBeenCalledWith(
@@ -204,11 +222,12 @@ describe('RunsService', () => {
   });
 
   describe('cancel', () => {
-    it('should mark the run as CANCELLED', async () => {
+    it('marks the run CANCELLED via the CAS claim', async () => {
       await service.cancel('run-1');
 
-      expect(mockRepo.update).toHaveBeenCalledWith(
+      expect(mockRepo.updateVersioned).toHaveBeenCalledWith(
         'run-1',
+        1,
         expect.objectContaining({ status: 'CANCELLED' }),
       );
     });

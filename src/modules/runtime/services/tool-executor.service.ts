@@ -64,14 +64,25 @@ export class ToolExecutorService {
   ) {}
 
   async execute(tool: ToolDefinition, request: ToolExecutionRequest): Promise<ToolResult> {
-    const callId = `${request.runId}:${tool.id}:${request.logicalAction ?? tool.id}`;
+    // The graph path always passes a per-step logicalAction (the callId).
+    // Other callers that omit it on a side-effect tool would otherwise share
+    // ONE idempotency key across every invocation of the tool in the run —
+    // distinct actions colliding with "reused with different input". A
+    // per-call action keeps distinct calls independent; callers that want
+    // replay protection must pass their own logicalAction.
+    const logicalAction =
+      request.logicalAction ??
+      (tool.sideEffect
+        ? `action-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+        : tool.id);
+    const callId = `${request.runId}:${tool.id}:${logicalAction}`;
     const startedAt = Date.now();
     const evaluation = this.approval.evaluate(tool, request.input);
     this.audit?.record({
       event: 'tool.started',
       runId: request.runId,
       toolId: tool.id,
-      logicalAction: request.logicalAction,
+      logicalAction,
       userId: request.userId,
       organizationId: request.organizationId,
     });
@@ -86,7 +97,7 @@ export class ToolExecutorService {
         ? await this.idempotency.begin({
             runId: request.runId,
             toolId: tool.id,
-            logicalAction: request.logicalAction ?? tool.id,
+            logicalAction,
             input: request.input,
           })
         : undefined;
@@ -100,7 +111,21 @@ export class ToolExecutorService {
           () => this.withTimeout(this.dispatch(tool, request), tool.timeoutMs),
           tool.maxRetries,
         );
-        this.validateOutput(tool, output);
+        try {
+          this.validateOutput(tool, output);
+        } catch (validationError) {
+          // The side effect ALREADY happened — a validation failure after a
+          // successful dispatch must never mark the record FAILED (a retry
+          // would re-execute the workflow). Unknown-outcome is the honest
+          // state: the operator decides whether to re-run.
+          if (idempotency) {
+            await this.idempotency.markUnknown(
+              idempotency.key,
+              `side effect completed but output validation failed: ${this.message(validationError)}`,
+            );
+          }
+          throw validationError;
+        }
         if (idempotency) await this.idempotency.complete(idempotency.key, output);
         return this.success(callId, tool, output, startedAt);
       } catch (error) {

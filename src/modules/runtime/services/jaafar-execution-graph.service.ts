@@ -57,6 +57,7 @@ type ExecutionRoute = 'invoke' | 'retry' | 'waiting' | 'failed' | 'completed';
 
 interface ExecutionState {
   input: JaafarExecutionGraphInput;
+  startedAt: number;
   stepIndex: number;
   toolCalls: ToolCall[];
   results: ToolResult[];
@@ -86,6 +87,10 @@ const ExecutionGraphState = Annotation.Root({
     }),
     reducer: (_left, right) => right,
   }),
+  startedAt: Annotation<number>({
+    default: () => Date.now(),
+    reducer: (_left, right) => right,
+  }),
   stepIndex: Annotation<number>({ default: () => 0, reducer: (_left, right) => right }),
   toolCalls: Annotation<ToolCall[]>({
     default: () => [],
@@ -100,7 +105,7 @@ const ExecutionGraphState = Annotation.Root({
     reducer: (_left, right) => right,
   }),
   usage: Annotation<HarnessUsage>({
-    default: () => ({ graphSteps: 0, toolCalls: 0, retriesByTool: {}, elapsedMs: 0 }),
+    default: () => ({ graphSteps: 0, toolCalls: 0, retriesByTool: {} }),
     reducer: (_left, right) => right,
   }),
   currentCall: Annotation<ToolCall | undefined>({
@@ -140,11 +145,11 @@ export class JaafarExecutionGraphService {
   build(options: { durable?: boolean } = {}) {
     return new StateGraph(ExecutionGraphState)
       .addNode('select_action', (state) => {
+        const step = state.input.plan.steps[state.stepIndex];
+        if (!step) return { usage: state.usage, route: 'completed' as const };
         const usage = { ...state.usage, graphSteps: state.usage.graphSteps + 1 };
         try {
-          this.harness.assertWithinLimits(usage, Date.now());
-          const step = state.input.plan.steps[state.stepIndex];
-          if (!step) return { usage, route: 'completed' as const };
+          this.harness.assertWithinLimits(usage, state.startedAt);
           const tool = state.input.tools.find(
             (candidate) =>
               candidate.id === step.toolId ||
@@ -214,7 +219,7 @@ export class JaafarExecutionGraphService {
         }
         const usage = { ...state.usage, toolCalls: state.usage.toolCalls + 1 };
         try {
-          this.harness.assertWithinLimits(usage, Date.now());
+          this.harness.assertWithinLimits(usage, state.startedAt);
         } catch (error) {
           return {
             results: [
@@ -268,9 +273,9 @@ export class JaafarExecutionGraphService {
           };
         }
         const toolId = result.toolId;
-        const retries = (state.retriesByTool[toolId] ?? 0) + 1;
-        const nextRetries = { ...state.retriesByTool, [toolId]: retries };
-        if (result.error?.retryable && retries <= this.harness.getPolicy().maxRetriesPerTool) {
+        const retries = state.retriesByTool[toolId] ?? 0;
+        if (result.error?.retryable && retries < this.harness.getPolicy().maxRetriesPerTool) {
+          const nextRetries = { ...state.retriesByTool, [toolId]: retries + 1 };
           return {
             retriesByTool: nextRetries,
             usage: { ...state.usage, retriesByTool: nextRetries },
@@ -278,8 +283,6 @@ export class JaafarExecutionGraphService {
           };
         }
         return {
-          retriesByTool: nextRetries,
-          usage: { ...state.usage, retriesByTool: nextRetries },
           route: 'failed' as const,
           error: result.error ?? {
             code: 'UNKNOWN_RUNTIME_FAILURE',
@@ -290,6 +293,15 @@ export class JaafarExecutionGraphService {
       })
       .addNode('final_response', async (state) => {
         if (!this.finalResponse) return { route: 'completed' as const };
+        const priorUsage = this.withModelCalls(state.usage, state.modelCalls);
+        try {
+          this.harness.assertWithinLimits(priorUsage, state.startedAt);
+        } catch (error) {
+          return {
+            route: 'failed' as const,
+            error: this.runtimeError(error),
+          };
+        }
         const generated = await this.finalResponse.generate({
           userMessage: state.input.userMessage,
           results: state.results,
@@ -314,6 +326,7 @@ export class JaafarExecutionGraphService {
         return {
           response: generated.response,
           modelCalls: [generated.modelCall],
+          usage: this.withModelCalls(priorUsage, [generated.modelCall]),
           route: 'completed' as const,
         };
       })
@@ -376,10 +389,34 @@ export class JaafarExecutionGraphService {
         { ...this.graphConfig(input.runId, input), streamMode: 'updates' },
       );
       for await (const update of updates) {
-        const nodeStartedAt = Date.now();
+        // LangGraph 1.x emits interrupts as a TOP-LEVEL { __interrupt__: [...] }
+        // chunk in 'updates' mode — the interrupted node itself produces no
+        // update. Checking inside the node loop (old behavior) never fired, so
+        // approval streams hung and the run row stayed stuck in EXECUTING.
+        if (update && typeof update === 'object' && '__interrupt__' in update) {
+          const raw = (update as { __interrupt__?: unknown }).__interrupt__;
+          const interrupts = Array.isArray(raw) ? raw : [raw];
+          const value = interrupts
+            .map((item) => (item as { value?: unknown } | undefined)?.value)
+            .find(
+              (candidate): candidate is { reason?: string } =>
+                Boolean(candidate) && typeof candidate === 'object',
+            );
+          yield {
+            type: 'approval.required',
+            runId: input.runId,
+            reason: value?.reason ?? 'Approval is required before continuing.',
+          };
+          yield { type: 'run.waiting', runId: input.runId, reason: 'approval' };
+          return;
+        }
         const entries = Object.entries(update as Record<string, unknown>);
         for (const [node, value] of entries) {
-          const state = (value ?? {}) as Partial<ExecutionState> & { __interrupt__?: unknown };
+          // Per-entry timestamp: one update batch can carry multiple node
+          // outputs — a batch-level timestamp inflated the first node's
+          // duration and zeroed the rest.
+          const nodeStartedAt = Date.now();
+          const state = (value ?? {}) as Partial<ExecutionState>;
           if (node === 'invoke_tool' && state.results?.length) {
             const result = state.results[state.results.length - 1];
             const tool = input.tools.find((candidate) => candidate.id === result.toolId);
@@ -411,14 +448,6 @@ export class JaafarExecutionGraphService {
               args: state.currentCall.input,
             };
           }
-          if (node === 'invoke_tool' && state.__interrupt__) {
-            const interruptValue = state.__interrupt__ as { value?: { reason?: string } };
-            const reason =
-              interruptValue.value?.reason ?? 'Approval is required before continuing.';
-            yield { type: 'approval.required', runId: input.runId, reason };
-            yield { type: 'run.waiting', runId: input.runId, reason: 'approval' };
-            return;
-          }
           if (node === 'final_response') {
             yield {
               type: 'run.completed',
@@ -442,6 +471,16 @@ export class JaafarExecutionGraphService {
         message: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  private withModelCalls(usage: HarnessUsage, calls: JaafarModelCall[]): HarnessUsage {
+    let estimatedCost = usage.estimatedCost ?? 0;
+    let outputTokens = usage.outputTokens ?? 0;
+    for (const call of calls) {
+      estimatedCost += call.execution.estimatedCost;
+      outputTokens += call.usage.completionTokens;
+    }
+    return { ...usage, estimatedCost, outputTokens };
   }
 
   private runtimeError(error: unknown) {

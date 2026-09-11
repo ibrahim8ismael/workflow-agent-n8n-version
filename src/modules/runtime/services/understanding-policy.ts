@@ -13,9 +13,14 @@ export const GENERIC_CLARIFICATION_QUESTION =
  */
 export function assignRequirementIds<T extends JaafarRequirement>(requirements: T[]): T[] {
   let counter = 0;
-  const used = new Set(requirements.map((r) => r.id).filter((id): id is string => Boolean(id)));
+  const used = new Set<string>();
   return requirements.map((requirement) => {
-    if (requirement.id) return requirement;
+    if (requirement.id && !used.has(requirement.id)) {
+      used.add(requirement.id);
+      return requirement;
+    }
+    // Missing OR duplicate model-supplied id — re-assign so the plan
+    // coverage map can never see two requirements claiming one R-id.
     do {
       counter += 1;
     } while (used.has(`R${counter}`));
@@ -62,11 +67,16 @@ export function resolveClarification(input: ClarificationInput): {
   const required =
     input.clarificationRequired || missingRequired || input.confirmationsNeeded.length > 0;
   if (!required) return { required, question: undefined };
+  // Priority: explicit question → REQUIRED missing input → safety
+  // confirmation → any missing input. An optional nice-to-have must never
+  // preempt a confirmation the run cannot safely proceed without.
+  const requiredMissing = input.missingInputs.find((missing) => missing.required);
   const question =
     input.clarificationQuestion ??
-    input.missingInputs[0]?.question ??
-    (input.confirmationsNeeded.length > 0
-      ? `Before I proceed, please confirm: ${input.confirmationsNeeded.map((a) => a.statement).join('; ')}`
-      : undefined);
+    (requiredMissing
+      ? requiredMissing.question
+      : input.confirmationsNeeded.length > 0
+        ? `Before I proceed, please confirm: ${input.confirmationsNeeded.map((a) => a.statement).join('; ')}`
+        : input.missingInputs[0]?.question);
   return { required, question: question ?? GENERIC_CLARIFICATION_QUESTION };
 }

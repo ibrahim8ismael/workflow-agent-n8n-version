@@ -12,6 +12,8 @@ export class ConversationsService {
     userId?: string;
     organizationId?: string;
     metadata?: Record<string, unknown>;
+    channelType?: string;
+    externalConversationId?: string;
   }): Promise<Conversation> {
     return this.conversationsRepository.create({
       title: dto.title?.trim() || 'New chat',
@@ -19,8 +21,29 @@ export class ConversationsService {
       ...(dto.userId ? { user: { connect: { id: dto.userId } } } : {}),
       ...(dto.organizationId ? { organization: { connect: { id: dto.organizationId } } } : {}),
       metadata: dto.metadata as never,
+      // Channel identity lives on real columns (unique-indexed per agent) —
+      // not only in JSON metadata — so concurrent inbound deliveries race on
+      // the constraint instead of creating duplicate conversations.
+      ...(dto.channelType ? { channelType: dto.channelType } : {}),
+      ...(dto.externalConversationId ? { externalConversationId: dto.externalConversationId } : {}),
       status: 'ACTIVE',
     } as never);
+  }
+
+  /**
+   * Channel-scoped conversation lookup on the indexed identity columns.
+   * Returns null when no conversation exists for the external thread.
+   */
+  async findByChannelThread(
+    agentId: string,
+    channelType: string,
+    externalConversationId: string,
+  ): Promise<Conversation | null> {
+    return this.conversationsRepository.findByChannelThread(
+      agentId,
+      channelType,
+      externalConversationId,
+    );
   }
 
   async updateTitle(
@@ -114,7 +137,7 @@ export class ConversationsService {
 
   async getMessages(
     conversationId: string,
-    options?: { skip?: number; take?: number },
+    options?: { skip?: number; take?: number; order?: 'asc' | 'desc' },
     scope?: { userId?: string; organizationId?: string },
   ): Promise<Message[]> {
     await this.findById(conversationId, scope);

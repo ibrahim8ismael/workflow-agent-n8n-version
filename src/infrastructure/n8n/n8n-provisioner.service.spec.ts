@@ -13,8 +13,14 @@ const blueprint: AutomationBlueprint = {
   description: '',
   trigger: { type: 'schedule', config: {} },
   steps: [
-    { name: 'Fetch invoices', action: 'Fetch paid invoices', integration: 'stripe', config: {} },
-    { name: 'Record ledger', action: 'Create ledger rows', config: {} },
+    {
+      name: 'Fetch invoices',
+      action: 'Fetch paid invoices',
+      integration: 'stripe',
+      requirementIds: ['R1'],
+      config: {},
+    },
+    { name: 'Record ledger', action: 'Create ledger rows', requirementIds: ['R1'], config: {} },
   ],
   integrations: ['stripe'],
   inputContract: {},
@@ -188,6 +194,7 @@ describe('N8nProvisionerService', () => {
             name: 'Send WhatsApp',
             action: 'Send a WhatsApp message',
             integration: 'whatsapp',
+            requirementIds: ['R1'],
             config: { to: '+212600000000', message: 'hello from Jaafar' },
             nodeHint: {
               type: 'n8n-nodes-base.whatsApp',
@@ -236,6 +243,7 @@ describe('N8nProvisionerService', () => {
             name: 'Log row',
             action: 'Insert ledger row',
             integration: 'dataTable',
+            requirementIds: ['R1'],
             config: {},
             nodeHint: {
               type: 'n8n-nodes-base.dataTable',
@@ -285,6 +293,7 @@ describe('N8nProvisionerService', () => {
           {
             name: 'Log message',
             action: 'Insert log row',
+            requirementIds: ['R1'],
             config: {},
             nodeHint: {
               type: 'n8n-nodes-base.dataTable',
@@ -323,7 +332,7 @@ describe('N8nProvisionerService', () => {
       blueprint: {
         ...blueprint,
         trigger: { type: 'webhook', config: {} },
-        steps: [{ name: 'Do work', action: 'Do the work', config: {} }],
+        steps: [{ name: 'Do work', action: 'Do the work', requirementIds: ['R1'], config: {} }],
       },
       connection: { baseUrl: 'https://client.example.com', apiKey: 'key' },
     });
@@ -345,6 +354,7 @@ describe('N8nProvisionerService', () => {
             name: 'Call CRM',
             action: 'POST to CRM API',
             integration: 'crm',
+            requirementIds: ['R1'],
             config: { url: 'https://crm.example.com/api', method: 'POST' },
           },
         ],
@@ -379,6 +389,7 @@ describe('N8nProvisionerService', () => {
             name: 'Create contact',
             action: 'Create the HubSpot contact',
             integration: 'hubspot',
+            requirementIds: ['R1'],
             config: {},
             nodeHint: { type: 'n8n-nodes-base.hubSpot', typeVersion: 4, parameters: {} },
           },
@@ -416,6 +427,7 @@ describe('N8nProvisionerService', () => {
             name: 'Send WhatsApp',
             action: 'Send a WhatsApp message',
             integration: 'whatsapp',
+            requirementIds: ['R1'],
             config: {},
             nodeHint: { type: 'n8n-nodes-base.whatsApp', typeVersion: 1, parameters: {} },
           },
@@ -454,6 +466,7 @@ describe('N8nProvisionerService', () => {
             name: 'Watch Gmail',
             action: 'Watch for new Gmail messages',
             integration: 'gmail',
+            requirementIds: ['R1'],
             config: {},
             nodeHint: { type: 'n8n-nodes-base.gmailTrigger', typeVersion: 1, parameters: {} },
           },
@@ -462,6 +475,7 @@ describe('N8nProvisionerService', () => {
             name: 'Send Slack',
             action: 'Send a Slack notification',
             integration: 'slack',
+            requirementIds: ['R1'],
             config: {},
             nodeHint: { type: 'n8n-nodes-base.slack', typeVersion: 2, parameters: {} },
           },

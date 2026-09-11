@@ -63,8 +63,14 @@ export const automationBlueprintSchema = z.object({
         action: z.string().min(1).max(200),
         description: z.string().max(600).optional(),
         integration: z.string().max(80).optional(),
-        /** Requirement ids (R1, R2, …) this step satisfies — coverage map (§20). */
-        requirementIds: z.array(z.string().max(20)).max(20).optional(),
+        /**
+         * Requirement ids (R1, R2, …) this step satisfies — coverage map (§20).
+         * REQUIRED non-empty (not optional): models systematically omit
+         * optional requirementIds, which then fails review coverage twice and
+         * kills the run. Strict-mode generation enforces presence; review
+         * enforces that every required requirement is covered.
+         */
+        requirementIds: z.array(z.string().max(20)).min(1).max(20),
         /** Gate for conditional steps (branches, thresholds, filters). */
         condition: z.string().max(300).optional(),
         /** Observable output this step must produce. */

@@ -18,6 +18,7 @@ const validBlueprint = {
       name: 'Fetch invoices',
       action: 'Fetch paid invoices from Stripe',
       integration: 'stripe',
+      requirementIds: ['R1'],
       config: {},
     },
   ],

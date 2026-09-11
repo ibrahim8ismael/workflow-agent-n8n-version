@@ -1,5 +1,19 @@
 import { z } from 'zod';
 
+/**
+ * Parses boolean env vars from strings. `z.coerce.boolean()` maps ANY
+ * non-empty string (including "false" and "0") to true, which silently
+ * disabled safety flags like JAAFAR_ALLOW_PARALLEL_READ_ONLY_TOOLS=false.
+ */
+const envBoolean = (fallback: boolean) =>
+  z.preprocess((value) => {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (typeof value === 'boolean') return value;
+    if (value === 'true' || value === '1') return true;
+    if (value === 'false' || value === '0') return false;
+    return value;
+  }, z.boolean().default(fallback));
+
 export const configSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().default(3000),
@@ -29,7 +43,7 @@ export const configSchema = z.object({
   RESEND_API_KEY: z.string().optional(),
   SMTP_HOST: z.string().default('localhost'),
   SMTP_PORT: z.coerce.number().default(1025),
-  SMTP_SECURE: z.coerce.boolean().default(false),
+  SMTP_SECURE: envBoolean(false),
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
   SMTP_FROM: z.string().default('noreply@woops.com'),
@@ -62,17 +76,18 @@ export const configSchema = z.object({
   LLM_MAX_RETRIES: z.coerce.number().int().min(0).default(2),
   BUSINESS_TIMEZONE: z.string().default('UTC'),
 
-  JAAFAR_MAX_GRAPH_STEPS: z.coerce.number().int().nonnegative().default(30),
-  JAAFAR_MAX_TOOL_CALLS: z.coerce.number().int().nonnegative().default(15),
-  JAAFAR_MAX_RETRIES_PER_TOOL: z.coerce.number().int().nonnegative().default(2),
-  JAAFAR_MAX_RUNTIME_MS: z.coerce.number().int().nonnegative().default(300000),
+  // Sanity caps guard against misconfiguration (e.g. JAAFAR_MAX_TOOL_CALLS=1e9).
+  JAAFAR_MAX_GRAPH_STEPS: z.coerce.number().int().positive().max(10_000).default(30),
+  JAAFAR_MAX_TOOL_CALLS: z.coerce.number().int().positive().max(10_000).default(15),
+  JAAFAR_MAX_RETRIES_PER_TOOL: z.coerce.number().int().nonnegative().max(100).default(2),
+  JAAFAR_MAX_RUNTIME_MS: z.coerce.number().int().positive().max(86_400_000).default(300000),
   JAAFAR_MAX_ESTIMATED_COST: z.coerce.number().nonnegative().optional(),
   JAAFAR_MAX_OUTPUT_TOKENS: z.coerce.number().int().nonnegative().optional(),
-  JAAFAR_ALLOW_PARALLEL_READ_ONLY_TOOLS: z.coerce.boolean().default(true),
+  JAAFAR_ALLOW_PARALLEL_READ_ONLY_TOOLS: envBoolean(true),
   JAAFAR_APPROVAL_REQUIRED_TOOLS: z.string().default(''),
-  JAAFAR_RUNTIME_ENABLED: z.coerce.boolean().default(true),
-  JAAFAR_RUNTIME_KILL_SWITCH: z.coerce.boolean().default(false),
-  JAAFAR_RUNTIME_INTERNAL_ONLY: z.coerce.boolean().default(false),
+  JAAFAR_RUNTIME_ENABLED: envBoolean(true),
+  JAAFAR_RUNTIME_KILL_SWITCH: envBoolean(false),
+  JAAFAR_RUNTIME_INTERNAL_ONLY: envBoolean(false),
   // Workflow engine tunables. n8n instances connect per-user (own domain +
   // API key) via POST /api/v1/integrations/n8n — no platform-global config.
   N8N_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
@@ -115,7 +130,7 @@ export const configSchema = z.object({
   SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.1),
   SENTRY_RELEASE: z.string().optional(),
 
-  OTEL_ENABLED: z.coerce.boolean().default(false),
+  OTEL_ENABLED: envBoolean(false),
   OTEL_ENDPOINT: z.string().default('http://localhost:4318'),
   OTEL_SERVICE_NAME: z.string().default('woops-backend'),
 });

@@ -16,7 +16,15 @@ const blueprint = automationBlueprintSchema.parse({
   summary: 'Fetches paid invoices daily.',
   description: '',
   trigger: { type: 'schedule', config: {} },
-  steps: [{ name: 'Fetch', action: 'Fetch invoices', integration: 'stripe', config: {} }],
+  steps: [
+    {
+      name: 'Fetch',
+      action: 'Fetch invoices',
+      integration: 'stripe',
+      requirementIds: ['R1'],
+      config: {},
+    },
+  ],
   integrations: ['stripe'],
   inputContract: {},
   outputContract: {},

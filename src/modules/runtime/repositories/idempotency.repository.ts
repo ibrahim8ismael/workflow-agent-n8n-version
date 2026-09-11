@@ -24,7 +24,9 @@ export class IdempotencyRepository {
   async complete(key: string, result: Prisma.InputJsonValue): Promise<RuntimeIdempotencyKey> {
     return this.db.runtimeIdempotencyKey.update({
       where: { key },
-      data: { status: 'COMPLETED', result, completedAt: new Date() },
+      // error: null — completing after a FAILED observation must not leave
+      // the stale error attached to a COMPLETED row.
+      data: { status: 'COMPLETED', result, completedAt: new Date(), error: null },
     });
   }
 
@@ -38,7 +40,9 @@ export class IdempotencyRepository {
   async markUnknown(key: string, error: string): Promise<RuntimeIdempotencyKey> {
     return this.db.runtimeIdempotencyKey.update({
       where: { key },
-      data: { status: 'UNKNOWN', error },
+      // completedAt: tracked like complete/fail so UNKNOWN rows can be
+      // reconciled/cleaned up by age.
+      data: { status: 'UNKNOWN', error, completedAt: new Date() },
     });
   }
 }

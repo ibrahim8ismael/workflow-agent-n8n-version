@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Run } from '@prisma/client';
 import { validateStatusTransition, validateTerminalWrite } from './agent-run-phase';
 import { CreateRunDto } from './dto/create-run.dto';
@@ -67,6 +67,28 @@ export class RunsService {
     return waiting.find((run) => run.id !== excludeRunId) ?? null;
   }
 
+  /**
+   * Idempotent webhook-dedup anchor: the run whose creation was triggered by
+   * a channel message with this external id, in the given conversation.
+   * Channel webhooks (WhatsApp/Slack retries) redeliver the same message —
+   * without this, every redelivery created a duplicate run + duplicate LLM
+   * spend + duplicate assistant replies.
+   */
+  async findByChannelMessage(
+    conversationId: string,
+    channelMessageId: string,
+  ): Promise<Run | null> {
+    const runs = await this.runsRepository.findMany({
+      where: {
+        conversationId,
+        metadata: { path: ['channelMessageId'], equals: channelMessageId } as never,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 1,
+    });
+    return runs[0] ?? null;
+  }
+
   async findByAgent(
     agentId: string,
     options?: { limit?: number; status?: string },
@@ -89,13 +111,25 @@ export class RunsService {
     });
   }
 
+  /**
+   * All lifecycle writes are version-guarded compare-and-set (same guarantee
+   * as the V2 AgentRunService): every approve/reject/resume/retry/cancel
+   * funnels through one of these four ops, so two concurrent callers can
+   * never both claim a transition (e.g. double-approve executing a
+   * side-effecting tool twice). A lost claim throws ConflictException.
+   */
   async transitionStatus(id: string, newStatus: string, reason?: string): Promise<Run> {
     const run = await this.findById(id);
     this.validateTransition(run.status, newStatus);
-    const updated = await this.runsRepository.update(id, {
+    const updated = await this.runsRepository.updateVersioned(id, run.version, {
       status: newStatus,
       ...(newStatus === 'COMPLETED' ? { completedAt: new Date() } : {}),
     } as never);
+    if (!updated) {
+      throw new ConflictException(
+        `Run ${id} changed concurrently (${run.status} → ${newStatus}); reload and retry`,
+      );
+    }
     await this.recordTransition({
       runId: id,
       fromStatus: run.status,
@@ -110,11 +144,14 @@ export class RunsService {
   async complete(id: string, result?: string, reason?: string): Promise<Run> {
     const run = await this.findById(id);
     validateTerminalWrite(run.status, 'COMPLETED');
-    const updated = await this.runsRepository.update(id, {
+    const updated = await this.runsRepository.updateVersioned(id, run.version, {
       status: 'COMPLETED',
       result,
       completedAt: new Date(),
     } as never);
+    if (!updated) {
+      throw new ConflictException(`Run ${id} changed concurrently (complete); reload and retry`);
+    }
     await this.recordTransition({
       runId: id,
       fromStatus: run.status,
@@ -129,11 +166,14 @@ export class RunsService {
   async fail(id: string, error: string, reason?: string): Promise<Run> {
     const run = await this.findById(id);
     validateTerminalWrite(run.status, 'FAILED');
-    const updated = await this.runsRepository.update(id, {
+    const updated = await this.runsRepository.updateVersioned(id, run.version, {
       status: 'FAILED',
       error,
       completedAt: new Date(),
     } as never);
+    if (!updated) {
+      throw new ConflictException(`Run ${id} changed concurrently (fail); reload and retry`);
+    }
     await this.recordTransition({
       runId: id,
       fromStatus: run.status,
@@ -148,10 +188,13 @@ export class RunsService {
   async cancel(id: string, reason?: string): Promise<Run> {
     const run = await this.findById(id);
     validateTerminalWrite(run.status, 'CANCELLED');
-    const updated = await this.runsRepository.update(id, {
+    const updated = await this.runsRepository.updateVersioned(id, run.version, {
       status: 'CANCELLED',
       completedAt: new Date(),
     } as never);
+    if (!updated) {
+      throw new ConflictException(`Run ${id} changed concurrently (cancel); reload and retry`);
+    }
     await this.recordTransition({
       runId: id,
       fromStatus: run.status,

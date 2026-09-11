@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { AutomationBlueprint } from '../../automations/schemas/automation-blueprint.schema';
-import { AutomationPlanReviewService } from './automation-plan-review.service';
+import {
+  AutomationPlanReviewService,
+  sanitizeDesignRequirements,
+} from './automation-plan-review.service';
 
 const blueprint = (overrides: Partial<AutomationBlueprint> = {}): AutomationBlueprint => ({
   ready: true,
@@ -186,12 +189,14 @@ describe('AutomationPlanReviewService', () => {
             name: 'Same',
             action: 'Do A',
             config: {},
+            requirementIds: ['R1'],
             nodeHint: { type: 'n8n-nodes-base.code', parameters: {} },
           },
           {
             name: 'Same',
             action: 'Do B',
             config: {},
+            requirementIds: ['R1'],
             nodeHint: { type: 'n8n-nodes-base.code', parameters: {} },
           },
         ],
@@ -345,6 +350,112 @@ describe('AutomationPlanReviewService native-node guardrail', () => {
     expect(
       result.warnings.some((w) => w.code === 'UNMAPPED_STEP' && w.message.includes('native node')),
     ).toBe(true);
+  });
+
+  it('catches an aliased native (smtp → emailSend) when the instance is readable', () => {
+    // Regression: suffix matching never proved smtp ↔ n8n-nodes-base.
+    // emailSend, so HTTP-for-SMTP slipped past the guardrail even with a
+    // readable instance. The known-provider catalog closes the alias gap.
+    const result = service.review({
+      blueprint: blueprint({
+        steps: [
+          {
+            name: 'Send report',
+            action: 'Send the report email',
+            integration: 'smtp',
+            requirementIds: ['R1'],
+            config: {},
+            nodeHint: { type: 'n8n-nodes-base.httpRequest', parameters: {} },
+          },
+        ],
+        integrations: ['smtp'],
+      }),
+      requirements: [{ id: 'R1', field: 'send report', required: true }],
+      capabilities: [
+        {
+          provider: 'smtp',
+          displayName: 'SMTP',
+          source: 'n8n',
+          connectionStatus: 'CONNECTED',
+          credentialsAvailable: true,
+        },
+      ],
+      instanceNodeTypes: ['n8n-nodes-base.webhook', 'n8n-nodes-base.httpRequest'],
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.code === 'NATIVE_NODE_AVAILABLE')).toBe(true);
+    expect(result.errors.some((e) => e.message.includes('emailSend'))).toBe(true);
+  });
+
+  it('rejects steps referencing unknown requirement ids', () => {
+    const result = service.review({
+      blueprint: blueprint({
+        steps: [
+          {
+            name: 'Sync customers',
+            action: 'Sync the customers',
+            integration: 'shopify',
+            requirementIds: ['R99'],
+            expectedOutput: 'synced customers',
+            config: {},
+            nodeHint: { type: 'n8n-nodes-base.httpRequest', parameters: {} },
+          },
+        ],
+        integrations: ['shopify'],
+      }),
+      requirements: [{ id: 'R1', field: 'sync', required: true }],
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.code === 'INVALID_PLAN' && e.message.includes('R99'))).toBe(
+      true,
+    );
+  });
+
+  it('downgrades connection-state junk requirements instead of failing coverage', () => {
+    // Live regression: understanding recorded R5 n8n_instance="not
+    // connected yet" (required) — no step can cover runtime/meta state, so
+    // the plan failed review twice. Meta-shaped requirements must never be
+    // coverage errors.
+    const withMeta = blueprint({
+      steps: [
+        {
+          name: 'Sync customers',
+          action: 'Sync the customers',
+          integration: 'shopify',
+          requirementIds: ['R1'],
+          expectedOutput: 'synced customers',
+          config: {},
+          nodeHint: { type: 'n8n-nodes-base.httpRequest', parameters: {} },
+        },
+      ],
+      integrations: ['shopify'],
+    });
+    const result = service.review({
+      blueprint: withMeta,
+      requirements: [
+        { id: 'R1', field: 'sync', required: true },
+        { id: 'R5', field: 'n8n_instance', value: 'not connected yet', required: true },
+      ],
+    });
+
+    expect(result.errors.some((e) => e.code === 'UNCOVERED_REQUIREMENT')).toBe(false);
+    expect(result.valid).toBe(true);
+  });
+
+  it('sanitizeDesignRequirements only touches meta-shaped entries', () => {
+    expect(
+      sanitizeDesignRequirements([
+        { field: 'sync', value: 'orders', required: true },
+        { field: 'n8n_instance', value: 'not connected yet', required: true },
+        { field: 'platform', value: 'n8n', required: true },
+      ]),
+    ).toEqual([
+      { field: 'sync', value: 'orders', required: true },
+      { field: 'n8n_instance', value: 'not connected yet', required: false },
+      { field: 'platform', value: 'n8n', required: false },
+    ]);
   });
 
   it('allows pure transformation Code steps', () => {

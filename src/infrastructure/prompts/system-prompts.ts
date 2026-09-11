@@ -5,10 +5,7 @@
  * remains the stable import surface for runtime callers.
  */
 
-export {
-  AUTOMATION_BLUEPRINT_SYSTEM_PROMPT,
-  JAAFAR_IDENTITY_SYSTEM_PROMPT,
-} from './modules/jaafar.prompt';
+export { JAAFAR_IDENTITY_SYSTEM_PROMPT } from './modules/jaafar.prompt';
 export {
   PLATFORM_SYSTEM_PROMPT,
   TOOL_USE_POLICY_SYSTEM_PROMPT,

@@ -181,6 +181,52 @@ export class N8nClientApiService {
   }
 
   /**
+   * Discovers the node types INSTALLED on the instance via the public API
+   * (`GET /api/v1/node-types`). Returns [] when the instance does not expose
+   * the endpoint (older n8n) or it fails — callers fall back to workflow
+   * harvest. Existence here does NOT mean credentials are ready: credential
+   * readiness is a separate signal (observed credential refs / the
+   * credentials registry).
+   */
+  async listNodeTypes(
+    connection: N8nClientConnection,
+  ): Promise<Array<{ type: string; typeVersion?: number }>> {
+    try {
+      const data = await this.request<{
+        data?: Array<{ name?: unknown; version?: unknown; versions?: unknown }>;
+      }>(connection, new URL(`${this.apiBase(connection.baseUrl)}/node-types`));
+      const rows = Array.isArray(data) ? data : (data.data ?? []);
+      const out: Array<{ type: string; typeVersion?: number }> = [];
+      for (const row of rows) {
+        if (typeof row?.name !== 'string' || !row.name) continue;
+        const versions = Array.isArray(row.versions)
+          ? row.versions
+          : Array.isArray(row.version)
+            ? row.version
+            : typeof row.version === 'number'
+              ? [row.version]
+              : [];
+        const numericVersions: number[] = versions.filter(
+          (v: unknown): v is number => typeof v === 'number',
+        );
+        const maxVersion = numericVersions.reduce<number | undefined>(
+          (max, v) => (max === undefined || v > max ? v : max),
+          undefined,
+        );
+        out.push({
+          type: row.name,
+          ...(maxVersion !== undefined ? { typeVersion: maxVersion } : {}),
+        });
+      }
+      return out;
+    } catch {
+      // Endpoint unavailable (older n8n / restricted API) — empty means
+      // "fall back to the workflow harvest", never a hard failure.
+      return [];
+    }
+  }
+
+  /**
    * Lists credential identities in the client instance. Returns id/name/type
    * only — the n8n public API never exposes secret material on this route,
    * which makes it safe input for the integration capability registry.

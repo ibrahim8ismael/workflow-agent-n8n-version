@@ -31,6 +31,17 @@ export class ConversationsRepository {
     });
   }
 
+  async findByChannelThread(
+    agentId: string,
+    channelType: string,
+    externalConversationId: string,
+  ): Promise<Conversation | null> {
+    return this.db.conversation.findFirst({
+      where: { agentId, channelType, externalConversationId, deletedAt: null },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   async findMany(params?: {
     where?: Prisma.ConversationWhereInput;
     orderBy?: Prisma.ConversationOrderByWithRelationInput;
@@ -62,11 +73,11 @@ export class ConversationsRepository {
 
   async getMessages(
     conversationId: string,
-    options?: { skip?: number; take?: number },
+    options?: { skip?: number; take?: number; order?: 'asc' | 'desc' },
   ): Promise<Message[]> {
     const messages = await this.db.message.findMany({
       where: { conversationId, deletedAt: null },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: options?.order ?? 'asc' },
       skip: options?.skip,
       take: options?.take,
     });

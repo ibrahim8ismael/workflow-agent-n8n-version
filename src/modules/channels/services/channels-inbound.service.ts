@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common'
 import { ModuleRef } from '@nestjs/core';
 import { AgentsService } from '../../agents/services/agents.service';
 import { ConversationsService } from '../../conversations/services/conversations.service';
+import { RunsService } from '../../runs/runs.service';
 import type { JaafarRuntimeService } from '../../runtime/services/jaafar-runtime.service';
 import type { InboundChannelMessageDto } from '../dto/inbound-channel-message.dto';
 import { ChannelsRepository } from '../repositories/channels.repository';
@@ -25,6 +26,7 @@ export class ChannelsInboundService {
     @Optional() private readonly agentsService?: AgentsService,
     @Optional() private readonly jaafarRuntime?: JaafarRuntimeService,
     @Optional() private readonly moduleRef?: ModuleRef,
+    @Optional() private readonly runs?: RunsService,
   ) {}
 
   private getJaafarRuntime(): JaafarRuntimeService | undefined {
@@ -58,7 +60,64 @@ export class ChannelsInboundService {
       userId: agent?.userId ?? undefined,
     });
 
-    // 1. Record incoming user message
+    // Webhook dedupe: WhatsApp/Slack-style retries redeliver the same
+    // external message. Without this check every redelivery created a
+    // duplicate run, duplicate LLM spend, and a duplicate assistant reply.
+    if (dto.externalMessageId && this.runs) {
+      try {
+        const existingRun = await this.runs.findByChannelMessage(
+          conversation.id,
+          dto.externalMessageId,
+        );
+        if (existingRun) {
+          this.logger.log({
+            event: 'channel.inbound_duplicate_ignored',
+            channelType: dto.channelType,
+            externalMessageId: dto.externalMessageId,
+            runId: existingRun.id,
+          });
+          return {
+            success: true,
+            conversationId: conversation.id,
+            runId: existingRun.id,
+            response: (existingRun as { result?: string | null }).result ?? undefined,
+            channelType: dto.channelType,
+            externalConversationId: dto.externalConversationId,
+          };
+        }
+      } catch {
+        /* dedupe is best-effort — never block the webhook */
+      }
+    }
+
+    const runtime = this.getJaafarRuntime();
+    if (runtime) {
+      const runResult = await runtime.start({
+        agentId,
+        conversationId: conversation.id,
+        userMessage: dto.message.content,
+        userId: agent?.userId ?? undefined,
+        organizationId: agent?.organizationId ?? undefined,
+        mode: 'conversation',
+        // Turns are persisted by the graphs (single owner) — the channel no
+        // longer writes messages, so history holds exactly one user turn and
+        // one assistant turn per exchange. The externalMessageId rides on
+        // the run metadata as the dedup anchor.
+        ...(dto.externalMessageId ? { channelMessageId: dto.externalMessageId } : {}),
+      });
+
+      return {
+        success: runResult.status === 'COMPLETED' || runResult.status === 'WAITING',
+        conversationId: conversation.id,
+        runId: runResult.runId,
+        response: runResult.response ?? '',
+        channelType: dto.channelType,
+        externalConversationId: dto.externalConversationId,
+      };
+    }
+
+    // No runtime available — record the user message so the exchange is not
+    // silently lost (the graph persistence path does not exist here).
     await this.conversationsService.addMessage(conversation.id, {
       role: 'user',
       content: dto.message.content,
@@ -71,42 +130,6 @@ export class ChannelsInboundService {
         attachments: dto.message.attachments,
       },
     });
-
-    // 2. Execute AI Employee Run if JaafarRuntime is available
-    const runtime = this.getJaafarRuntime();
-    if (runtime) {
-      const runResult = await runtime.start({
-        agentId,
-        conversationId: conversation.id,
-        userMessage: dto.message.content,
-        userId: agent?.userId ?? undefined,
-        organizationId: agent?.organizationId ?? undefined,
-        mode: 'conversation',
-      });
-
-      const responseText = runResult.response ?? '';
-
-      // 3. Record assistant message in conversation history
-      if (responseText) {
-        await this.conversationsService.addMessage(conversation.id, {
-          role: 'assistant',
-          content: responseText,
-          metadata: {
-            runId: runResult.runId,
-            channelType: dto.channelType,
-          },
-        });
-      }
-
-      return {
-        success: runResult.status === 'COMPLETED' || runResult.status === 'WAITING',
-        conversationId: conversation.id,
-        runId: runResult.runId,
-        response: responseText,
-        channelType: dto.channelType,
-        externalConversationId: dto.externalConversationId,
-      };
-    }
 
     return {
       success: true,
@@ -141,37 +164,51 @@ export class ChannelsInboundService {
     const { agentId, dto, organizationId, userId } = params;
     const externalConvId = dto.externalConversationId ?? dto.externalUserId;
 
-    const existingList = await this.conversationsService.findMany({
-      agentId,
-      organizationId,
-      userId,
-      status: 'ACTIVE',
-      take: 20,
-    });
-
-    const existing = existingList.find((conv) => {
-      const meta = conv.metadata as Record<string, unknown> | null;
-      return (
-        meta?.channelType === dto.channelType && meta?.externalConversationId === externalConvId
+    if (externalConvId) {
+      const existing = await this.conversationsService.findByChannelThread(
+        agentId,
+        dto.channelType,
+        externalConvId,
       );
-    });
-
-    if (existing) {
-      return existing;
+      if (existing) return existing;
     }
 
-    return this.conversationsService.create({
-      agentId,
-      title: `${dto.channelType} - ${dto.sender?.name ?? dto.externalUserId}`,
-      userId,
-      organizationId,
-      metadata: {
-        channelType: dto.channelType,
-        channelIdentifier: dto.channelIdentifier,
-        externalConversationId: externalConvId,
-        externalUserId: dto.externalUserId,
-        sender: dto.sender,
-      },
-    });
+    try {
+      return await this.conversationsService.create({
+        agentId,
+        title: `${dto.channelType} - ${dto.sender?.name ?? dto.externalUserId}`,
+        userId,
+        organizationId,
+        metadata: {
+          channelType: dto.channelType,
+          channelIdentifier: dto.channelIdentifier,
+          externalConversationId: externalConvId,
+          externalUserId: dto.externalUserId,
+          sender: dto.sender,
+        },
+        ...(externalConvId
+          ? { channelType: dto.channelType, externalConversationId: externalConvId }
+          : {}),
+      });
+    } catch (error) {
+      // Two concurrent deliveries for the same external thread race on the
+      // conversation unique constraint — return the winner instead of
+      // failing the webhook.
+      if (externalConvId && this.isUniqueConstraintError(error)) {
+        const existing = await this.conversationsService.findByChannelThread(
+          agentId,
+          dto.channelType,
+          externalConvId,
+        );
+        if (existing) return existing;
+      }
+      throw error;
+    }
+  }
+
+  private isUniqueConstraintError(error: unknown): boolean {
+    return (
+      typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002'
+    );
   }
 }

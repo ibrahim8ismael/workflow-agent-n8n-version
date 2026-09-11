@@ -19,6 +19,15 @@ export class HarnessLimitError extends Error {
   }
 }
 
+export class HarnessParallelismError extends Error {
+  readonly code = 'PARALLEL_TOOLS_NOT_ALLOWED' as const;
+
+  constructor(readonly count: number) {
+    super(`Parallel tool execution is not allowed: ${count} tools requested in parallel`);
+    this.name = HarnessParallelismError.name;
+  }
+}
+
 @Injectable()
 export class JaafarHarnessService {
   constructor(private readonly config: ConfigService) {}
@@ -48,7 +57,7 @@ export class JaafarHarnessService {
 
   assertParallelTools(readOnly: boolean, count: number, policy = this.getPolicy()): void {
     if (count > 1 && (!readOnly || !policy.allowParallelReadOnlyTools)) {
-      throw new HarnessLimitError('maxToolCalls', count, count);
+      throw new HarnessParallelismError(count);
     }
   }
 

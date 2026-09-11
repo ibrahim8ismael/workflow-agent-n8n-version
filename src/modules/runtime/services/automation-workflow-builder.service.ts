@@ -20,7 +20,11 @@ import {
   type PlanReviewIssue,
 } from './automation-plan-review.service';
 import type { IntegrationCapability } from './integration-registry.service';
-import { isKnownNativeNodeForProvider, isKnownProvider } from './known-providers.catalog';
+import {
+  isKnownNativeNodeForProvider,
+  isKnownProvider,
+  knownNativeNodeTypes,
+} from './known-providers.catalog';
 
 export interface BuilderValidationResult {
   valid: boolean;
@@ -404,11 +408,24 @@ export class AutomationWorkflowBuilderService {
     const connected = capability?.credentialsAvailable === true;
     const nativeIn = (types: string[] | undefined): string | undefined =>
       (types ?? []).find((type) => !GENERIC.has(type) && suffixOf(type) === normalize(provider));
-    const proven =
-      connected && Boolean(nativeIn(capability?.nodeTypes) ?? nativeIn(opts.instanceTypes));
-    if (!proven) return false;
+    // Catalog proven-native — closes the ALIAS gap (smtp → n8n-nodes-base.
+    // emailSend) only when the instance is READABLE and no catalog native
+    // suffix-matches the provider. Unreadable instances keep the lenient
+    // warning policy (same trust rule as review).
+    const instanceReadable = (opts.instanceTypes ?? []).length > 0;
+    const allCatalogNatives = knownNativeNodeTypes(provider).filter((type) => !GENERIC.has(type));
+    const catalogSuffixMatchable = allCatalogNatives.some(
+      (type) => suffixOf(type) === normalize(provider),
+    );
+    const catalogNative =
+      instanceReadable && !catalogSuffixMatchable
+        ? allCatalogNatives.find((type) => !/trigger$/i.test(type))
+        : undefined;
     const nativeType =
-      nativeIn(capability?.nodeTypes) ?? nativeIn(opts.instanceTypes) ?? 'the native node';
+      nativeIn(capability?.nodeTypes) ??
+      nativeIn(opts.instanceTypes) ??
+      (connected ? catalogNative : undefined);
+    if (!connected || !nativeType) return false;
     errors.push({
       code: 'INVALID_PLAN',
       message: `Step "${step.name}" uses ${hintType} for connected integration "${step.integration}" but the connected n8n instance provides the native ${nativeType} — replace it unless the user explicitly requested it`,

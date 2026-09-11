@@ -81,6 +81,37 @@ describe('JaafarIdempotencyService', () => {
     await expect(service.begin(request)).rejects.toThrow(IdempotencyUnknownStatusError);
   });
 
+  it('replays a COMPLETED record with a JSON-null result instead of re-executing', async () => {
+    // Regression: toRecord omitted null results, so the executor saw
+    // result === undefined and re-ran the external side effect.
+    const createStarted = vi.fn().mockResolvedValue(record());
+    const findByKey = vi.fn();
+    const repository = { createStarted, findByKey } as unknown as IdempotencyRepository;
+    const service = new JaafarIdempotencyService(repository);
+    await service.begin(request);
+    const inputHash = createStarted.mock.calls[0][0].inputHash as string;
+    createStarted.mockRejectedValue(new Error('unique violation'));
+    findByKey.mockResolvedValue(record({ inputHash, status: 'COMPLETED', result: null }));
+
+    await expect(service.begin(request)).resolves.toMatchObject({
+      status: 'COMPLETED',
+      result: null,
+    });
+  });
+
+  it('hashes inputs key-order independently', async () => {
+    const createStarted = vi.fn().mockResolvedValue(record());
+    const repository = { createStarted, findByKey: vi.fn() } as unknown as IdempotencyRepository;
+    const service = new JaafarIdempotencyService(repository);
+
+    await service.begin({ ...request, input: { recipient: 'a@b.c', channel: 'slack' } });
+    const firstHash = createStarted.mock.calls[0][0].inputHash as string;
+    await service.begin({ ...request, input: { channel: 'slack', recipient: 'a@b.c' } as never });
+    const secondHash = createStarted.mock.calls[1][0].inputHash as string;
+
+    expect(firstHash).toBe(secondHash);
+  });
+
   it('persists completion, failure, and unknown outcomes', async () => {
     const repository = {
       complete: vi.fn().mockResolvedValue(record({ status: 'COMPLETED', result: { sent: true } })),

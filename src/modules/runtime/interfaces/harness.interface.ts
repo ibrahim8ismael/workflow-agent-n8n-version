@@ -20,7 +20,6 @@ export interface HarnessUsage {
   graphSteps: number;
   toolCalls: number;
   retriesByTool: Record<string, number>;
-  elapsedMs: number;
   estimatedCost?: number;
   outputTokens?: number;
 }

@@ -1,12 +1,5 @@
 import { Injectable } from '@nestjs/common';
 
-export type NodeResolverKind = 'native' | 'http' | 'code';
-
-export interface NodeResolverOverride {
-  requested: boolean;
-  type?: 'httpRequest' | 'code';
-}
-
 export interface NodeResolverNodeType {
   type: string;
   typeVersion?: number;
@@ -18,28 +11,6 @@ export interface NodeResolverCapability {
   credentialsAvailable?: boolean;
   suggestedNodeType?: string;
   nodeTypes?: string[];
-}
-
-export interface ResolveNodeInput {
-  integration?: string;
-  operation?: string;
-  instanceNodeTypes: NodeResolverNodeType[];
-  capabilities?: NodeResolverCapability[];
-  /**
-   * Curated operation lists keyed by normalized provider. Absence of an
-   * entry means unverified (NOT unsupported) — see plan §3/§6.
-   */
-  knownOperations?: Record<string, string[]>;
-  override?: NodeResolverOverride;
-  /** Pure transform/logic step with no integration — always Code. */
-  isLogicOnly?: boolean;
-}
-
-export interface ResolveNodeResult {
-  kind: NodeResolverKind;
-  nodeType?: string;
-  operationVerified: boolean;
-  reason: string;
 }
 
 const GENERIC_TYPES = new Set(['n8n-nodes-base.httpRequest', 'n8n-nodes-base.code']);
@@ -97,81 +68,6 @@ function nodeSuffix(nodeType: string): string {
  */
 @Injectable()
 export class NodeResolverService {
-  resolveNode(input: ResolveNodeInput): ResolveNodeResult {
-    if (input.isLogicOnly && !input.integration) {
-      return {
-        kind: 'code',
-        nodeType: 'n8n-nodes-base.code',
-        operationVerified: true,
-        reason: 'Pure transformation/logic step with no integration.',
-      };
-    }
-    if (input.override?.requested) {
-      if (input.override.type === 'code') {
-        return {
-          kind: 'code',
-          nodeType: 'n8n-nodes-base.code',
-          operationVerified: true,
-          reason: 'The user explicitly requested the Code node.',
-        };
-      }
-      return {
-        kind: 'http',
-        nodeType: 'n8n-nodes-base.httpRequest',
-        operationVerified: true,
-        reason: 'The user explicitly requested direct HTTP/API usage.',
-      };
-    }
-    const integration = input.integration?.trim();
-    if (!integration) {
-      return {
-        kind: 'code',
-        nodeType: 'n8n-nodes-base.code',
-        operationVerified: true,
-        reason: 'No integration requested; generic logic node applies.',
-      };
-    }
-    const candidate = this.findNativeCandidate(
-      integration,
-      input.instanceNodeTypes,
-      input.capabilities ?? [],
-    );
-    if (!candidate) {
-      return {
-        kind: 'http',
-        nodeType: 'n8n-nodes-base.httpRequest',
-        operationVerified: false,
-        reason: `No compatible native node for "${integration}" in the connected n8n instance.`,
-      };
-    }
-    const provider = normalize(integration);
-    const known = input.knownOperations?.[provider];
-    const operation = input.operation?.trim();
-    if (!operation || !known) {
-      return {
-        kind: 'native',
-        nodeType: candidate,
-        operationVerified: false,
-        reason: `Native node ${candidate} is available in the connected n8n instance${operation ? `; operation "${operation}" is not covered by the current operation schema` : ''}.`,
-      };
-    }
-    const supported = known.some((op) => normalize(op) === normalize(operation));
-    if (supported) {
-      return {
-        kind: 'native',
-        nodeType: candidate,
-        operationVerified: true,
-        reason: `Native node ${candidate} supports "${operation}" in the connected n8n instance.`,
-      };
-    }
-    return {
-      kind: 'http',
-      nodeType: 'n8n-nodes-base.httpRequest',
-      operationVerified: true,
-      reason: `Native node ${candidate} exists but the requested operation "${operation}" is verified as unsupported.`,
-    };
-  }
-
   /**
    * Relevant-node filtering for the planner prompt (plan §6): natives
    * matching detected providers first, then capability nodes, then
@@ -246,35 +142,5 @@ export class NodeResolverService {
   /** True for the generic fallbacks the native-first policy polices. */
   isGenericNodeType(nodeType: string | undefined): boolean {
     return !!nodeType && GENERIC_TYPES.has(nodeType);
-  }
-
-  private findNativeCandidate(
-    integration: string,
-    instanceNodeTypes: NodeResolverNodeType[],
-    capabilities: NodeResolverCapability[],
-  ): string | undefined {
-    const provider = normalize(integration);
-    // 1) explicit capability hint wins (registry is the mapping owner)
-    for (const capability of capabilities) {
-      if (normalize(capability.provider) !== provider) continue;
-      if (
-        capability.suggestedNodeType &&
-        instanceNodeTypes.some((n) => n.type === capability.suggestedNodeType)
-      ) {
-        return capability.suggestedNodeType;
-      }
-      const hinted = (capability.nodeTypes ?? []).find((nodeType) =>
-        instanceNodeTypes.some((n) => n.type === nodeType),
-      );
-      if (hinted) return hinted;
-      // Capability proves the provider is connected; a same-suffix instance
-      // node is the native even without an explicit hint list.
-      const bySuffix = instanceNodeTypes.find((n) => nodeSuffix(n.type) === provider);
-      if (bySuffix && capability.credentialsAvailable !== false) return bySuffix.type;
-    }
-    // 2) exact suffix match against the instance inventory
-    const exact = instanceNodeTypes.find((n) => nodeSuffix(n.type) === provider);
-    if (exact && !GENERIC_TYPES.has(exact.type)) return exact.type;
-    return undefined;
   }
 }

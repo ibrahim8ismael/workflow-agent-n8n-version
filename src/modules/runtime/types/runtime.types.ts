@@ -15,4 +15,6 @@ export interface RuntimeRequest {
   userId?: string;
   organizationId?: string;
   mode: RuntimeMode;
+  /** Channel webhook dedup anchor (externalMessageId) — stored on run metadata. */
+  channelMessageId?: string;
 }

@@ -42,7 +42,7 @@ const toolDefinitionSchema = z.object({
   name: z.string(),
   slug: z.string(),
   description: z.string(),
-  executionMode: z.enum(['knowledge', 'memory', 'ai', 'hybrid', 'n8n', 'approval']),
+  executionMode: z.enum(['knowledge', 'memory', 'ai', 'hybrid', 'n8n', 'approval', 'domain']),
   inputSchema: jsonValueSchema,
   outputSchema: jsonValueSchema,
   requiredPermissions: z.array(z.string()),

@@ -54,7 +54,7 @@ export class JaafarContextLoaderService {
       organizationId: request.organizationId,
     });
     const [history, tools, memories, knowledge, readiness] = await Promise.all([
-      this.loadHistory(request.conversationId),
+      this.loadHistory(request),
       this.tools.listForAgent(request.agentId, {
         mode: request.mode,
         userId: request.userId,
@@ -84,12 +84,24 @@ export class JaafarContextLoaderService {
     };
   }
 
-  private async loadHistory(conversationId?: string) {
-    if (!conversationId) return [];
-    const messages = await this.conversations.getMessages(conversationId, {
-      take: this.historyLimit,
-    });
-    return messages.map((message) => ({ role: message.role, content: message.content }));
+  /**
+   * Loads the RECENT history window (desc + reverse), not the oldest one —
+   * with `asc` + take the loader returned the FIRST 20 messages of any
+   * longer conversation, silently dropping everything recent from
+   * understanding/planning. Scope-checked so a caller-supplied
+   * conversationId can never read another tenant's messages.
+   */
+  private async loadHistory(request: JaafarContextLoadRequest) {
+    if (!request.conversationId) return [];
+    const messages = await this.conversations.getMessages(
+      request.conversationId,
+      { take: this.historyLimit, order: 'desc' },
+      { userId: request.userId, organizationId: request.organizationId },
+    );
+    return messages
+      .slice()
+      .reverse()
+      .map((message) => ({ role: message.role, content: message.content }));
   }
 
   private async loadKnowledge(request: JaafarContextLoadRequest) {

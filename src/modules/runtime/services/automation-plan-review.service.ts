@@ -3,7 +3,11 @@ import type { ReadinessBlocker } from '../../automations/constants/automation-re
 import { CREDENTIAL_STATUS } from '../../automations/constants/automation-readiness.constants';
 import type { AutomationBlueprint } from '../../automations/schemas/automation-blueprint.schema';
 import type { IntegrationCapability } from './integration-registry.service';
-import { canonicalProvider, expectedCredentialTypes } from './known-providers.catalog';
+import {
+  canonicalProvider,
+  expectedCredentialTypes,
+  knownNativeNodeTypes,
+} from './known-providers.catalog';
 
 export type PlanReviewErrorCode =
   | 'INVALID_PLAN'
@@ -38,7 +42,7 @@ export interface RequirementCoverage {
 export interface PlanReviewInput {
   blueprint: AutomationBlueprint;
   /** Required requirements with stable R-ids (from understanding v2). */
-  requirements?: Array<{ id?: string; field: string; required: boolean }>;
+  requirements?: Array<{ id?: string; field: string; value?: string; required: boolean }>;
   /** Conditions extracted from the request (understanding v2). */
   conditions?: string[];
   /** Registry capabilities — integration refs validated when provided. */
@@ -51,6 +55,28 @@ export interface PlanReviewInput {
   instanceNodeTypes?: string[];
   /** Explicit generic-node request from understanding — suppresses the native guard. */
   genericOverride?: { requested: boolean; type?: 'httpRequest' | 'code' };
+}
+
+/**
+ * Runtime/meta state is not a design requirement: the n8n connection state
+ * ("not connected", "connected successfully"), the platform, API keys —
+ * no step can ever "cover" them, so a required one guarantees a false
+ * UNCOVERED_REQUIREMENT death (live case: R5 n8n_instance="not connected
+ * yet" failed the plan twice). Downgrade them to non-required before
+ * coverage enforcement. Pure — exported for tests.
+ */
+const META_REQUIREMENT_PATTERN =
+  /not connected|already connected|connected successfully|connection state|\bn8n\b|api[- ]?key|credential|your own identity/i;
+
+export function sanitizeDesignRequirements<
+  T extends { field: string; value?: string; required: boolean },
+>(requirements: T[]): T[] {
+  return requirements.map((requirement) =>
+    requirement.required &&
+    META_REQUIREMENT_PATTERN.test(`${requirement.field} ${requirement.value ?? ''}`)
+      ? { ...requirement, required: false }
+      : requirement,
+  );
 }
 
 export interface PlanReviewResult {
@@ -81,6 +107,7 @@ const SIDE_EFFECT_PATTERN = /(delete|remove|destroy|charge|payment|refund|send m
 export class AutomationPlanReviewService {
   review(input: PlanReviewInput): PlanReviewResult {
     const blueprint = this.assignStepIds(input.blueprint);
+    const requirements = sanitizeDesignRequirements(input.requirements ?? []);
     const errors: PlanReviewIssue[] = [];
     const warnings: PlanReviewIssue[] = [];
 
@@ -134,7 +161,27 @@ export class AutomationPlanReviewService {
       }
     }
 
-    const coverage = this.coverageMap(blueprint, input.requirements ?? []);
+    const coverage = this.coverageMap(blueprint, requirements);
+    const knownIds = new Set(
+      requirements.map((requirement, index) => requirement.id ?? `R${index + 1}`),
+    );
+    // Unknown R-ids (typos, invented ids) can never satisfy coverage — flag
+    // them explicitly instead of letting the plan die with a confusing
+    // "uncovered" error on the real requirement.
+    if (knownIds.size > 0) {
+      for (const step of blueprint.steps) {
+        const stepId = step.id ?? step.name;
+        for (const ref of step.requirementIds ?? []) {
+          if (!knownIds.has(ref)) {
+            errors.push({
+              code: 'INVALID_PLAN',
+              message: `Step "${step.name}" references unknown requirement "${ref}" — use one of ${[...knownIds].join(', ')}`,
+              stepId,
+            });
+          }
+        }
+      }
+    }
     for (const entry of coverage) {
       if (entry.required && entry.stepIds.length === 0) {
         errors.push({
@@ -301,16 +348,34 @@ export class AutomationPlanReviewService {
       if (overrideBlocks(hintType)) continue;
       const provider = step.integration.toLowerCase();
       const capability = capabilities.find((c) => c.provider.toLowerCase() === provider);
+      // Catalog proven-native — closes the ALIAS gap (smtp → n8n-nodes-base.
+      // emailSend) only when the instance is READABLE (real inventory in
+      // hand) and NO catalog native suffix-matches the provider. With an
+      // unreadable instance the lenient policy stays: suffix-matchable
+      // providers warn, never error (eval: native-unverified-instance-warning).
+      const instanceReadable = instanceTypes.length > 0;
+      const allCatalogNatives = knownNativeNodeTypes(provider).filter((type) => !GENERIC.has(type));
+      const catalogSuffixMatchable = allCatalogNatives.some(
+        (type) => suffixOf(type) === normalize(provider),
+      );
+      const catalogNative =
+        instanceReadable && !catalogSuffixMatchable
+          ? allCatalogNatives.find((type) => !/trigger$/i.test(type))
+          : undefined;
       const provenFromCapability =
         capability?.credentialsAvailable &&
-        (capability.nodeTypes ?? []).some(
+        ((capability.nodeTypes ?? []).some(
           (type) => !GENERIC.has(type) && suffixOf(type) === normalize(provider),
-        );
+        ) ||
+          Boolean(catalogNative));
       const provenNativeType =
         (capability?.nodeTypes ?? []).find(
           (type) => !GENERIC.has(type) && suffixOf(type) === normalize(provider),
         ) ??
-        instanceTypes.find((type) => !GENERIC.has(type) && suffixOf(type) === normalize(provider));
+        instanceTypes.find(
+          (type) => !GENERIC.has(type) && suffixOf(type) === normalize(provider),
+        ) ??
+        (capability?.credentialsAvailable ? catalogNative : undefined);
       if (provenFromCapability || (capability?.credentialsAvailable && provenNativeType)) {
         errors.push({
           code: 'NATIVE_NODE_AVAILABLE',

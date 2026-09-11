@@ -66,9 +66,18 @@ const repairSchema = z.object({
 export class AutomationRepairService {
   constructor(private readonly llmRuntime: LLMRuntimeService) {}
 
-  /** Transient failures need no patch — retry the same blueprint. */
+  /**
+   * True only when an LLM blueprint patch can plausibly fix the failure.
+   * `retry_execution` → transient, retry unchanged. `fix_credentials` and
+   * `escalate` → only the USER can unblock (reconnect/re-permission) —
+   * patching would burn the whole repair budget on an unfixable problem.
+   */
   needsPatch(classified: ClassifiedAutomationError): boolean {
-    return classified.repairStrategy !== 'retry_execution';
+    return (
+      classified.repairStrategy === 'replan_step' ||
+      classified.repairStrategy === 'patch_expression' ||
+      classified.repairStrategy === 'adjust_config'
+    );
   }
 
   async diagnoseAndPatch(input: RepairInput): Promise<RepairOutcome> {

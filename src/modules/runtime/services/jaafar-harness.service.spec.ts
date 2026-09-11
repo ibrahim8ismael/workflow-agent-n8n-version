@@ -1,6 +1,10 @@
 import { ConfigService } from '@nestjs/config';
 import { describe, expect, it, vi } from 'vitest';
-import { HarnessLimitError, JaafarHarnessService } from './jaafar-harness.service';
+import {
+  HarnessLimitError,
+  HarnessParallelismError,
+  JaafarHarnessService,
+} from './jaafar-harness.service';
 
 const config = (values: Record<string, unknown> = {}) =>
   ({
@@ -45,11 +49,25 @@ describe('JaafarHarnessService', () => {
           graphSteps: 31,
           toolCalls: 0,
           retriesByTool: {},
-          elapsedMs: 0,
         },
         Date.now(),
       ),
     ).toThrowError(new HarnessLimitError('maxGraphSteps', 30, 31));
+  });
+
+  it('enforces the runtime limit against the persisted run start time', () => {
+    const service = new JaafarHarnessService(config());
+
+    expect(() =>
+      service.assertWithinLimits(
+        {
+          graphSteps: 1,
+          toolCalls: 0,
+          retriesByTool: {},
+        },
+        Date.now() - 301_000,
+      ),
+    ).toThrow('maxRuntimeMs');
   });
 
   it('enforces tool calls, retries, cost, output, and runtime limits', () => {
@@ -70,7 +88,6 @@ describe('JaafarHarnessService', () => {
           graphSteps: 1,
           toolCalls: 3,
           retriesByTool: { search: 0 },
-          elapsedMs: 0,
           estimatedCost: 0,
           outputTokens: 0,
         },
@@ -84,7 +101,6 @@ describe('JaafarHarnessService', () => {
           graphSteps: 1,
           toolCalls: 1,
           retriesByTool: { search: 2 },
-          elapsedMs: 0,
         },
         Date.now(),
         policy,
@@ -96,7 +112,6 @@ describe('JaafarHarnessService', () => {
           graphSteps: 1,
           toolCalls: 1,
           retriesByTool: {},
-          elapsedMs: 0,
           estimatedCost: 2,
         },
         Date.now(),
@@ -109,7 +124,6 @@ describe('JaafarHarnessService', () => {
           graphSteps: 1,
           toolCalls: 1,
           retriesByTool: {},
-          elapsedMs: 0,
           outputTokens: 6,
         },
         Date.now(),
@@ -123,10 +137,10 @@ describe('JaafarHarnessService', () => {
     const policy = service.getPolicy();
 
     expect(() => service.assertParallelTools(true, 2, policy)).not.toThrow();
-    expect(() => service.assertParallelTools(false, 2, policy)).toThrow('maxToolCalls');
+    expect(() => service.assertParallelTools(false, 2, policy)).toThrow(HarnessParallelismError);
     expect(() =>
       service.assertParallelTools(true, 2, { ...policy, allowParallelReadOnlyTools: false }),
-    ).toThrow('maxToolCalls');
+    ).toThrow(HarnessParallelismError);
   });
 
   it('stops cancelled execution', () => {

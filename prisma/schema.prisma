@@ -371,9 +371,14 @@ model Conversation {
   agentId        String
   userId         String?
   organizationId String?
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
-  deletedAt      DateTime?
+  // Channel identity — one conversation per external channel thread per
+  // agent. Nullable for API-originated conversations (unique index ignores
+  // NULLs), so the constraint never constrains non-channel rows.
+  channelType            String?
+  externalConversationId String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  deletedAt              DateTime?
 
   agent        Agent     @relation(fields: [agentId], references: [id])
   user         User?     @relation("UserConversations", fields: [userId], references: [id])
@@ -381,6 +386,7 @@ model Conversation {
   messages     Message[]
   runs         Run[]
 
+  @@unique([agentId, channelType, externalConversationId])
   @@index([agentId])
   @@index([userId])
   @@index([organizationId])

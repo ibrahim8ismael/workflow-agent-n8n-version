@@ -333,7 +333,10 @@ export class JaafarContextManagerService {
         const cut = Math.min(section.body.length, over);
         this.cutSection(key, section, cut);
         if (!truncated.includes(key)) truncated.push(key);
-        over -= cut;
+        // Recompute from the real total: the truncation marker the cut
+        // inserts adds characters back, so `over -= cut` under-accounted and
+        // the reported total could still exceed the budget.
+        over = total() - TOTAL_BUDGET_CHARS;
       }
     }
     return { stage, agentId, sections, totalChars: total(), truncated };

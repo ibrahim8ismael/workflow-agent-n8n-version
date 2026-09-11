@@ -206,4 +206,32 @@ describe('JaafarRequestUnderstandingService', () => {
     expect(content).toContain('Which number should receive the messages?');
     expect(content).toContain('automation_design');
   });
+
+  it('pins the prompt to the exact zod schema field contract', async () => {
+    // Regression: the prompt once described requirements/assumptions loosely
+    // ("extract trigger, actions, entities…", "record assumptions with risk")
+    // while the schema demands requirements[] {field,value,required,source}
+    // and assumptions[] {statement,rationale,reversible,risk} with top-level
+    // trigger/actions/entities. Every model output then failed validation
+    // (SCHEMA_INVALID) and the whole automation path 500'd.
+    const llmRuntime = {
+      generateObject: vi.fn().mockResolvedValue({ object: output }),
+    };
+    const service = new JaafarRequestUnderstandingService(llmRuntime as never);
+
+    await service.understand({ userMessage: 'Sync orders', history: [] });
+
+    const prompt = vi.mocked(llmRuntime.generateObject).mock.calls[0]?.[0] as unknown as {
+      systemPrompt: string;
+    };
+    const system = prompt.systemPrompt;
+    for (const key of ['field', 'value', 'required', 'source']) {
+      expect(system).toContain(key);
+    }
+    for (const key of ['statement', 'rationale', 'reversible', 'risk']) {
+      expect(system).toContain(key);
+    }
+    expect(system).toContain('TOP-LEVEL');
+    expect(system).toContain('never nested inside requirements');
+  });
 });

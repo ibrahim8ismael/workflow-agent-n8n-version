@@ -293,6 +293,31 @@ export class N8nNodeInventoryService {
       this.harvestNodeTypes(connection),
       this.loadDataTables(connection),
     ]);
+    // Fresh-instance blind spot: a brand-new n8n with zero workflows only
+    // exposed the 8 structural seeds, so common natives (gmail, slack…)
+    // were invisible to the planner until first use. The public API's
+    // node-types discovery fills that gap. Priority: workflow harvest
+    // (proven in use) > API discovery (installed) > structural seed.
+    // Existence is NOT credential-readiness — credentials stay a separate
+    // capability signal.
+    let discovered: Array<{ type: string; typeVersion?: number }> = [];
+    try {
+      discovered =
+        (await (this.clientApi.listNodeTypes?.(connection) ??
+          Promise.resolve([] as Array<{ type: string; typeVersion?: number }>))) ?? [];
+    } catch {
+      discovered = [];
+    }
+    const known = new Set(nodeTypes.map((node) => node.type));
+    for (const entry of discovered) {
+      if (known.has(entry.type)) continue;
+      known.add(entry.type);
+      nodeTypes.push({
+        type: entry.type,
+        ...(entry.typeVersion !== undefined ? { typeVersion: entry.typeVersion } : {}),
+        inUse: false,
+      });
+    }
     return { nodeTypes, dataTables: dataTables.tables, dataTablesSupported: dataTables.supported };
   }
 

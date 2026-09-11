@@ -66,7 +66,11 @@ describe('JaafarContextLoaderService', () => {
       userId: 'user-1',
       organizationId: 'org-1',
     });
-    expect(conversations.getMessages).toHaveBeenCalledWith('conversation-1', { take: 20 });
+    expect(conversations.getMessages).toHaveBeenCalledWith(
+      'conversation-1',
+      { take: 20, order: 'desc' },
+      { userId: 'user-1', organizationId: 'org-1' },
+    );
     expect(tools.listForAgent).toHaveBeenCalledWith('agent-1', {
       mode: 'conversation',
       userId: 'user-1',
@@ -83,6 +87,47 @@ describe('JaafarContextLoaderService', () => {
     expect(result.history).toHaveLength(20);
     expect(result.memoryReferences).toEqual(['memory-1']);
     expect(result.knowledgeReferences).toEqual(['doc-1']);
+  });
+
+  it('loads the RECENT history window in chronological order', async () => {
+    // Regression: asc + take returned the OLDEST 20 messages of a long
+    // conversation — understanding/planning operated on stale history.
+    conversations.getMessages.mockResolvedValue(
+      Array.from({ length: 20 }, (_, index) => ({
+        role: 'user',
+        content: `recent-${19 - index}`,
+      })),
+    );
+
+    const result = await service.load({
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      userMessage: 'What changed?',
+    });
+
+    expect(result.history[0]?.content).toBe('recent-0');
+    expect(result.history[19]?.content).toBe('recent-19');
+  });
+
+  it('rejects history reads outside the caller scope', async () => {
+    // Tenant isolation: the loader passes the caller scope down — a
+    // foreign conversationId must not leak its messages.
+    const { NotFoundException } = await import('@nestjs/common');
+    conversations.getMessages.mockRejectedValue(new NotFoundException('not found'));
+
+    await expect(
+      service.load({
+        agentId: 'agent-1',
+        userId: 'intruder',
+        conversationId: 'foreign-conversation',
+        userMessage: 'What is our refund policy?',
+      }),
+    ).rejects.toThrow(NotFoundException);
+    expect(conversations.getMessages).toHaveBeenCalledWith(
+      'foreign-conversation',
+      { take: 20, order: 'desc' },
+      { userId: 'intruder', organizationId: undefined },
+    );
   });
 
   it('loads readiness only when requested and bounds capabilities', async () => {
