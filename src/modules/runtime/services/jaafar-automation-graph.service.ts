@@ -112,6 +112,12 @@ interface AutomationGraphState {
   nextStep?: 'provision' | 'test_execute';
   response?: string;
   escalated?: boolean;
+  /**
+   * True when provisioning was deferred because no ACTIVE n8n connection
+   * exists. The validated plan is saved as a draft (run stays WAITING) and
+   * can be provisioned later via provisionDeferred() without replanning.
+   */
+  deferred?: boolean;
   waitingReason?: 'approval' | 'clarification';
   usage: { promptTokens: number; completionTokens: number; totalTokens: number };
 }
@@ -192,6 +198,10 @@ const AutomationGraphState = Annotation.Root({
     reducer: (_left, right) => right,
   }),
   escalated: Annotation<boolean | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  deferred: Annotation<boolean | undefined>({
     default: () => undefined,
     reducer: (_left, right) => right,
   }),
@@ -416,6 +426,124 @@ export class JaafarAutomationGraphService {
       return this.result(runId, result, 'COMPLETED');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Automation provisioning failed';
+      await this.failRun(runId, message);
+      throw error;
+    }
+  }
+
+  /**
+   * Provisions a plan previously saved as a draft (no n8n connection at
+   * design time) without replanning. Requires a WAITING run with
+   * metadata.buildDeferred and a stored automationPlan artifact, plus an
+   * ACTIVE n8n connection now. Reuses the provision→verify→test→complete
+   * chain on a fresh checkpoint thread.
+   */
+  async provisionDeferred(
+    runId: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<ExecuteResponse> {
+    const snapshot = await this.agentRuns.snapshot(runId);
+    const run = snapshot.run as {
+      agentId: string;
+      userId?: string | null;
+      organizationId?: string | null;
+      conversationId?: string | null;
+      status: string;
+      metadata?: unknown;
+      automationPlan?: unknown;
+      requirements?: unknown;
+      conditions?: unknown;
+    };
+    if (scope?.userId && run.userId && run.userId !== scope.userId) {
+      return this.scopeFailure(runId, 'user');
+    }
+    if (
+      scope?.organizationId &&
+      run.organizationId &&
+      run.organizationId !== scope.organizationId
+    ) {
+      return this.scopeFailure(runId, 'organization');
+    }
+    const metadata = (run.metadata as Record<string, unknown> | null) ?? {};
+    if (!metadata.buildDeferred) {
+      return {
+        runId,
+        mode: 'automation_design',
+        status: 'FAILED',
+        response:
+          'This run has no deferred automation plan to build. Send a new message to start another design.',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
+    if (run.status !== 'WAITING') {
+      return {
+        runId,
+        mode: 'automation_design',
+        status: 'FAILED',
+        response: `This deferred plan is no longer waiting (status=${run.status}). Send a new message to start another design.`,
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
+    if (!run.automationPlan || typeof run.automationPlan !== 'object') {
+      return {
+        runId,
+        mode: 'automation_design',
+        status: 'FAILED',
+        response:
+          'The saved automation plan is missing, so there is nothing to build. Please restate your request and I will prepare a fresh design.',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
+    const userId = scope?.userId ?? run.userId ?? undefined;
+    const organizationId = scope?.organizationId ?? run.organizationId ?? undefined;
+    if (
+      !(await this.hasActiveConnection({ userId, organizationId } as JaafarAutomationGraphInput))
+    ) {
+      return {
+        runId,
+        mode: 'automation_design',
+        status: 'WAITING',
+        response:
+          'There is still no ACTIVE n8n connection, so the draft stays saved. Connect your n8n instance and try building again — no redesign needed.',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
+    try {
+      const result = await this.build().invoke(
+        {
+          input: {
+            runId,
+            agentId: run.agentId,
+            userMessage: (metadata.userMessage as string) || 'Build the deferred automation plan',
+            ...(run.conversationId ? { conversationId: run.conversationId } : {}),
+            ...(userId ? { userId } : {}),
+            ...(organizationId ? { organizationId } : {}),
+            retryFrom: 'provision' as const,
+            blueprint: run.automationPlan as AutomationBlueprint,
+            ...(Array.isArray(run.requirements)
+              ? {
+                  requirements: run.requirements as Array<{
+                    id?: string;
+                    field: string;
+                    required: boolean;
+                  }>,
+                }
+              : {}),
+            ...(Array.isArray(run.conditions) ? { conditions: run.conditions as string[] } : {}),
+          },
+        },
+        this.graphConfig(
+          runId,
+          {
+            ...(userId ? { userId } : {}),
+            ...(organizationId ? { organizationId } : {}),
+          },
+          'deferred',
+        ),
+      );
+      return this.result(runId, result, 'COMPLETED');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Deferred provisioning failed';
       await this.failRun(runId, message);
       throw error;
     }
@@ -723,15 +851,26 @@ export class JaafarAutomationGraphService {
           'automation plan reviewed',
         );
         // Structurally valid but admittedly incomplete: ask for what's
-        // missing instead of sending a half-design to approval.
+        // missing instead of sending a half-design to approval. Requirements
+        // the user already answered (in understanding or the pending reply)
+        // are filtered out so Jaafar never re-asks them; remaining items are
+        // rendered as human-readable questions — never raw R-ids.
         if (!reviewed.blueprint.ready || reviewed.blueprint.missingRequirements.length > 0) {
-          const missing = reviewed.blueprint.missingRequirements;
+          const unanswered = this.unansweredMissingRequirements(
+            state,
+            reviewed.blueprint.missingRequirements,
+          );
+          if (unanswered.length === 0) {
+            return { blueprint: reviewed.blueprint };
+          }
           return {
             blueprint: reviewed.blueprint,
             planFeedback: undefined,
             clarificationOverride:
               `I need a little more information before I can prepare the automation design:\n` +
-              missing.map((item) => `- ${item}`).join('\n'),
+              unanswered
+                .map((item) => `- ${this.describeMissingRequirement(state, item)}`)
+                .join('\n'),
           };
         }
         return { blueprint: reviewed.blueprint };
@@ -837,6 +976,40 @@ export class JaafarAutomationGraphService {
         if (!blueprint) {
           throw new Error('Provisioning requires a validated blueprint');
         }
+        // Plan-only mode: with no ACTIVE n8n connection there is nowhere to
+        // provision. Save the validated plan as a draft (run stays WAITING)
+        // instead of failing — the user can connect n8n later and provision
+        // the exact plan via provisionDeferred() without replanning.
+        const hasConnection = await this.hasActiveConnection(state.input);
+        if (!hasConnection && !state.automationId && !state.input.automationId) {
+          await this.agentRuns.recordArtifacts(
+            state.input.runId,
+            {
+              automationPlan: blueprint as never,
+              ...(this.requirementsOf(state)
+                ? { requirements: this.requirementsOf(state) as never }
+                : {}),
+              ...(this.conditionsOf(state)
+                ? { conditions: this.conditionsOf(state) as never }
+                : {}),
+            },
+            'automation plan saved as draft (no n8n connection)',
+          );
+          await this.agentRuns.advance(state.input.runId, {
+            toStatus: 'WAITING',
+            reason: 'n8n connection required — plan saved as draft',
+          });
+          try {
+            await this.runs.updateMetadata(state.input.runId, {
+              buildDeferred: true,
+              userMessage: state.input.userMessage,
+              intent: 'automation_design',
+            });
+          } catch {
+            /* best-effort */
+          }
+          return { deferred: true as const, waitingReason: 'clarification' as const };
+        }
         await this.agentRuns.advance(state.input.runId, {
           toPhase: AGENT_RUN_PHASE.EXECUTING,
           toStatus: 'EXECUTING',
@@ -873,6 +1046,24 @@ export class JaafarAutomationGraphService {
           readinessBlockers: built.automation
             .readinessBlockers as AutomationGraphState['readinessBlockers'],
         };
+      })
+      .addNode('defer_build', async (state) => {
+        const name = state.blueprint?.name ?? state.input.blueprint?.name ?? 'Automation';
+        const response =
+          `Your automation plan "${name}" is ready and validated, and I've saved it as a draft. ` +
+          `I haven't created it in n8n yet because no n8n instance is connected. ` +
+          `Connect your n8n instance and tell me to build it — I'll provision this exact plan with no redesign needed.`;
+        if (state.input.conversationId) {
+          try {
+            await this.conversations.addMessage(state.input.conversationId, {
+              role: 'assistant',
+              content: response,
+            });
+          } catch {
+            /* best-effort: the run result still carries the response */
+          }
+        }
+        return { response };
       })
       .addNode('verify', async (state) => {
         await this.agentRuns.advance(state.input.runId, {
@@ -1177,6 +1368,19 @@ export class JaafarAutomationGraphService {
           toStatus: 'WAITING',
           reason: 'automation needs confirmation',
         });
+        // Persist the question on the run row so the NEXT turn's
+        // loadPendingContext() can carry it (plus prior intent) into the new
+        // run — otherwise every follow-up answer starts from zero context and
+        // Jaafar re-asks questions the user already answered.
+        try {
+          await this.runs.updateMetadata(state.input.runId, {
+            clarificationQuestion: question,
+            userMessage: state.input.userMessage,
+            intent: 'automation_design',
+          });
+        } catch {
+          /* best-effort: the conversation still shows the question */
+        }
         if (state.input.conversationId) {
           await this.conversations.addMessage(state.input.conversationId, {
             role: 'assistant',
@@ -1203,7 +1407,11 @@ export class JaafarAutomationGraphService {
         { replan: 'plan', approval: 'await_approval' },
       )
       .addEdge('await_approval', 'provision')
-      .addEdge('provision', 'verify')
+      .addConditionalEdges('provision', (state) => (state.deferred ? 'defer_build' : 'verify'), {
+        verify: 'verify',
+        defer_build: 'defer_build',
+      })
+      .addEdge('defer_build', END)
       .addConditionalEdges('verify', (state) => (state.verifyOk ? 'test' : 'diagnose'), {
         test: 'test_execute',
         diagnose: 'diagnose',
@@ -1289,6 +1497,44 @@ export class JaafarAutomationGraphService {
     if (!state.understanding || state.understanding.route === 'clarification')
       return 'clarification';
     return 'plan';
+  }
+
+  /**
+   * Drops blueprint missing-requirement entries the user already answered.
+   * An R-id counts as answered when the matching understanding requirement
+   * was explicitly provided by the user (source 'user' with a value) or its
+   * value appears in the current reply. Anything else stays unanswered.
+   */
+  private unansweredMissingRequirements(state: AutomationGraphState, missing: string[]): string[] {
+    const requirements = state.understanding?.requirements ?? [];
+    const byId = new Map(requirements.map((requirement) => [requirement.id, requirement]));
+    const reply = state.input.userMessage.toLowerCase();
+    return missing.filter((item) => {
+      const match = item.trim().match(/^(R\d+)$/i);
+      if (!match) return true;
+      const requirement = byId.get(match[1]!.toUpperCase());
+      if (!requirement) return true;
+      if (requirement.source === 'user' && requirement.value?.trim()) return false;
+      const value = requirement.value?.trim().toLowerCase();
+      if (value && value.length > 1 && reply.includes(value)) return false;
+      return true;
+    });
+  }
+
+  /**
+   * Renders one blueprint missing-requirement entry for the user. Bare
+   * internal ids (R1, R2, …) are mapped back to the understanding
+   * requirement's field/value; anything else passes through unchanged.
+   */
+  private describeMissingRequirement(state: AutomationGraphState, item: string): string {
+    const match = item.trim().match(/^(R\d+)$/i);
+    if (!match) return item;
+    const requirement = (state.understanding?.requirements ?? []).find(
+      (entry) => entry.id === match[1]!.toUpperCase(),
+    );
+    if (!requirement) return `Requirement ${match[1]!.toUpperCase()} — please describe it`;
+    const detail = requirement.value?.trim() ? ` (you mentioned: ${requirement.value.trim()})` : '';
+    return `${requirement.field}${detail}`;
   }
 
   private routeAfterReview(state: AutomationGraphState): 'replan' | 'build' | 'ask' {
@@ -1419,6 +1665,23 @@ export class JaafarAutomationGraphService {
     }
   }
 
+  /**
+   * True when the owner has an ACTIVE n8n connection right now. Missing or
+   * unreadable connections count as absent — provisioning must defer, never
+   * fail, so the validated plan survives as a draft.
+   */
+  private async hasActiveConnection(input: JaafarAutomationGraphInput): Promise<boolean> {
+    try {
+      const resolved = await this.n8nConnections?.resolveActiveForScope({
+        userId: input.userId,
+        organizationId: input.organizationId,
+      });
+      return Boolean(resolved);
+    } catch {
+      return false;
+    }
+  }
+
   private async resolveConnection(
     input: JaafarAutomationGraphInput,
   ): Promise<N8nClientConnection | null> {
@@ -1468,6 +1731,7 @@ export class JaafarAutomationGraphService {
     return [
       'You are Jaafar designing a business automation as an n8n blueprint. Never guess — every step must trace to the request, and every integration must be a real, supported provider key.',
       'Return steps with stable requirementIds (R1, R2, …) matching the requirements below, explicit conditions for branches, and expectedOutput per step.',
+      'Set ready=false with missingRequirements ONLY when information is genuinely still needed — write each entry as a concrete human-readable question (e.g. "Which Slack channel should receive the notifications?"), never a bare internal id like "R1".',
       'Choose steps[].nodeHint = { type, typeVersion?, parameters, nodeChoiceReason? } using REAL node types from the instance list. Put concrete business values (message text, recipients, intervals, urls…) into parameters. Never invent credential names or ids.',
       "<node_selection_policy>Jaafar builds against the user's connected n8n instance, the source of truth for node availability. Priority: 1. Native integration node — if a compatible native node is listed below, prefer it. If the requested operation is verified as supported, MUST use it. If the operation is unverified, still prefer the native node and record nodeChoiceReason. 2. HTTP Request — only when no compatible native node is listed, when the native node is verified not to support the operation, or when the user explicitly requests direct HTTP/API usage (genericNodeOverride). 3. Code / Set / IF — only for transformation, logic, calculations, parsing, branching. NEVER as an integration substitute. Forbidden: HTTP Request for an integration with a listed compatible native node; Code calling an external API when a native or HTTP node fits. Do not assume a native exists because n8n generally supports the provider. Generic choices MUST include nodeChoiceReason. Missing provider credentials NEVER change node selection — still choose the native node; credentials are a runtime concern, not a design concern.</node_selection_policy>",
       'Name every step[].integration and blueprint integration with the EXACT provider key (e.g. "slack", "gmail", never "Slack channel" or "Slack (must be connected)"). Leave step[].integration EMPTY for structural steps (webhook, schedule, code, set, httpRequest, if, respond) and for generic HTTP calls — set it ONLY when the step calls a real third-party service. If the automation needs a supported integration that is NOT connected, KEEP it in the plan with its native node — do NOT omit, replace, or invent a different name for it. State the missing connection plainly in the summary instead; the workflow will be built anyway and marked as needing credentials.',
@@ -1669,6 +1933,9 @@ export class JaafarAutomationGraphService {
           message: state.response,
         });
       } else if (node === 'ask_clarification' && typeof state.response === 'string') {
+        events.push({ type: 'token', runId, content: state.response });
+        events.push({ type: 'run.waiting', runId, reason: 'clarification' });
+      } else if (node === 'defer_build' && typeof state.response === 'string') {
         events.push({ type: 'token', runId, content: state.response });
         events.push({ type: 'run.waiting', runId, reason: 'clarification' });
       }

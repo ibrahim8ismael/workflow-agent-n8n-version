@@ -20,6 +20,7 @@ import {
   type PlanReviewIssue,
 } from './automation-plan-review.service';
 import type { IntegrationCapability } from './integration-registry.service';
+import { isKnownNativeNodeForProvider, isKnownProvider } from './known-providers.catalog';
 
 export interface BuilderValidationResult {
   valid: boolean;
@@ -318,6 +319,23 @@ export class AutomationWorkflowBuilderService {
         await this.nodeInventory.describeNodeType(connection, hint.type);
       } catch (error) {
         if (error instanceof N8nNodeSchemaError) {
+          // Credential independence: a known provider's plausible native node
+          // missing from the harvested inventory is a verification gap, not
+          // proof of hallucination (inventory learns from existing workflows
+          // and credentials). Keep the node; n8n is final authority at create.
+          if (
+            error.code === 'NODE_NOT_FOUND' &&
+            step.integration &&
+            isKnownProvider(step.integration) &&
+            isKnownNativeNodeForProvider(step.integration, hint.type)
+          ) {
+            warnings.push({
+              code: 'UNMAPPED_STEP',
+              message: `Step "${step.name}" node "${hint.type}" could not be verified in the n8n inventory — building anyway; n8n will validate at creation`,
+              stepId,
+            });
+            continue;
+          }
           errors.push({
             code: 'INVALID_PLAN',
             message: `Step "${step.name}": ${error.message}`,

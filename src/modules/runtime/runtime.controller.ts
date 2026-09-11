@@ -148,6 +148,13 @@ export class RuntimeController {
     return this.jaafarRuntime.retryAutomation(id, this.scope(user));
   }
 
+  @Post(':id/build')
+  @HttpCode(HttpStatus.ACCEPTED)
+  async buildDeferred(@Param('id') id: string, @CurrentUser() user: RuntimeUser) {
+    await this.assertRunAccess(id, user);
+    return this.jaafarRuntime.buildDeferredAutomation(id, this.scope(user));
+  }
+
   @Get(':id/trace')
   async trace(@Param('id') id: string, @CurrentUser() user: RuntimeUser) {
     const run = await this.assertRunAccess(id, user);

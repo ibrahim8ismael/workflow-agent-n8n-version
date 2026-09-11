@@ -26,6 +26,9 @@ function createService() {
     retryFromFailure: vi
       .fn()
       .mockResolvedValue({ runId: 'task-run', status: 'COMPLETED', response: 'Done', usage: {} }),
+    provisionDeferred: vi
+      .fn()
+      .mockResolvedValue({ runId: 'task-run', status: 'COMPLETED', response: 'Done', usage: {} }),
     stream: vi.fn().mockReturnValue(
       (async function* () {
         yield { type: 'run.waiting', runId: 'task-run', reason: 'approval' };
@@ -571,5 +574,40 @@ describe('JaafarRuntimeService', () => {
     expect(result.status).toBe('FAILED');
     expect(result.response).toContain('Only automation runs can be retried');
     expect(automationGraph.retryFromFailure).not.toHaveBeenCalled();
+  });
+
+  it('builds a deferred automation draft without replanning', async () => {
+    const { service, runs, automationGraph } = createService();
+    runs.findById.mockResolvedValue({
+      status: 'WAITING',
+      metadata: { runtimeMode: 'automation_design', automationV2: true },
+    });
+    automationGraph.provisionDeferred = vi.fn().mockResolvedValue({
+      runId: 'task-run',
+      status: 'COMPLETED',
+      response: 'Automation is now ACTIVE',
+      usage: {},
+    });
+
+    const result = await service.buildDeferredAutomation('task-run', { userId: 'user-1' });
+
+    expect(result.status).toBe('COMPLETED');
+    expect(automationGraph.provisionDeferred).toHaveBeenCalledWith('task-run', {
+      userId: 'user-1',
+    });
+  });
+
+  it('refuses to build deferred drafts for non-automation runs', async () => {
+    const { service, runs, automationGraph } = createService();
+    runs.findById.mockResolvedValue({
+      status: 'WAITING',
+      metadata: { runtimeMode: 'conversation' },
+    });
+
+    const result = await service.buildDeferredAutomation('task-run', { userId: 'user-1' });
+
+    expect(result.status).toBe('FAILED');
+    expect(result.response).toContain('Only deferred automation plans can be built');
+    expect(automationGraph.provisionDeferred).not.toHaveBeenCalled();
   });
 });

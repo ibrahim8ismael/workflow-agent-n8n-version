@@ -743,6 +743,97 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     }
   }
 
+  /**
+   * Builds a plan previously saved as a draft (no n8n connection at design
+   * time) without replanning. The run must be WAITING with a stored
+   * automationPlan artifact, and an ACTIVE n8n connection must exist now.
+   */
+  async buildDeferredAutomation(runId: string, scope?: RuntimeScope): Promise<RuntimeResult> {
+    const run = await this.runs.findById(runId);
+    if (!this.matchesScope(run, scope)) return this.failure(runId, 'Run scope does not match.');
+    if (!this.isAutomationDesignRun(run)) {
+      return {
+        runId,
+        status: 'FAILED',
+        response:
+          'Only deferred automation plans can be built. Send a new message to start another run.',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        error: {
+          code: 'INVALID_REQUEST' as RuntimeErrorCode,
+          message: `Run ${runId} is not an automation run`,
+          retryable: false,
+        },
+      };
+    }
+    try {
+      const result = await this.automationGraph.provisionDeferred(runId, scope);
+      const normalized = this.normalize({
+        runId,
+        mode: RuntimeMode.AUTOMATION_DESIGN,
+        status: result.status ?? 'FAILED',
+        response: result.response as string | undefined,
+        plan: result.plan as unknown as Record<string, unknown>,
+        usage: (result.usage as RuntimeUsage) ?? {
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+        },
+      });
+      if (normalized.status === 'FAILED') {
+        await this.recordEvent({
+          type: 'run.failed',
+          runId,
+          occurredAt: new Date().toISOString(),
+          payload: {
+            error: normalized.error ?? {
+              code: 'UNKNOWN_RUNTIME_FAILURE' as RuntimeErrorCode,
+              message: normalized.response ?? 'Deferred build failed',
+              retryable: false,
+            },
+          },
+        });
+      } else if (normalized.status === 'WAITING') {
+        await this.recordEvent({
+          type: 'run.waiting',
+          runId,
+          occurredAt: new Date().toISOString(),
+          payload: { reason: 'approval' },
+        });
+      } else {
+        await this.recordEvent({
+          type: 'run.completed',
+          runId,
+          occurredAt: new Date().toISOString(),
+          payload: { response: normalized.response ?? '', usage: normalized.usage },
+        });
+      }
+      await this.recordBilling(runId);
+      return normalized;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Deferred build failed';
+      await this.recordEvent({
+        type: 'run.failed',
+        runId,
+        occurredAt: new Date().toISOString(),
+        payload: {
+          error: {
+            code: 'UNKNOWN_RUNTIME_FAILURE' as RuntimeErrorCode,
+            message,
+            retryable: false,
+          },
+        },
+      });
+      await this.recordBilling(runId);
+      return this.normalize({
+        runId,
+        mode: RuntimeMode.AUTOMATION_DESIGN,
+        status: 'FAILED',
+        response: message,
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      });
+    }
+  }
+
   async cancel(runId: string, scope?: RuntimeScope): Promise<RuntimeResult> {
     const run = await this.runs.findById(runId);
     if (!this.matchesScope(run, scope)) return this.failure(runId, 'Run scope does not match.');

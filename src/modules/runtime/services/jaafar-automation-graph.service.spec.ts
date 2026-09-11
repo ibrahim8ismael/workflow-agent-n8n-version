@@ -362,6 +362,14 @@ describe('JaafarAutomationGraphService', () => {
     // No replan, no build, no throw — one plan call total.
     expect(llmRuntime.generateObject).toHaveBeenCalledTimes(1);
     expect(builder.build).not.toHaveBeenCalled();
+    // The question is persisted so the next turn carries it as pending context.
+    expect(runs.updateMetadata).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        clarificationQuestion: expect.stringContaining('fakecrmpro'),
+        intent: 'automation_design',
+      }),
+    );
   });
 
   it('completes with a credential message when the build is not ready to run', async () => {
@@ -531,7 +539,7 @@ describe('JaafarAutomationGraphService', () => {
     );
   });
 
-  it('asks for missing requirements instead of approving a half-design', async () => {
+  it('asks for missing requirements in human-readable form, never raw R-ids', async () => {
     planReview.review.mockReturnValue({
       blueprint: { ...blueprint, ready: false, missingRequirements: ['R2', 'R3'] },
       valid: true,
@@ -543,8 +551,101 @@ describe('JaafarAutomationGraphService', () => {
     const result = await service().run(input());
 
     expect(result.status).toBe('WAITING');
-    expect(result.response).toContain('R2');
+    // Internal ids are mapped to readable text, never shown as bare "- R2" lines.
+    expect(result.response).toContain('Requirement R2');
+    expect(result.response).not.toMatch(/^-\s*R2$/m);
     expect(llmRuntime.generateObject).toHaveBeenCalledTimes(1);
+    expect(builder.build).not.toHaveBeenCalled();
+  });
+
+  it('does not re-ask requirements the user already answered', async () => {
+    // R1 was explicitly provided by the user (source user + value) — the
+    // planner listing it as missing must not bounce back to the user.
+    planReview.review.mockReturnValue({
+      blueprint: { ...blueprint, ready: false, missingRequirements: ['R1'] },
+      valid: true,
+      errors: [],
+      warnings: [],
+      coverage: [],
+      readinessBlockers: [],
+    });
+
+    const result = await service().run(input());
+
+    expect(result.status).toBe('WAITING');
+    expect(result.response).toContain('Draft automation blueprint: Order sync');
+    expect(llmRuntime.generateObject).toHaveBeenCalledTimes(1);
+    expect(builder.build).not.toHaveBeenCalled();
+  });
+
+  it('saves the plan as a draft instead of failing when no n8n connection exists', async () => {
+    n8nConnections.resolveActiveForScope.mockResolvedValue(null);
+
+    const svc = service();
+    await svc.run(input());
+    const resumed = await svc.resume('run-1', { approved: true }, { userId: 'user-1' });
+
+    expect(resumed.status).toBe('WAITING');
+    expect(resumed.response).toContain('saved it as a draft');
+    expect(resumed.response).toContain('no n8n instance is connected');
+    expect(builder.build).not.toHaveBeenCalled();
+    expect(agentRuns.recordArtifacts).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({ automationPlan: expect.anything() }),
+      expect.stringContaining('draft'),
+    );
+  });
+
+  it('provisions a deferred draft without replanning once n8n is connected', async () => {
+    agentRuns.snapshot.mockResolvedValue({
+      run: {
+        id: 'run-1',
+        agentId: 'agent-1',
+        userId: 'user-1',
+        organizationId: 'org-1',
+        status: 'WAITING',
+        currentPhase: AGENT_RUN_PHASE.STATIC_VALIDATION,
+        metadata: {
+          automationV2: true,
+          buildDeferred: true,
+          userMessage: 'Sync my orders',
+        },
+        automationPlan: blueprint,
+        requirements: [{ id: 'R1', field: 'sync', required: true }],
+        conditions: [],
+      },
+      transitions: [],
+    });
+
+    const result = await service().provisionDeferred('run-1', { userId: 'user-1' });
+
+    expect(result.status).toBe('COMPLETED');
+    expect(result.response).toContain('ACTIVE');
+    expect(builder.build).toHaveBeenCalledTimes(1);
+    // No replan: the stored blueprint is provisioned directly.
+    expect(llmRuntime.generateObject).not.toHaveBeenCalled();
+  });
+
+  it('keeps the draft waiting when n8n is still not connected', async () => {
+    n8nConnections.resolveActiveForScope.mockResolvedValue(null);
+    agentRuns.snapshot.mockResolvedValue({
+      run: {
+        id: 'run-1',
+        agentId: 'agent-1',
+        userId: 'user-1',
+        organizationId: 'org-1',
+        status: 'WAITING',
+        currentPhase: AGENT_RUN_PHASE.STATIC_VALIDATION,
+        metadata: { automationV2: true, buildDeferred: true },
+        automationPlan: blueprint,
+      },
+      transitions: [],
+    });
+
+    const result = await service().provisionDeferred('run-1', { userId: 'user-1' });
+
+    expect(result.status).toBe('WAITING');
+    expect(result.response).toContain('still no ACTIVE n8n connection');
     expect(builder.build).not.toHaveBeenCalled();
   });
 
