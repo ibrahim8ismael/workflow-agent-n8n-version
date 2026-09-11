@@ -61,6 +61,13 @@ export interface JaafarAutomationGraphInput {
   webhookPath?: string | null;
   requirements?: Array<{ id?: string; field: string; required: boolean }>;
   conditions?: string[];
+  /**
+   * Explicit user request to use generic HTTP/Code nodes for a specific
+   * integration. Persisted on the run metadata at deferral time so
+   * provisionDeferred()/retryFromFailure() can rebuild without it (the
+   * understanding is not hydrated on those entry points).
+   */
+  genericNodeOverride?: { requested: boolean; type?: 'httpRequest' | 'code' };
   repairAttempt?: number;
   lastFailure?: { stage: RepairStage; message: string; code: string };
 }
@@ -73,6 +80,9 @@ export interface AutomationApprovalDecision {
 export type AutomationGraphStreamEvent =
   | { type: 'run.started'; runId: string }
   | { type: 'token'; runId: string; content: string }
+  // Fired at the design approval gate so stream clients can render an
+  // approve/reject affordance (mirrors the execution graph's gate event).
+  | { type: 'approval.required'; runId: string; reason: string }
   | { type: 'run.waiting'; runId: string; reason: 'approval' | 'clarification' }
   | {
       type: 'run.completed';
@@ -95,6 +105,8 @@ interface AutomationGraphState {
   /** Credential-independent readiness carried from provision → complete. */
   buildable?: boolean;
   readyToRun?: boolean;
+  /** True when live verification was skipped (connection lost after provisioning). */
+  verifySkipped?: boolean;
   readinessBlockers?: Array<{
     nodeId: string;
     integration: string;
@@ -110,6 +122,12 @@ interface AutomationGraphState {
   repairChanges?: string[];
   retryUnchanged?: boolean;
   nextStep?: 'provision' | 'test_execute';
+  /**
+   * True when the repair's own revalidation failed — routes repair back into
+   * diagnose (while budget remains) instead of provisioning a known-invalid
+   * blueprint.
+   */
+  repairFailed?: boolean;
   response?: string;
   escalated?: boolean;
   /**
@@ -172,6 +190,10 @@ const AutomationGraphState = Annotation.Root({
     default: () => undefined,
     reducer: (_left, right) => right,
   }),
+  verifySkipped: Annotation<boolean | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
   testOk: Annotation<boolean | undefined>({
     default: () => undefined,
     reducer: (_left, right) => right,
@@ -194,6 +216,10 @@ const AutomationGraphState = Annotation.Root({
     reducer: (_left, right) => right,
   }),
   nextStep: Annotation<'provision' | 'test_execute' | undefined>({
+    default: () => undefined,
+    reducer: (_left, right) => right,
+  }),
+  repairFailed: Annotation<boolean | undefined>({
     default: () => undefined,
     reducer: (_left, right) => right,
   }),
@@ -264,6 +290,15 @@ export class JaafarAutomationGraphService {
   /** Blocking invoke (POST /runs path). */
   async run(input: JaafarAutomationGraphInput): Promise<ExecuteResponse> {
     const runId = await this.ensureRun(input);
+    // Persist the user turn (blocking path) — the stream path persists it
+    // itself; without this, direct-API automation history lost the user turn.
+    if (input.conversationId) {
+      await this.conversations.addMessage(input.conversationId, {
+        role: 'user',
+        content: input.userMessage,
+      });
+      await this.conversations.titleFromFirstMessage(input.conversationId, input.userMessage);
+    }
     try {
       const result = await this.build().invoke(
         { input: { ...input, runId } },
@@ -294,7 +329,16 @@ export class JaafarAutomationGraphService {
       const message = error instanceof Error ? error.message : 'Automation run failed';
       this.logger.error(`Automation graph run ${runId} failed: ${message}`);
       await this.failRun(runId, message);
-      throw error;
+      // A design-stage failure is a product answer, not an HTTP 500: the
+      // caller (and the user) gets the real reason with the explicit
+      // guarantee that nothing was provisioned.
+      return {
+        runId,
+        mode: 'automation_design',
+        status: 'FAILED',
+        response: `I couldn't finalize the automation design: ${this.designFailureMessage(message)} Nothing was provisioned.`,
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
     }
   }
 
@@ -319,12 +363,9 @@ export class JaafarAutomationGraphService {
       for await (const update of stream) {
         for (const event of this.mapStreamUpdate(runId, update as Record<string, unknown>)) {
           if (event.type === 'run.completed') {
-            if (input.conversationId) {
-              await this.conversations.addMessage(input.conversationId, {
-                role: 'assistant',
-                content: event.response,
-              });
-            }
+            // The complete node already persisted the assistant turn — the
+            // old second write here duplicated the completion message in
+            // every streamed run's history.
             // Token totals accumulated on the run row across graph LLM calls.
             try {
               const row = await this.runs.findById(runId);
@@ -349,7 +390,12 @@ export class JaafarAutomationGraphService {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Automation run failed';
       await this.failRun(runId, message);
-      yield { type: 'run.failed', runId, code: 'AUTOMATION_FAILED', message };
+      yield {
+        type: 'run.failed',
+        runId,
+        code: 'AUTOMATION_FAILED',
+        message: `I couldn't finalize the automation design: ${this.designFailureMessage(message)} Nothing was provisioned.`,
+      };
     }
   }
 
@@ -406,6 +452,20 @@ export class JaafarAutomationGraphService {
         toStatus: 'FAILED',
         reason: decision.reason ?? 'automation rejected at approval gate',
       });
+      // Stamp the rejection on the run row: without this, retryFromFailure()
+      // would hydrate the REJECTED blueprint, classify the rejection as an
+      // UNKNOWN failure, "repair" it, and provision a design the user
+      // explicitly refused — bypassing the approval gate entirely.
+      try {
+        await this.runs.updateMetadata(runId, {
+          approvalDecision: 'rejected',
+          approvalPending: false,
+          rejectedAt: new Date().toISOString(),
+          rejectionReason: decision.reason ?? 'automation rejected at approval gate',
+        });
+      } catch {
+        /* best-effort: the FAILED advance above already closed the run */
+      }
       return {
         runId,
         mode: 'automation_design',
@@ -508,6 +568,54 @@ export class JaafarAutomationGraphService {
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       };
     }
+    const deferredBlueprint = run.automationPlan as AutomationBlueprint;
+    const deferredRequirements = Array.isArray(run.requirements)
+      ? (run.requirements as Array<{ id?: string; field: string; required: boolean }>)
+      : [];
+    const deferredConditions = Array.isArray(run.conditions) ? (run.conditions as string[]) : [];
+    const genericNodeOverride =
+      metadata.genericNodeOverride &&
+      typeof metadata.genericNodeOverride === 'object' &&
+      'requested' in (metadata.genericNodeOverride as Record<string, unknown>)
+        ? (metadata.genericNodeOverride as JaafarAutomationGraphInput['genericNodeOverride'])
+        : undefined;
+    // The deferred build runs against a DIFFERENT n8n instance than the one
+    // the plan was validated on (or none at all). Re-validate before
+    // provisioning — otherwise the first failure surfaces as a raw n8n
+    // createWorkflow error instead of a readable plan defect.
+    try {
+      const capabilities = await this.registry
+        .capabilitiesForScope({ userId, organizationId })
+        .catch(() => undefined);
+      const revalidation = await this.builder.validateOnly({
+        blueprint: deferredBlueprint,
+        scope: { userId, organizationId },
+        runId,
+        requirements: deferredRequirements,
+        conditions: deferredConditions,
+        ...(capabilities ? { capabilities } : {}),
+        ...(genericNodeOverride ? { genericOverride: genericNodeOverride } : {}),
+      });
+      if (!revalidation.valid) {
+        const details = revalidation.errors.map((e) => `${e.code}: ${e.message}`).join('; ');
+        const message = `The saved plan no longer validates against the connected n8n instance: ${details}`;
+        this.logger.warn(`Deferred build ${runId} rejected by re-validation: ${details}`);
+        await this.failRun(runId, message);
+        return {
+          runId,
+          mode: 'automation_design',
+          status: 'FAILED',
+          response: `The saved plan no longer validates against your connected n8n instance: ${details}. Tell me to adjust it and I'll prepare a fresh design.`,
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        };
+      }
+    } catch (error) {
+      // Best-effort guard: an infrastructure error in re-validation must not
+      // block the deferred build — n8n still validates at creation time.
+      this.logger.warn(
+        `Deferred build ${runId} re-validation could not run: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     try {
       const result = await this.build().invoke(
         {
@@ -519,17 +627,10 @@ export class JaafarAutomationGraphService {
             ...(userId ? { userId } : {}),
             ...(organizationId ? { organizationId } : {}),
             retryFrom: 'provision' as const,
-            blueprint: run.automationPlan as AutomationBlueprint,
-            ...(Array.isArray(run.requirements)
-              ? {
-                  requirements: run.requirements as Array<{
-                    id?: string;
-                    field: string;
-                    required: boolean;
-                  }>,
-                }
-              : {}),
-            ...(Array.isArray(run.conditions) ? { conditions: run.conditions as string[] } : {}),
+            blueprint: deferredBlueprint,
+            ...(deferredRequirements.length ? { requirements: deferredRequirements } : {}),
+            ...(deferredConditions.length ? { conditions: deferredConditions } : {}),
+            ...(genericNodeOverride ? { genericNodeOverride } : {}),
           },
         },
         this.graphConfig(
@@ -602,6 +703,21 @@ export class JaafarAutomationGraphService {
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       };
     }
+    if (metadata.approvalDecision === 'rejected') {
+      // The user explicitly rejected this design at the approval gate. A
+      // retry must never "repair" it into provisioning — approval bypass.
+      return {
+        runId,
+        mode: 'automation_design',
+        status: 'FAILED',
+        response: `You rejected this automation design${
+          typeof metadata.rejectionReason === 'string' && metadata.rejectionReason
+            ? ` (${metadata.rejectionReason})`
+            : ''
+        }, so I won't rebuild it. Send a new message and I'll prepare a fresh design that accounts for your feedback.`,
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      };
+    }
     const execution = (run.executionResults as Record<string, unknown> | null) ?? {};
     const retryFrom =
       run.currentPhase === 'EXECUTING'
@@ -637,6 +753,14 @@ export class JaafarAutomationGraphService {
               ? (run.requirements as Array<{ id?: string; field: string; required: boolean }>)
               : undefined,
             conditions: Array.isArray(run.conditions) ? (run.conditions as string[]) : undefined,
+            ...(metadata.genericNodeOverride &&
+            typeof metadata.genericNodeOverride === 'object' &&
+            'requested' in (metadata.genericNodeOverride as Record<string, unknown>)
+              ? {
+                  genericNodeOverride:
+                    metadata.genericNodeOverride as JaafarAutomationGraphInput['genericNodeOverride'],
+                }
+              : {}),
             lastFailure: {
               stage: retryFrom === 'provision' ? ('provision' as const) : ('test' as const),
               message: run.error ?? 'Retry requested after failure',
@@ -781,14 +905,33 @@ export class JaafarAutomationGraphService {
           conditions: state.understanding.conditions,
           ...(capabilities ? { capabilities } : {}),
           ...(instance ? { instanceNodeTypes: instance.nodeTypes.map((node) => node.type) } : {}),
-          ...(state.understanding.genericNodeOverride
-            ? { genericOverride: state.understanding.genericNodeOverride }
+          ...((state.understanding?.genericNodeOverride ?? state.input.genericNodeOverride)
+            ? {
+                genericOverride:
+                  state.understanding?.genericNodeOverride ?? state.input.genericNodeOverride,
+              }
             : {}),
         });
         // Credential independence: known-but-disconnected providers are
         // warnings (CREDENTIAL_REQUIRED), never errors — the graph continues
         // to build. Only genuinely UNKNOWN integrations block here.
         if (!reviewed.valid) {
+          // Persist the rejected plan + defects before replanning or
+          // failing — otherwise nobody can ever see WHAT the model emitted
+          // (e.g. steps without requirementIds) and the loop is undebuggable.
+          await this.agentRuns.recordArtifacts(
+            state.input.runId,
+            {
+              automationPlan: reviewed.blueprint as never,
+              validationResult: {
+                valid: false,
+                errors: reviewed.errors,
+                warnings: reviewed.warnings,
+                coverage: reviewed.coverage,
+              } as never,
+            },
+            'plan review failed',
+          );
           // Unknown provider and nothing else: asking the user to clarify
           // beats burning the replan budget on an unfixable plan. The invalid
           // names never reach the builder. Placeholder-ish values (PENDING,
@@ -856,21 +999,34 @@ export class JaafarAutomationGraphService {
         // are filtered out so Jaafar never re-asks them; remaining items are
         // rendered as human-readable questions — never raw R-ids.
         if (!reviewed.blueprint.ready || reviewed.blueprint.missingRequirements.length > 0) {
-          const unanswered = this.unansweredMissingRequirements(
+          const unanswered = await this.unansweredMissingRequirements(
             state,
             reviewed.blueprint.missingRequirements,
           );
           if (unanswered.length === 0) {
             return { blueprint: reviewed.blueprint };
           }
+          // Identity-prompt contract: at most TWO questions per response.
+          // Required items first; the rest are summarized, not hidden.
+          const prioritized = unanswered
+            .slice()
+            .sort(
+              (a, b) =>
+                this.missingRequirementWeight(state, b) - this.missingRequirementWeight(state, a),
+            )
+            .slice(0, 2);
+          const overflow = unanswered.length - prioritized.length;
           return {
             blueprint: reviewed.blueprint,
             planFeedback: undefined,
             clarificationOverride:
               `I need a little more information before I can prepare the automation design:\n` +
-              unanswered
+              prioritized
                 .map((item) => `- ${this.describeMissingRequirement(state, item)}`)
-                .join('\n'),
+                .join('\n') +
+              (overflow > 0
+                ? `\n(+${overflow} more detail${overflow === 1 ? '' : 's'} we can settle after these.)`
+                : ''),
           };
         }
         return { blueprint: reviewed.blueprint };
@@ -899,8 +1055,11 @@ export class JaafarAutomationGraphService {
           requirements: state.understanding.requirements,
           conditions: state.understanding.conditions,
           ...(capabilities ? { capabilities } : {}),
-          ...(state.understanding.genericNodeOverride
-            ? { genericOverride: state.understanding.genericNodeOverride }
+          ...((state.understanding?.genericNodeOverride ?? state.input.genericNodeOverride)
+            ? {
+                genericOverride:
+                  state.understanding?.genericNodeOverride ?? state.input.genericNodeOverride,
+              }
             : {}),
         });
         if (!validation.valid) {
@@ -943,9 +1102,31 @@ export class JaafarAutomationGraphService {
         });
         return {};
       })
-      .addNode('await_approval', (state) => {
+      .addNode('await_approval', async (state) => {
         if (!state.blueprint) throw new Error('Approval requires a validated blueprint');
+        // Park the row as WAITING BEFORE the interrupt fires: if the SSE
+        // client disconnects on the wait event and never pulls the generator
+        // again, the run must already be WAITING — otherwise resume() would
+        // refuse the later approval ("no longer waiting").
+        await this.agentRuns.advance(state.input.runId, {
+          toStatus: 'WAITING',
+          reason: 'automation awaiting approval',
+        });
         const revision = blueprintRevision(state.blueprint);
+        // Mark the approval gate on the run row so a later chat message
+        // ("ok i approve") can be routed to resume() instead of starting a
+        // fresh design — the interrupt payload alone is invisible to the
+        // next turn's classifier.
+        try {
+          await this.runs.updateMetadata(state.input.runId, {
+            approvalPending: true,
+            approvalGate: 'design_approval',
+            approvalSummary: this.formatApprovalSummary(state.blueprint),
+            approvalRevision: revision,
+          });
+        } catch {
+          /* best-effort: the WAITING advance above already parked the run */
+        }
         interrupt({
           type: 'automation_design_approval',
           runId: state.input.runId,
@@ -1002,8 +1183,22 @@ export class JaafarAutomationGraphService {
           try {
             await this.runs.updateMetadata(state.input.runId, {
               buildDeferred: true,
+              // The checkpoint is past the approval interrupt (provision ran
+              // and parked at the deferral gate) — a later chat "ok" must NOT
+              // route here as a design approval; the draft provisions via
+              // provisionDeferred() instead.
+              approvalPending: false,
+              approvalGate: 'deferred',
               userMessage: state.input.userMessage,
               intent: 'automation_design',
+              // The deferred build must honor an explicit generic-node override
+              // — the understanding is not hydrated on provisionDeferred().
+              ...((state.understanding?.genericNodeOverride ?? state.input.genericNodeOverride)
+                ? {
+                    genericNodeOverride:
+                      state.understanding?.genericNodeOverride ?? state.input.genericNodeOverride,
+                  }
+                : {}),
             });
           } catch {
             /* best-effort */
@@ -1030,8 +1225,11 @@ export class JaafarAutomationGraphService {
           requirements: this.requirementsOf(state),
           conditions: this.conditionsOf(state),
           ...(capabilities ? { capabilities } : {}),
-          ...(state.understanding?.genericNodeOverride
-            ? { genericOverride: state.understanding.genericNodeOverride }
+          ...((state.understanding?.genericNodeOverride ?? state.input.genericNodeOverride)
+            ? {
+                genericOverride:
+                  state.understanding?.genericNodeOverride ?? state.input.genericNodeOverride,
+              }
             : {}),
           ...((state.automationId ?? state.input.automationId)
             ? { automationId: (state.automationId ?? state.input.automationId) as string }
@@ -1081,7 +1279,7 @@ export class JaafarAutomationGraphService {
             },
           };
         }
-        return { verifyOk: true as const };
+        return { verifyOk: true as const, verifySkipped: verification.skipped === true };
       })
       .addNode('test_execute', async (state) => {
         const blueprint = state.blueprint ?? state.input.blueprint;
@@ -1112,7 +1310,7 @@ export class JaafarAutomationGraphService {
         }
         const connection = await this.resolveConnection(state.input);
         const webhookPath = state.webhookPath ?? state.input.webhookPath ?? undefined;
-        if (!connection || !webhookPath) {
+        if (!connection) {
           return {
             testOk: false as const,
             lastFailure: {
@@ -1120,6 +1318,22 @@ export class JaafarAutomationGraphService {
               message:
                 'No ACTIVE n8n connection is available to execute the automation against — reconnect the client instance first.',
               code: 'CREDENTIAL_ERROR',
+            },
+          };
+        }
+        if (!webhookPath) {
+          // Distinct failure shape: the connection is fine — the built
+          // workflow simply exposes nothing to execute. Classified as an
+          // INVALID_CONFIGURATION so it can never masquerade as a credential
+          // problem (the old collapsed check burned the repair budget on an
+          // unfixable "fix credentials" loop).
+          return {
+            testOk: false as const,
+            lastFailure: {
+              stage: 'test' as const,
+              message:
+                'The built workflow exposes no webhook path, so runtime validation has nothing to execute against.',
+              code: 'INVALID_CONFIGURATION',
             },
           };
         }
@@ -1181,7 +1395,7 @@ export class JaafarAutomationGraphService {
         );
         const blueprint = state.blueprint ?? state.input.blueprint;
         if (!blueprint) throw new Error('Diagnosis requires the failed blueprint');
-        if (!this.repair.needsPatch(classified)) {
+        if (classified.repairStrategy === 'retry_execution') {
           return {
             diagnosis: `${classified.summary} Classified as transient — retrying unchanged.`,
             repairChanges: [],
@@ -1189,6 +1403,19 @@ export class JaafarAutomationGraphService {
             nextStep:
               failure.stage === 'provision' ? ('provision' as const) : ('test_execute' as const),
           };
+        }
+        if (!this.repair.needsPatch(classified)) {
+          // fix_credentials / escalate: only the user can unblock (reconnect
+          // the instance, re-permission the key). Patching the blueprint can
+          // never help — escalate immediately with the concrete user action
+          // instead of burning the repair budget on a futile LLM patch loop.
+          return { escalated: true as const };
+        }
+        const nextAttempt = (state.repairAttempt || state.input.repairAttempt || 0) + 1;
+        if (nextAttempt > MAX_REPAIR_ATTEMPTS) {
+          // Budget spent — the final patch was already provisioned and
+          // re-tested. Escalate instead of requesting an out-of-budget patch.
+          return { escalated: true as const };
         }
         const patched = await this.repair.diagnoseAndPatch({
           blueprint,
@@ -1235,8 +1462,11 @@ export class JaafarAutomationGraphService {
               requirements: state.understanding?.requirements ?? state.input.requirements,
               conditions: state.understanding?.conditions ?? state.input.conditions,
               ...(capabilities ? { capabilities } : {}),
-              ...(state.understanding?.genericNodeOverride
-                ? { genericOverride: state.understanding.genericNodeOverride }
+              ...((state.understanding?.genericNodeOverride ?? state.input.genericNodeOverride)
+                ? {
+                    genericOverride:
+                      state.understanding?.genericNodeOverride ?? state.input.genericNodeOverride,
+                  }
                 : {}),
             });
             if (!revalidation.valid) {
@@ -1268,12 +1498,16 @@ export class JaafarAutomationGraphService {
           });
           return {
             repairAttempt: attempt,
+            repairFailed: true as const,
             lastFailure: { stage: 'validate' as const, message, code: 'INVALID_CONFIGURATION' },
-            nextStep: 'provision' as const,
+            // nextStep stays untouched: the revalidation failure routes back
+            // into diagnose via repairFailed — never provision a blueprint
+            // that just failed validation.
           };
         }
         return {
           repairAttempt: attempt,
+          repairFailed: false as const,
           nextStep: state.nextStep ?? ('test_execute' as const),
         };
       })
@@ -1307,9 +1541,13 @@ export class JaafarAutomationGraphService {
             : (missing[0] ?? '');
         const response = awaitingCredentials
           ? `I've built "${automationName}"${webhookSuffix}. It is saved in your n8n instance but remains inactive — ${missingList || 'required credentials'} still need${missing.length === 1 ? 's' : ''} to be connected before it can run.`
-          : `Automation "${automationName}" is now ACTIVE in your n8n instance${webhookSuffix}. ` +
-            `It was statically validated, executed against test data, and verified live` +
-            `${attempts > 0 ? ` (after ${attempts} automatic repair${attempts === 1 ? '' : 's'})` : ''} — no success was reported before verification.`;
+          : state.verifySkipped
+            ? `Automation "${automationName}" is now ACTIVE in your n8n instance${webhookSuffix}. ` +
+              `It was statically validated and executed against test data, but I couldn't re-read it from your n8n instance to verify live (the connection was unavailable at verification time)` +
+              `${attempts > 0 ? ` (after ${attempts} automatic repair${attempts === 1 ? '' : 's'})` : ''}.`
+            : `Automation "${automationName}" is now ACTIVE in your n8n instance${webhookSuffix}. ` +
+              `It was statically validated, executed against test data, and verified live` +
+              `${attempts > 0 ? ` (after ${attempts} automatic repair${attempts === 1 ? '' : 's'})` : ''} — no success was reported before verification.`;
         if (state.input.conversationId) {
           await this.conversations.addMessage(state.input.conversationId, {
             role: 'assistant',
@@ -1319,10 +1557,14 @@ export class JaafarAutomationGraphService {
         return { response };
       })
       .addNode('escalate', async (state) => {
+        const attempts = state.repairAttempt || state.input.repairAttempt || 0;
         await this.agentRuns.advance(state.input.runId, {
           toPhase: AGENT_RUN_PHASE.FAILED,
           toStatus: 'FAILED',
-          reason: `repair budget exhausted (${MAX_REPAIR_ATTEMPTS} attempts)`,
+          reason:
+            attempts >= MAX_REPAIR_ATTEMPTS
+              ? `repair budget exhausted (${MAX_REPAIR_ATTEMPTS} attempts)`
+              : 'automation failed — escalated to the user (user action required)',
         });
         const failure = state.lastFailure ??
           state.input.lastFailure ?? {
@@ -1331,7 +1573,7 @@ export class JaafarAutomationGraphService {
             code: 'UNKNOWN',
           };
         const snapshot = await this.agentRuns.snapshot(state.input.runId);
-        const attempts = (snapshot.run.repairAttempts as unknown[] | null) ?? [];
+        const attemptTrail = (snapshot.run.repairAttempts as unknown[] | null) ?? [];
         const message = this.repair.escalationMessage({
           automationName: state.blueprint?.name ?? state.input.blueprint?.name ?? 'your automation',
           succeeded: this.succeededSteps(state),
@@ -1343,7 +1585,7 @@ export class JaafarAutomationGraphService {
               failure.stage,
             ),
           },
-          attempts: attempts as never,
+          attempts: attemptTrail as never,
         });
         if (state.input.conversationId) {
           await this.conversations.addMessage(state.input.conversationId, {
@@ -1420,11 +1662,15 @@ export class JaafarAutomationGraphService {
         complete: 'complete',
         diagnose: 'diagnose',
       })
-      .addEdge('diagnose', 'repair')
+      .addConditionalEdges('diagnose', (state) => (state.escalated ? 'escalate' : 'repair'), {
+        escalate: 'escalate',
+        repair: 'repair',
+      })
       .addConditionalEdges('repair', (state) => this.routeAfterRepair(state), {
         provision: 'provision',
         test_execute: 'test_execute',
         escalate: 'escalate',
+        diagnose: 'diagnose',
       })
       .addEdge('complete', END)
       .addEdge('escalate', END)
@@ -1503,12 +1749,19 @@ export class JaafarAutomationGraphService {
    * Drops blueprint missing-requirement entries the user already answered.
    * An R-id counts as answered when the matching understanding requirement
    * was explicitly provided by the user (source 'user' with a value) or its
-   * value appears in the current reply. Anything else stays unanswered.
+   * value appears in the current reply OR in recent conversation history.
+   * History matters: clarification answers arrive one turn at a time ("slack
+   * dm"), and the NEXT turn's replan must not re-ask for them just because
+   * the new reply ("why no successful result") doesn't repeat the value.
+   * Anything else stays unanswered.
    */
-  private unansweredMissingRequirements(state: AutomationGraphState, missing: string[]): string[] {
+  private async unansweredMissingRequirements(
+    state: AutomationGraphState,
+    missing: string[],
+  ): Promise<string[]> {
     const requirements = state.understanding?.requirements ?? [];
     const byId = new Map(requirements.map((requirement) => [requirement.id, requirement]));
-    const reply = state.input.userMessage.toLowerCase();
+    const corpus = await this.answerCorpus(state);
     return missing.filter((item) => {
       const match = item.trim().match(/^(R\d+)$/i);
       if (!match) return true;
@@ -1516,9 +1769,27 @@ export class JaafarAutomationGraphService {
       if (!requirement) return true;
       if (requirement.source === 'user' && requirement.value?.trim()) return false;
       const value = requirement.value?.trim().toLowerCase();
-      if (value && value.length > 1 && reply.includes(value)) return false;
+      if (value && value.length > 1 && corpus.includes(value)) return false;
       return true;
     });
+  }
+
+  /** Current reply + recent scoped history, lowercased, for answer matching. */
+  private async answerCorpus(state: AutomationGraphState): Promise<string> {
+    const parts = [state.input.userMessage.toLowerCase()];
+    if (state.input.conversationId) {
+      try {
+        const messages = await this.conversations.getMessages(
+          state.input.conversationId,
+          { take: 20, order: 'desc' },
+          { userId: state.input.userId, organizationId: state.input.organizationId },
+        );
+        for (const message of messages) parts.push((message.content ?? '').toLowerCase());
+      } catch {
+        /* best-effort: reply-only matching still applies */
+      }
+    }
+    return parts.join('\n');
   }
 
   /**
@@ -1537,6 +1808,16 @@ export class JaafarAutomationGraphService {
     return `${requirement.field}${detail}`;
   }
 
+  /** Priority weight for clarification ordering — required items first. */
+  private missingRequirementWeight(state: AutomationGraphState, item: string): number {
+    const match = item.trim().match(/^(R\d+)$/i);
+    if (!match) return 0;
+    const requirement = (state.understanding?.requirements ?? []).find(
+      (entry) => entry.id === match[1]!.toUpperCase(),
+    );
+    return requirement?.required ? 1 : 0;
+  }
+
   private routeAfterReview(state: AutomationGraphState): 'replan' | 'build' | 'ask' {
     // review_plan either throws (unfixable), returns planFeedback (replan),
     // sets clarificationOverride (ask the user — missing connection or
@@ -1547,9 +1828,19 @@ export class JaafarAutomationGraphService {
     return state.planFeedback ? 'replan' : 'build';
   }
 
-  private routeAfterRepair(state: AutomationGraphState): 'provision' | 'test_execute' | 'escalate' {
+  private routeAfterRepair(
+    state: AutomationGraphState,
+  ): 'provision' | 'test_execute' | 'escalate' | 'diagnose' {
     const attempts = state.repairAttempt || state.input.repairAttempt || 0;
-    if (attempts >= MAX_REPAIR_ATTEMPTS) return 'escalate';
+    if (state.repairFailed) {
+      // The patched blueprint failed its own revalidation. Loop back into
+      // diagnosis while the budget remains; escalate once it is spent.
+      return attempts >= MAX_REPAIR_ATTEMPTS ? 'escalate' : 'diagnose';
+    }
+    // Off-by-one guard: MAX_REPAIR_ATTEMPTS is the number of repairs the run
+    // may actually perform. `attempts >= MAX` here would compute, validate,
+    // and journal the third (MAX) patch — then throw it away unprovisioned.
+    if (attempts > MAX_REPAIR_ATTEMPTS) return 'escalate';
     return state.nextStep ?? 'test_execute';
   }
 
@@ -1584,7 +1875,13 @@ export class JaafarAutomationGraphService {
   private succeededSteps(state: AutomationGraphState): string[] {
     const done: string[] = ['Request understood', 'Plan reviewed', 'Workflow statically validated'];
     if (state.automationId ?? state.input.automationId) done.push('Provisioned in n8n');
-    if (state.verifyOk) done.push('Provisioning verified live');
+    if (state.verifyOk) {
+      done.push(
+        state.verifySkipped
+          ? 'Workflow provisioned (live verification skipped)'
+          : 'Provisioning verified live',
+      );
+    }
     if (state.testOk) done.push('Test execution passed');
     return done;
   }
@@ -1726,12 +2023,19 @@ export class JaafarAutomationGraphService {
         node?.credentials && Object.keys(node.credentials).length > 0
           ? ` [credentials: ${Object.keys(node.credentials).join(', ')}]`
           : '';
-      return `- ${type}${version}${creds}`;
+      // Honest availability labels: a node harvested from the owner's own
+      // workflows is proven; one discovered via the node-types API is only
+      // INSTALLED (credentials unknown); seeds are plumbing.
+      const availability =
+        node && node.inUse === false
+          ? ' [installed, not yet used — verify at static validation]'
+          : '';
+      return `- ${type}${version}${creds}${availability}`;
     });
     return [
       'You are Jaafar designing a business automation as an n8n blueprint. Never guess — every step must trace to the request, and every integration must be a real, supported provider key.',
-      'Return steps with stable requirementIds (R1, R2, …) matching the requirements below, explicit conditions for branches, and expectedOutput per step.',
-      'Set ready=false with missingRequirements ONLY when information is genuinely still needed — write each entry as a concrete human-readable question (e.g. "Which Slack channel should receive the notifications?"), never a bare internal id like "R1".',
+      "Return steps with stable requirementIds (R1, R2, …) matching the requirements below, explicit conditions for branches, and expectedOutput per step. Coverage is mandatory: EVERY requirement id must appear in at least one step's requirementIds — a step with an empty requirementIds is a defect, and an uncovered required requirement fails the plan.",
+      'Set ready=false with missingRequirements ONLY when information is genuinely still needed — write each entry as its stable requirement id exactly (e.g. "R3", matching the requirementIds above). Jaafar renders them as readable questions; ids let it detect which ones you already had answered.',
       'Choose steps[].nodeHint = { type, typeVersion?, parameters, nodeChoiceReason? } using REAL node types from the instance list. Put concrete business values (message text, recipients, intervals, urls…) into parameters. Never invent credential names or ids.',
       "<node_selection_policy>Jaafar builds against the user's connected n8n instance, the source of truth for node availability. Priority: 1. Native integration node — if a compatible native node is listed below, prefer it. If the requested operation is verified as supported, MUST use it. If the operation is unverified, still prefer the native node and record nodeChoiceReason. 2. HTTP Request — only when no compatible native node is listed, when the native node is verified not to support the operation, or when the user explicitly requests direct HTTP/API usage (genericNodeOverride). 3. Code / Set / IF — only for transformation, logic, calculations, parsing, branching. NEVER as an integration substitute. Forbidden: HTTP Request for an integration with a listed compatible native node; Code calling an external API when a native or HTTP node fits. Do not assume a native exists because n8n generally supports the provider. Generic choices MUST include nodeChoiceReason. Missing provider credentials NEVER change node selection — still choose the native node; credentials are a runtime concern, not a design concern.</node_selection_policy>",
       'Name every step[].integration and blueprint integration with the EXACT provider key (e.g. "slack", "gmail", never "Slack channel" or "Slack (must be connected)"). Leave step[].integration EMPTY for structural steps (webhook, schedule, code, set, httpRequest, if, respond) and for generic HTTP calls — set it ONLY when the step calls a real third-party service. If the automation needs a supported integration that is NOT connected, KEEP it in the plan with its native node — do NOT omit, replace, or invent a different name for it. State the missing connection plainly in the summary instead; the workflow will be built anyway and marked as needing credentials.',
@@ -1805,6 +2109,8 @@ export class JaafarAutomationGraphService {
     message: string;
     webhookPath?: string;
     nodeCount?: number;
+    /** True when verification could not run live (no connection). */
+    skipped?: boolean;
   }> {
     const externalWorkflowId = state.externalWorkflowId ?? state.input.externalWorkflowId;
     if (!externalWorkflowId) {
@@ -1828,7 +2134,11 @@ export class JaafarAutomationGraphService {
         { executionResults: { verified: false, reason: 'no live connection' } as never },
         'verification skipped (no connection)',
       );
-      return { ok: true, message: 'provisioned (live verification skipped — no connection)' };
+      return {
+        ok: true,
+        message: 'provisioned (live verification skipped — no connection)',
+        skipped: true,
+      };
     }
     try {
       const detail = await this.clientApi.getWorkflow(connection, externalWorkflowId);
@@ -1884,6 +2194,7 @@ export class JaafarAutomationGraphService {
       } catch {
         /* bare run.waiting below */
       }
+      events.push({ type: 'approval.required', runId, reason: 'automation_design_approval' });
       events.push({ type: 'run.waiting', runId, reason: 'approval' });
       return events;
     }
@@ -2012,6 +2323,22 @@ export class JaafarAutomationGraphService {
       ...(riskNotes.length ? ['Risk notes:', ...riskNotes.map((item) => `- ${item}`), ''] : []),
       'This design is ready for your review. Nothing has been provisioned yet. Approve it when you want me to create the automation in your n8n instance.',
     ].join('\n');
+  }
+
+  /**
+   * Humanizes a design-stage failure for the user. The raw graph error
+   * (review codes, validation details) is kept short; the contract is
+   * explicit: a failed design never provisions anything.
+   */
+  private designFailureMessage(message: string): string {
+    const short = message.length > 300 ? `${message.slice(0, 300)}…` : message;
+    if (/failed review|static validation/i.test(message)) {
+      return `the design didn't pass my own validation checks (${short}). Try simplifying the request or giving more concrete details, and I'll draft it again.`;
+    }
+    if (/plan generation failed|No object generated/i.test(message)) {
+      return `I couldn't draft a valid design this time (${short}). Please rephrase the request slightly and I'll try again.`;
+    }
+    return `${short}. Please adjust the request and I'll try again.`;
   }
 
   private scopeFailure(runId: string, scope: 'user' | 'organization'): ExecuteResponse {

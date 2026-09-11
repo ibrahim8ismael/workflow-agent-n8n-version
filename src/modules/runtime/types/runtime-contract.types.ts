@@ -67,12 +67,28 @@ export interface PendingQuestionContext {
   intent?: string;
 }
 
+/**
+ * An automation design parked at the approval gate in the same conversation.
+ * A short affirmative/negative chat reply ("ok i approve", "لا") routes to
+ * resume()/reject() on this run instead of starting a fresh design.
+ */
+export interface PendingApprovalContext {
+  runId: string;
+  summary?: string;
+}
+
 export interface StartRunRequest extends RuntimeScope {
   userMessage: string;
   agentId: string;
   conversationId?: string;
   effort?: ExecutionMode;
   mode?: 'conversation' | 'automation_design' | 'execution';
+  /**
+   * Channel webhook dedup anchor (externalMessageId). Stored on the run
+   * metadata so duplicate webhook deliveries can be detected and answered
+   * idempotently instead of creating duplicate runs.
+   */
+  channelMessageId?: string;
 }
 
 export interface RuntimeUsage {

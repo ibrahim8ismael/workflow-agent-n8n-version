@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { LangGraphCheckpointError } from '../../../infrastructure/langgraph/langgraph-postgres-checkpointer.service';
 import { QuotaEnforcerService } from '../../billing/services/quota-enforcer.service';
 import { SubscriptionService } from '../../billing/services/subscription.service';
@@ -6,9 +6,11 @@ import { ConversationsService } from '../../conversations/services/conversations
 import { isTerminalRunStatus } from '../../runs/agent-run-phase';
 import { RunsService } from '../../runs/runs.service';
 import type { JaafarRuntimeServiceContract } from '../interfaces/jaafar-runtime.interface';
+import { type ApprovalReplyDecision, classifyApprovalReply } from '../shared/approval-reply';
 import { RuntimeMode, type RuntimeRequest } from '../types/runtime.types';
 import type {
   ApprovalDecision,
+  PendingApprovalContext,
   PendingQuestionContext,
   RuntimeErrorCode,
   RuntimeEvent,
@@ -72,7 +74,14 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       conversationId: runtimeRequest.conversationId,
       userId: runtimeRequest.userId,
       organizationId: runtimeRequest.organizationId,
-      metadata: { runtimeMode: mode, userMessage: runtimeRequest.userMessage },
+      metadata: {
+        runtimeMode: mode,
+        userMessage: runtimeRequest.userMessage,
+        // Webhook-dedup anchor (externalMessageId) for channel entry points.
+        ...(runtimeRequest.channelMessageId
+          ? { channelMessageId: runtimeRequest.channelMessageId }
+          : {}),
+      },
     });
 
     try {
@@ -80,6 +89,12 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       await this.runs.transitionStatus(run.id, 'PLANNING');
 
       const pendingContext = await this.loadPendingContext(runtimeRequest, run.id);
+      // Chat-message approvals (blocking path): a short verdict on a design
+      // parked at the approval gate resumes it instead of fresh classification.
+      const chatApproval = await this.resolveChatApproval(runtimeRequest, run.id);
+      if (chatApproval) {
+        return this.applyChatApproval(run.id, chatApproval, runtimeRequest);
+      }
       const graphInput = {
         ...runtimeRequest,
         runId: run.id,
@@ -132,6 +147,15 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           clarificationQuestion: understanding?.clarificationQuestion,
         });
         await this.runs.transitionStatus(run.id, 'WAITING');
+        // Persist the turn (blocking path) — the stream path does the same;
+        // without this the next turn's context had no record of the exchange.
+        if (runtimeRequest.conversationId) {
+          await this.persistClarificationTurn(
+            runtimeRequest.conversationId,
+            runtimeRequest.userMessage,
+            response,
+          );
+        }
         return {
           runId: run.id,
           mode: runtimeRequest.mode,
@@ -267,6 +291,20 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           this.observability?.recordModel(mc.execution as any);
         }
       }
+      // The execution graph's `usage` is a HarnessUsage (steps/tool calls) —
+      // token accounting comes from the model calls, not a cast.
+      const executionUsage: RuntimeUsage = (result.modelCalls ?? []).reduce<RuntimeUsage>(
+        (totals, modelCall) => {
+          const usage = (modelCall as { usage?: RuntimeUsage }).usage;
+          if (!usage) return totals;
+          return {
+            promptTokens: totals.promptTokens + (usage.promptTokens ?? 0),
+            completionTokens: totals.completionTokens + (usage.completionTokens ?? 0),
+            totalTokens: totals.totalTokens + (usage.totalTokens ?? 0),
+          };
+        },
+        { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      );
 
       if (result.route === 'waiting') {
         await this.runs.transitionStatus(run.id, 'WAITING');
@@ -306,7 +344,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           occurredAt: new Date().toISOString(),
           payload: {
             response: result.response ?? '',
-            usage: result.usage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+            usage: executionUsage,
           },
         });
       }
@@ -317,7 +355,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
         status,
         response: result.response,
         plan: understood.plan as unknown as Record<string, unknown>,
-        usage: result.usage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        usage: executionUsage,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Task graph failed';
@@ -336,6 +374,13 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       yield this.eventFromFailure(rolloutFailure);
       return;
     }
+    // Same quota gate as the blocking path — the SSE entry point must not
+    // become a quota bypass for run creation + LLM spend.
+    const quotaFailure = await this.checkStartupQuota(request);
+    if (quotaFailure) {
+      yield this.eventFromFailure(quotaFailure);
+      return;
+    }
 
     const mode = request.mode ?? RuntimeMode.CONVERSATION;
     const runtimeRequest = { ...request, mode } as RuntimeRequest;
@@ -345,7 +390,14 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       conversationId: runtimeRequest.conversationId,
       userId: runtimeRequest.userId,
       organizationId: runtimeRequest.organizationId,
-      metadata: { runtimeMode: mode, userMessage: runtimeRequest.userMessage },
+      metadata: {
+        runtimeMode: mode,
+        userMessage: runtimeRequest.userMessage,
+        // Webhook-dedup anchor (externalMessageId) for channel entry points.
+        ...(runtimeRequest.channelMessageId
+          ? { channelMessageId: runtimeRequest.channelMessageId }
+          : {}),
+      },
     });
 
     let terminal = false;
@@ -355,6 +407,42 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       await this.runs.transitionStatus(run.id, 'PLANNING');
 
       const pendingContext = await this.loadPendingContext(runtimeRequest, run.id);
+      // Chat-message approvals (stream path): a short verdict ("ok i
+      // approve") on a design parked at the approval gate resumes that run
+      // instead of classifying a fresh design — otherwise every approval
+      // loops back into a new blueprint and nothing is ever provisioned.
+      const chatApproval = await this.resolveChatApproval(runtimeRequest, run.id);
+      if (chatApproval) {
+        // Keep the SSE stream alive across the blocking resume (provisioning
+        // takes a while) — the client renders progress, not a frozen spinner.
+        if (chatApproval.decision === 'approve') {
+          yield {
+            type: 'token',
+            runId: chatApproval.pending.runId,
+            occurredAt: new Date().toISOString(),
+            payload: { content: 'On it — building your automation now ⏳\n' },
+          };
+        }
+        try {
+          const result = await this.applyChatApproval(run.id, chatApproval, runtimeRequest);
+          yield this.chatApprovalTerminalEvent(chatApproval.pending.runId, result);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Approval failed';
+          yield {
+            type: 'run.failed',
+            runId: chatApproval.pending.runId,
+            occurredAt: new Date().toISOString(),
+            payload: {
+              error: {
+                code: 'UNKNOWN_RUNTIME_FAILURE' as RuntimeErrorCode,
+                message,
+                retryable: false,
+              },
+            },
+          };
+        }
+        return;
+      }
       const graphInput = {
         ...runtimeRequest,
         runId: run.id,
@@ -513,13 +601,47 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     const run = await this.runs.findById(runId);
     if (!this.matchesScope(run, scope)) return this.failure(runId, 'Run scope does not match.');
 
-    // V2 automation runs resume through their own approval gate, which
-    // expects the WAITING status — only execution runs pre-transition here.
-    if (!this.isAutomationDesignRun(run)) {
-      await this.runs.transitionStatus(runId, 'EXECUTING');
-    }
     try {
+      // V2 automation runs resume through their own approval gate, which
+      // expects the WAITING status — only execution runs pre-transition here.
+      if (!this.isAutomationDesignRun(run)) {
+        try {
+          await this.runs.transitionStatus(runId, 'EXECUTING');
+        } catch (error) {
+          if (error instanceof ConflictException) {
+            // Another caller (or a duplicate resume) already claimed the
+            // WAITING→EXECUTING transition — report it instead of a 500.
+            return this.normalize({
+              runId,
+              status: 'FAILED',
+              response: 'This run is already being processed. Refresh to see its current state.',
+              usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+              error: {
+                code: 'INVALID_REQUEST' as RuntimeErrorCode,
+                message: `Run ${runId} was claimed concurrently`,
+                retryable: false,
+              },
+            });
+          }
+          throw error;
+        }
+      }
       const result = await this.resumeGraphBranch(runId, true, scope);
+      // A resumed graph can hit ANOTHER approval gate (multi-step plans with
+      // several side-effecting tools). Park the row again so the next
+      // approve() routes through the graph path instead of falling into the
+      // legacy handler on a non-WAITING row.
+      if (result.status === 'WAITING' || result.route === 'waiting') {
+        const current = await this.runs.findById(runId);
+        if (current.status !== 'WAITING' && !isTerminalRunStatus(current.status)) {
+          try {
+            await this.runs.transitionStatus(runId, 'WAITING');
+          } catch (error) {
+            if (!(error instanceof ConflictException)) throw error;
+            /* row moved concurrently — the graph's own parking wins */
+          }
+        }
+      }
       const mode =
         ((run.metadata as Record<string, unknown> | null)?.runtimeMode as RuntimeMode) ??
         RuntimeMode.CONVERSATION;
@@ -623,9 +745,15 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
 
     if (!decision.approved) {
       // Rejection parks the run as CANCELLED — but never re-closes a row
-      // that already reached a terminal state.
+      // that already reached a terminal state (TOCTOU: the row can complete
+      // between the check and the cancel; the CAS cancel throws then).
       if (!isTerminalRunStatus(run.status)) {
-        await this.runs.cancel(runId);
+        try {
+          await this.runs.cancel(runId);
+        } catch (error) {
+          if (!(error instanceof ConflictException)) throw error;
+          /* row closed concurrently — report its current state below */
+        }
       }
       return {
         runId,
@@ -641,6 +769,23 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     // resume through the execution graph; anything else is legacy.
     if (this.isAutomationDesignRun(run)) return this.resume(runId, scope);
     const isGraphRun = this.isGraphExecution(run);
+    if (!isGraphRun && (run.metadata as Record<string, unknown> | null)?.executionGraphInput) {
+      // A V2 execution run that is no longer WAITING (already claimed by a
+      // concurrent approve, or completed) must never fall through to the
+      // legacy handler — that path cannot resume the graph checkpoint and
+      // would strand the run.
+      return this.normalize({
+        runId,
+        status: 'FAILED',
+        response: `This run is no longer waiting for approval (status=${run.status}).`,
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        error: {
+          code: 'INVALID_REQUEST' as RuntimeErrorCode,
+          message: `Run ${runId} is not WAITING (status=${run.status})`,
+          retryable: false,
+        },
+      });
+    }
     if (!isGraphRun && this.runtime) {
       const legacyResult = decision.approved
         ? await this.runtime.approve(runId)
@@ -707,6 +852,23 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
               retryable: false,
             },
           },
+        });
+      } else if (normalized.status === 'WAITING') {
+        // The retry can hit the deferral gate again (connection dropped) —
+        // park the row and journal a wait, never a fake completion.
+        try {
+          const current = await this.runs.findById(runId);
+          if (current.status !== 'WAITING' && !isTerminalRunStatus(current.status)) {
+            await this.runs.transitionStatus(runId, 'WAITING');
+          }
+        } catch {
+          /* row state is managed by the graph's own advance */
+        }
+        await this.recordEvent({
+          type: 'run.waiting',
+          runId,
+          occurredAt: new Date().toISOString(),
+          payload: { reason: 'approval' },
         });
       } else {
         await this.recordEvent({
@@ -793,6 +955,16 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
           },
         });
       } else if (normalized.status === 'WAITING') {
+        // Deferred build hit the still-no-connection gate — make sure the
+        // row mirrors WAITING before the caller renders the message.
+        try {
+          const current = await this.runs.findById(runId);
+          if (current.status !== 'WAITING' && !isTerminalRunStatus(current.status)) {
+            await this.runs.transitionStatus(runId, 'WAITING');
+          }
+        } catch {
+          /* row state is managed by the graph's own advance */
+        }
         await this.recordEvent({
           type: 'run.waiting',
           runId,
@@ -837,12 +1009,24 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
   async cancel(runId: string, scope?: RuntimeScope): Promise<RuntimeResult> {
     const run = await this.runs.findById(runId);
     if (!this.matchesScope(run, scope)) return this.failure(runId, 'Run scope does not match.');
-    const cancelled = await this.runs.cancel(runId);
+    let cancelled: typeof run;
+    try {
+      cancelled = await this.runs.cancel(runId);
+    } catch (error) {
+      if (!(error instanceof ConflictException)) throw error;
+      // The row closed between the read and the claim — report its real
+      // state instead of a 500 (or a dishonest CANCELLED).
+      cancelled = await this.runs.findById(runId);
+    }
     await this.recordBilling(cancelled.id);
+    const alreadyFinished =
+      isTerminalRunStatus(cancelled.status) && cancelled.status !== 'CANCELLED';
     return {
       runId: cancelled.id,
       status: 'CANCELLED',
-      response: 'Run cancelled.',
+      response: alreadyFinished
+        ? `The run had already finished (${cancelled.status}) before it could be cancelled.`
+        : 'Run cancelled.',
       usage: {
         promptTokens: cancelled.promptTokens,
         completionTokens: cancelled.completionTokens,
@@ -1014,6 +1198,8 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
         return { type: 'run.started', runId, occurredAt, payload: { status: 'CREATED' } };
       case 'token':
         return { type: 'token', runId, occurredAt, payload: { content: event.content } };
+      case 'approval.required':
+        return { type: 'approval.required', runId, occurredAt, payload: { reason: event.reason } };
       case 'run.waiting':
         return { type: 'run.waiting', runId, occurredAt, payload: { reason: event.reason } };
       case 'run.completed':
@@ -1116,7 +1302,14 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     } else if (route === 'waiting') {
       await this.runs.transitionStatus(runId, 'WAITING');
     } else if (typeof this.runs.complete === 'function') {
-      await this.runs.complete(runId, result.response ?? '');
+      // The V2 automation graph parks the row COMPLETED itself before the
+      // wrapper mirrors the completion — a second terminal write throws
+      // ("COMPLETED cannot move to COMPLETED") and would turn a successful
+      // provisioning into an HTTP 500 with skipped billing.
+      const current = await this.runs.findById(runId);
+      if (!isTerminalRunStatus(current.status)) {
+        await this.runs.complete(runId, result.response ?? '');
+      }
     }
   }
 
@@ -1305,6 +1498,175 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       };
     } catch {
       return undefined;
+    }
+  }
+
+  /**
+   * Chat-message approval routing: a short verdict reply ("ok i approve",
+   * "لا") to a design parked at the approval gate resolves to that run.
+   * Fail-open — any miss returns undefined and the message flows through
+   * normal classification exactly as before.
+   */
+  private async resolveChatApproval(
+    request: RuntimeRequest,
+    currentRunId: string,
+  ): Promise<{ decision: 'approve' | 'reject'; pending: PendingApprovalContext } | undefined> {
+    const decision: ApprovalReplyDecision = classifyApprovalReply(request.userMessage);
+    if (decision === 'undecided') return undefined;
+    const pending = await this.loadPendingApproval(request, currentRunId);
+    if (!pending) return undefined;
+    return { decision, pending };
+  }
+
+  /**
+   * Latest still-WAITING design parked AT the approval interrupt in the same
+   * conversation (scope-checked). Deferred drafts (checkpoint past the
+   * interrupt), clarification waits, and legacy rows are excluded — resuming
+   * those as approvals would corrupt their checkpoints.
+   */
+  private async loadPendingApproval(
+    request: RuntimeRequest,
+    currentRunId: string,
+  ): Promise<PendingApprovalContext | undefined> {
+    try {
+      if (!request.conversationId) return undefined;
+      const pending = await this.runs.findLatestWaitingInConversation(
+        request.conversationId,
+        currentRunId,
+      );
+      if (!pending) return undefined;
+      if (
+        !this.matchesScope(pending, {
+          userId: request.userId,
+          organizationId: request.organizationId,
+        })
+      ) {
+        return undefined;
+      }
+      const metadata = (pending.metadata as Record<string, unknown> | null) ?? {};
+      if (metadata.approvalPending !== true) return undefined;
+      if (metadata.approvalGate !== undefined && metadata.approvalGate !== 'design_approval') {
+        return undefined;
+      }
+      if (typeof metadata.clarificationQuestion === 'string' && metadata.clarificationQuestion) {
+        return undefined;
+      }
+      return {
+        runId: pending.id,
+        ...(typeof metadata.approvalSummary === 'string'
+          ? { summary: metadata.approvalSummary }
+          : {}),
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Drives a chat-message approval to completion on the parked run. The
+   * just-created run is superseded (it drives no lifecycle of its own);
+   * approve()/resume() journal events + billing on the parked run exactly as
+   * the approve endpoint does.
+   */
+  private async applyChatApproval(
+    newRunId: string,
+    approval: { decision: 'approve' | 'reject'; pending: PendingApprovalContext },
+    request: RuntimeRequest,
+  ): Promise<RuntimeResult> {
+    await this.abandonStreamingRun(newRunId, `superseded_by_chat_${approval.decision}`);
+    // Persist the user turn BEFORE resuming — a mid-resume failure must
+    // never erase it from history (Phase 0 lesson).
+    if (request.conversationId) {
+      try {
+        await this.conversations.addMessage(request.conversationId, {
+          role: 'user',
+          content: request.userMessage,
+        });
+        await this.conversations.titleFromFirstMessage(request.conversationId, request.userMessage);
+      } catch {
+        /* best-effort */
+      }
+    }
+    const scope = { userId: request.userId, organizationId: request.organizationId };
+    if (approval.decision === 'approve') {
+      const result = await this.resume(approval.pending.runId, scope);
+      // A WAITING re-park (multi-gate resume) persists nothing itself — the
+      // turn needs its answer. COMPLETED/FAILED went through complete/escalate,
+      // which already persisted the assistant turn.
+      if (result.status === 'WAITING') {
+        await this.persistAssistantTurn(request.conversationId, result.response);
+      }
+      return result;
+    }
+    const arabic = /[\u0600-\u06FF]/.test(request.userMessage);
+    const result = await this.approve(
+      approval.pending.runId,
+      {
+        approved: false,
+        reason: arabic
+          ? 'تمام — تم رفض هذا التصميم ولن يتم إنشاء أي شيء. أرسل طلباً جديداً وسأجهز لك تصميماً جديداً.'
+          : 'Understood — this design is rejected and nothing was provisioned. Send a new request anytime and I will draft a fresh design.',
+      },
+      scope,
+    );
+    // Rejection cancels the row without persisting — the turn needs its answer.
+    await this.persistAssistantTurn(request.conversationId, result.response);
+    return result;
+  }
+
+  /** Mirrors an approval result onto the SSE stream for the parked run. */
+  private chatApprovalTerminalEvent(pendingRunId: string, result: RuntimeResult): RuntimeEvent {
+    const occurredAt = new Date().toISOString();
+    switch (result.status) {
+      case 'COMPLETED':
+        return {
+          type: 'run.completed',
+          runId: pendingRunId,
+          occurredAt,
+          payload: { response: result.response ?? '', usage: result.usage },
+        };
+      case 'WAITING':
+        return {
+          type: 'run.waiting',
+          runId: pendingRunId,
+          occurredAt,
+          payload: { reason: 'approval' },
+        };
+      case 'CANCELLED':
+        return {
+          type: 'run.cancelled',
+          runId: pendingRunId,
+          occurredAt,
+          payload: { reason: result.response },
+        };
+      default:
+        return {
+          type: 'run.failed',
+          runId: pendingRunId,
+          occurredAt,
+          payload: {
+            error: result.error ?? {
+              code: 'UNKNOWN_RUNTIME_FAILURE' as RuntimeErrorCode,
+              message: result.response ?? 'Resume failed',
+              retryable: false,
+            },
+          },
+        };
+    }
+  }
+
+  private async persistAssistantTurn(
+    conversationId: string | undefined,
+    response: string | undefined,
+  ): Promise<void> {
+    if (!conversationId || !response) return;
+    try {
+      await this.conversations.addMessage(conversationId, {
+        role: 'assistant',
+        content: response,
+      });
+    } catch {
+      /* best-effort */
     }
   }
 

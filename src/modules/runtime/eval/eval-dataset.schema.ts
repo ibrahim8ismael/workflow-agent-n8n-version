@@ -83,6 +83,11 @@ const offlineCaseSchema = z.discriminatedUnion('kind', [
     expectedClarification: z.boolean(),
     expectedQuestionContains: z.string().optional(),
   }),
+  z.object({
+    kind: z.literal('approval-reply'),
+    message: z.string(),
+    expectedDecision: z.enum(['approve', 'reject', 'undecided']),
+  }),
 ]);
 
 export const evalScenarioSchema = z.object({

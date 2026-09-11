@@ -7,11 +7,11 @@ import { JaafarEvalService } from './jaafar-eval.service';
 import datasetJson from './jaafar-eval-dataset.json';
 
 describe('Jaafar evaluation dataset', () => {
-  it('conforms to the schema with 57 unique scenarios', () => {
+  it('conforms to the schema with 59 unique scenarios', () => {
     const dataset = evalDatasetSchema.parse(datasetJson);
 
     expect(dataset.version).toBe(2);
-    expect(dataset.scenarios).toHaveLength(57);
+    expect(dataset.scenarios).toHaveLength(59);
     const ids = dataset.scenarios.map((s) => s.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
@@ -75,10 +75,10 @@ describe('JaafarEvalService (offline gate)', () => {
   it('passes the full offline suite with zero failures', async () => {
     const report = await service().runOffline();
 
-    expect(report.total).toBe(57);
+    expect(report.total).toBe(59);
     expect(report.failures).toEqual([]);
     expect(report.failed).toBe(0);
-    expect(report.passed + report.skipped).toBe(57);
+    expect(report.passed + report.skipped).toBe(59);
     expect(report.skipped).toBe(3);
   });
 

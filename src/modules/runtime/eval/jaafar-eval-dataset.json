@@ -1941,6 +1941,30 @@
         "expectedValid": false,
         "expectedErrorCodes": ["NATIVE_NODE_AVAILABLE"]
       }
+    },
+    {
+      "id": "reliability-chat-approval",
+      "category": "reliability",
+      "input": "ok i approve",
+      "expectedIntent": "approval",
+      "expectedOutcome": "short affirmative chat verdict on a parked design routes to resume, not a fresh design",
+      "offline": {
+        "kind": "approval-reply",
+        "message": "ok i approve",
+        "expectedDecision": "approve"
+      }
+    },
+    {
+      "id": "reliability-chat-rejection",
+      "category": "reliability",
+      "input": "لا",
+      "expectedIntent": "rejection",
+      "expectedOutcome": "short negative chat verdict on a parked design rejects it, nothing provisioned",
+      "offline": {
+        "kind": "approval-reply",
+        "message": "لا",
+        "expectedDecision": "reject"
+      }
     }
   ]
 }

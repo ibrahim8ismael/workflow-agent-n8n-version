@@ -262,6 +262,61 @@ describe('Runtime (e2e)', () => {
       expect(res.text).toContain('event: run.started');
       expect(res.text).toContain('event: run.completed');
     });
+
+    it('routes a chat verdict to the parked approval run instead of a fresh design', async () => {
+      mockDb.create('agent', {
+        data: {
+          id: 'agent-1',
+          userId: 'test-user-id',
+          name: 'Test Agent',
+          slug: 'test-agent',
+          model: 'gpt-4o',
+          status: 'ACTIVE',
+          instructions: 'You are a test agent.',
+          config: {},
+          deletedAt: null,
+        } as never,
+      });
+      mockDb.create('conversation', {
+        data: {
+          id: 'conv-approval',
+          agentId: 'agent-1',
+          userId: 'test-user-id',
+          deletedAt: null,
+        } as never,
+      });
+      // A design parked at the approval gate by an earlier turn.
+      mockDb.create('run', {
+        data: {
+          id: 'pending-design-run',
+          agentId: 'agent-1',
+          userId: 'test-user-id',
+          conversationId: 'conv-approval',
+          status: 'WAITING',
+          metadata: {
+            runtimeMode: 'automation_design',
+            automationV2: true,
+            approvalPending: true,
+            approvalGate: 'design_approval',
+            approvalSummary: 'Draft automation blueprint: Order sync',
+          },
+          deletedAt: null,
+        } as never,
+      });
+
+      const res = await http
+        .post('/api/v1/runs/stream')
+        .send({ userMessage: 'no', agentId: 'agent-1', conversationId: 'conv-approval' })
+        .expect(200);
+
+      // The parked run is rejected — no second design loop starts.
+      expect(res.text).toContain('event: run.cancelled');
+      expect(res.text).not.toContain('Draft automation blueprint');
+      expect(res.text).not.toContain('event: run.waiting');
+
+      const runRes = await http.get('/api/v1/runs/pending-design-run').expect(200);
+      expect(runRes.body.status).toBe('CANCELLED');
+    });
   });
 
   describe('GET /api/v1/runs/:id', () => {

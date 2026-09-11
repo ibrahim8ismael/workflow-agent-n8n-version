@@ -243,3 +243,45 @@ Legend: **P0** = critical (breakage / safety hole) · **P1** = high logic bug ·
 4. **Phase 4 (prompts/P3):** delete or rewrite the dead blueprint prompt, reconcile question-count + re-ask filter, cleanup items.
 
 Each phase should extend the existing specs (`src/modules/runtime/**/*.spec.ts`, 411-test baseline) and run `vitest`.
+---
+
+## Fix Status (2026-09-11) — Phases 1–6 + Phase 7 core IMPLEMENTED
+
+### Fixed ✅
+- **P0:** #1 (rejection stamp + retry refusal), #2 (persisted `startedAt`), #3 (SSE top-level `__interrupt__`), #4 (terminal-write tolerance), #5 (WAITING re-park in `resume`), #6 (env boolean parsing), #7 (recent-window + tenant-scoped history), #8 (null-result replay), #9 (quota in `stream()`)
+- **P1:** #10 (repair budget `>`), #11 (repair→diagnose edge), #12 (cost/token accounting), #13 (step-exact off-by-one), #14 (classifier `escalate`/`fix_credentials` honored), #15 (connection vs webhookPath split)
+- **P2:** #16 (duplicate assistant write removed), #17 (blocking `run()` persists user turn), #18 (blocking clarification turn persisted), #19+#26 (single-owner persistence; channel dedupe on `channelMessageId`; conversation channel-identity columns + unique constraint — migration `20260911120000_conversation_channel_identity`), #20+#21 (CAS on all lifecycle writes + approve revalidation + conflict grace), #24 partial (see notes), #29 (post-dispatch validation → UNKNOWN), #30 (`domain` enum), #32+#gap2 (override persistence + deferred re-validation), #33 (WAITING before interrupt), #34 (required-first clarification), #35 (`confidence` default 0.5), #36 (trim accounting recomputed), #38 (duplicate R-id re-assignment), #41 (stable stringify hash), #42 (per-call action for side-effect tools), #43 (memory policy NaN guard — filter still not wired to learning candidates), #44 (`markUnknown` completedAt), #52 (cancel/reject TOCTOU), #55 (version-guarded `RunsService`), #57 (config bounds)
+- **Node-selection gaps:** 1 (node-types API discovery merged, availability labeled), 2 (deferred re-validation), 3 (honest verification + complete message), 4 (catalog alias-proof — smtp→emailSend — only for readable instances; lenient unreadable policy preserved), 6 (dead `resolveNode()` removed)
+- **Prompts:** P61 (dead blueprint prompt deleted), P63 (dedicated parallelism error), #22 (planner emits R-ids the anti-re-ask filter parses), #48 (clarification capped at 2 questions, required first)
+- **Cheap P3:** #39 (HarnessUsage→RuntimeUsage cast removed — usage summed from modelCalls), #56 (per-node durationMs)
+
+### Deferred (P3 batch, per scope decision) ⏸
+#24 (approved-call tracking for retry re-prompts), #27 (AbortSignal cancellation), #28 (blocking conversation supersede), #31 (runtime-validation version key), #37 (quality-metrics bounds), #40 (streaming execution usage persistence), #50 (anonymous-run scope decision), #51 partially (WAITING journaling fixed; row parking added), #53 (runId:'' / dropped args / run.cancelled), #54 (202 semantics), #58 (schema version migration hooks + checkpointer catch narrowing), #59 (classifier regex nits), #60 (same-step expression message), #64 folded into #2.
+
+### Verification
+- `npx vitest run`: **96 files, 763 passed** (from 751 baseline — net +new regression tests, −removed dead-resolver tests)
+- Eval suite: **7/7** (native-node scenarios green)
+- `typecheck` + `lint`: clean
+- **Pending deployment step:** `npx prisma migrate dev` for `20260911120000_conversation_channel_identity`
+
+### P65. Understanding prompt↔schema contract drift — automation path 500'd live (FOUND DURING DOCKER VERIFICATION, FIXED)
+- **Where:** `jaafar-request-understanding.service.ts:123-125` (prompt) vs `jaafar-understanding.schema.ts` (zod)
+- **What happened:** The prompt told the model to "extract trigger, actions, entities…" and "record assumptions with risk" without naming the schema's exact keys. Models nested `trigger/actions/entities/...` INSIDE `requirements` (object, not array) and emitted `assumptions: [{assumption, risk, reversible}]` (key `assumption`, not `statement`). Every understanding parse failed `SCHEMA_INVALID` → whole automation path 500. Proven pre-existing (prompt file untouched since `e635c68`; schema change only made parsing more lenient). Found via the persisted `understandingFailure.rawSample` diagnostic on the live container.
+- **Fix:** Prompt now pins the exact contract (requirements[] {field,value,required,source}; top-level trigger/actions/entities/conditions/constraints/desiredOutcome; assumptions[] {statement,rationale,reversible,risk}); schema gained a `nullsToUndefined` preprocess (explicit nulls fall back to defaults); contract-pinning spec added.
+- **Live verification note:** after the fix, understand→plan→review→replan runs end-to-end in Docker, but the configured planning models (`openai/gpt-5.6-luna`, `gpt-4o-mini` via OpenRouter) cannot reliably satisfy the strict blueprint schema (uncovered requirementIds, placeholder integrations) — the pipeline correctly fails loudly after 2 attempts. Full approval happy-path needs a stronger planning model (ops/config concern, not code). Conversation path verified live end-to-end.
+
+### P66. Planners omit optional `requirementIds` → review fails twice (FOUND LIVE, FIXED)
+- **Where:** `automation-blueprint.schema.ts` (requirementIds optional) + plan prompt
+- **What happened:** gpt-4o/gpt-5.6-luna systematically omit optional `requirementIds` (proven via persisted review-failure artifacts on the live container: well-formed steps, zero coverage). Replan feedback does not fix it — the leverage point is generation-time enforcement.
+- **Fix:** `requirementIds` is now REQUIRED non-empty in the blueprint schema (strict-mode generation enforces presence); review flags unknown R-ids as INVALID_PLAN; review-failure plans are now recorded as artifacts (diagnosable); fixtures updated. Live-verified: design reached the approval gate with full coverage on the first attempt after the fix.
+
+### P67. V2 automation stream never emits `approval.required` → client shows no approve button (FOUND LIVE, FIXED)
+- **Where:** `jaafar-automation-graph.service.ts` `mapStreamUpdate()` `__interrupt__` branch vs `jaafar-execution-graph.service.ts:406`
+- **What happened:** The old task-execution graph emits `approval.required` + `run.waiting` at its gate (the event the web client renders the approve button on). The V2 automation graph emitted only a `token` (blueprint as plain chat text) + bare `run.waiting {reason:'approval'}` — so the client showed the design as a chat message with no button, and the user could only approve by typing.
+- **Fix:** V2 gate now emits `approval.required {reason:'automation_design_approval'}` between the blueprint token and `run.waiting`; mapped through `mapAutomationGraphEvent`. Zero client changes needed.
+
+### P68. Chat approval verdicts start a fresh design → infinite blueprint loop, nothing provisioned (FOUND LIVE, FIXED)
+- **Where:** `jaafar-runtime.service.ts` `stream()`/`start()` (unconditional `runs.create` + classify) vs `await_approval` node (parks WAITING, writes no metadata)
+- **What happened:** Typing "ok i approve" minted a new run, classified as `automation_design` (the intent enum has no approval concept), and re-ran the whole V2 graph from `understand` — orphaning the WAITING run. Every approval produced a new blueprint; provisioning was unreachable from chat. The only pending-run bridge (`loadPendingContext`) required `metadata.clarificationQuestion`, which the approval gate never writes.
+- **Fix:** (1) `await_approval` stamps `metadata.{approvalPending, approvalGate:'design_approval', approvalSummary, approvalRevision}`; deferral sets `approvalGate:'deferred'` + clears the flag; rejection clears it. (2) New pure matcher `shared/approval-reply.ts` (`classifyApprovalReply`: approve/reject/undecided, EN+AR, fail-open — ambiguous text keeps flowing to the LLM). (3) `stream()` + `start()` short-circuit decisive verdicts to the existing `resume()`/`reject()` paths (same checkpoint resume as the approve endpoint; new run superseded; user turn persisted first; WAITING re-parks and rejections persist the assistant turn since the graph doesn't). Deferred/clarification/legacy waits are explicitly excluded so `Command(resume)` can never hit a non-interrupt checkpoint.
+- **Tests:** 48-case matcher spec; 5 routing specs (stream approve/reject, no-pending fall-through, deferred exclusion, blocking `start()`); gate-event + metadata assertions in the graph spec; HTTP e2e (seeded parked design + "no" → `run.cancelled`, no redesign, row CANCELLED); 2 new offline eval scenarios (`approval-reply` kind, 59 total). Mock e2e DB gained Prisma comparison-filter support (`gte/gt/lte/lt/equals/in`) so TTL-filtered pending lookups work under test.

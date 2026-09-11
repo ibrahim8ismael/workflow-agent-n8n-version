@@ -65,7 +65,11 @@ describe('JaafarAutomationGraphService', () => {
     fail: vi.fn(),
     findById: vi.fn(),
   };
-  const conversations = { addMessage: vi.fn(), titleFromFirstMessage: vi.fn() };
+  const conversations = {
+    addMessage: vi.fn(),
+    titleFromFirstMessage: vi.fn(),
+    getMessages: vi.fn(),
+  };
   const contextManager = {
     buildForStage: vi.fn(),
     renderToPromptText: vi.fn().mockReturnValue('context'),
@@ -140,6 +144,7 @@ describe('JaafarAutomationGraphService', () => {
       readiness: [],
     });
     understandingService.understand.mockResolvedValue(understanding);
+    conversations.getMessages.mockResolvedValue([]);
     registry.capabilitiesForScope.mockResolvedValue([]);
     llmRuntime.generateObject.mockResolvedValue({
       object: blueprint,
@@ -225,9 +230,9 @@ describe('JaafarAutomationGraphService', () => {
       AGENT_RUN_PHASE.STATIC_VALIDATION,
       AGENT_RUN_PHASE.BUILDING,
     ]);
-    expect(conversations.addMessage).not.toHaveBeenCalledWith(
+    expect(conversations.addMessage).toHaveBeenCalledWith(
       'conv-1',
-      expect.objectContaining({ role: 'user' }),
+      expect.objectContaining({ role: 'user', content: 'Sync my orders' }),
     );
   });
 
@@ -271,7 +276,7 @@ describe('JaafarAutomationGraphService', () => {
     expect(llmRuntime.generateObject).not.toHaveBeenCalled();
   });
 
-  it('replans once with review feedback, then throws on a second rejection', async () => {
+  it('fails gracefully with the real reason after a second review rejection', async () => {
     planReview.review
       .mockReturnValueOnce({
         blueprint,
@@ -288,7 +293,12 @@ describe('JaafarAutomationGraphService', () => {
         coverage: [],
       });
 
-    await expect(service().run(input())).rejects.toThrow('failed review twice');
+    const result = await service().run(input());
+
+    expect(result.status).toBe('FAILED');
+    expect(result.response).toContain("couldn't finalize the automation design");
+    expect(result.response).toContain('failed review twice');
+    expect(result.response).toContain('Nothing was provisioned');
     expect(llmRuntime.generateObject).toHaveBeenCalledTimes(2);
   });
 
@@ -300,7 +310,10 @@ describe('JaafarAutomationGraphService', () => {
       coverage: [],
     });
 
-    await expect(service().run(input())).rejects.toThrow('static validation');
+    const result = await service().run(input());
+
+    expect(result.status).toBe('FAILED');
+    expect(result.response).toContain("couldn't finalize the automation design");
     expect(agentRuns.advance).toHaveBeenCalledWith(
       'run-1',
       expect.objectContaining({ toPhase: AGENT_RUN_PHASE.FAILED, toStatus: 'FAILED' }),
@@ -319,7 +332,15 @@ describe('JaafarAutomationGraphService', () => {
     expect(tokens).toContain('Understanding your request');
     expect(tokens).toContain('Planning the automation');
     expect(tokens).toContain('Draft automation blueprint: Order sync');
+    // The gate emits the client-renderable approval event BEFORE the wait.
+    const approvalIndex = events.findIndex((e) => e.type === 'approval.required');
+    expect(approvalIndex).toBeGreaterThan(-1);
+    expect(events[approvalIndex]).toMatchObject({
+      runId: 'run-1',
+      reason: 'automation_design_approval',
+    });
     expect(events.at(-1)).toMatchObject({ type: 'run.waiting', reason: 'approval' });
+    expect(events.findIndex((e) => e.type === 'run.waiting')).toBeGreaterThan(approvalIndex);
     // User turn persisted before generation (never lost on failure).
     expect(conversations.addMessage).toHaveBeenCalledWith(
       'conv-1',
@@ -485,7 +506,9 @@ describe('JaafarAutomationGraphService', () => {
       coverage: [],
     });
 
-    await expect(service().run(input())).rejects.toThrow('static validation');
+    const result = await service().run(input());
+
+    expect(result.status).toBe('FAILED');
     expect(agentRuns.recordArtifacts).toHaveBeenCalledWith(
       'run-1',
       expect.objectContaining({ validationResult: expect.objectContaining({ valid: false }) }),
@@ -501,7 +524,11 @@ describe('JaafarAutomationGraphService', () => {
       }),
     );
 
-    await expect(service().run(input())).rejects.toThrow('No object generated');
+    const result = await service().run(input());
+
+    expect(result.status).toBe('FAILED');
+    expect(result.response).toContain('No object generated');
+    expect(result.response).toContain('Nothing was provisioned');
     expect(runs.updateMetadata).toHaveBeenCalledWith(
       'run-1',
       expect.objectContaining({
@@ -575,6 +602,42 @@ describe('JaafarAutomationGraphService', () => {
     expect(result.status).toBe('WAITING');
     expect(result.response).toContain('Draft automation blueprint: Order sync');
     expect(llmRuntime.generateObject).toHaveBeenCalledTimes(1);
+    expect(builder.build).not.toHaveBeenCalled();
+  });
+
+  it('does not re-ask a requirement answered in an earlier turn', async () => {
+    // Live regression: the user answered "slack dm" one turn ago; the NEXT
+    // turn's replan listed R1 as missing again and the reply-only filter
+    // re-asked it because the new reply didn't repeat the value.
+    understandingService.understand.mockResolvedValue({
+      ...understanding,
+      requirements: [
+        { id: 'R1', field: 'destination', value: 'slack dm', required: true, source: 'history' },
+      ],
+    });
+    planReview.review.mockReturnValue({
+      blueprint: { ...blueprint, ready: false, missingRequirements: ['R1'] },
+      valid: true,
+      errors: [],
+      warnings: [],
+      coverage: [],
+      readinessBlockers: [],
+    });
+    conversations.getMessages.mockResolvedValue([
+      { role: 'user', content: 'slack dm' },
+      { role: 'assistant', content: 'Which channel should I post to?' },
+    ]);
+
+    const result = await service().run(input({ userMessage: 'start build the flow' }));
+
+    expect(conversations.getMessages).toHaveBeenCalledWith(
+      'conv-1',
+      { take: 20, order: 'desc' },
+      { userId: 'user-1', organizationId: 'org-1' },
+    );
+    // Answered in history → filtered → design proceeds to the approval gate.
+    expect(result.status).toBe('WAITING');
+    expect(result.response).toContain('Draft automation blueprint: Order sync');
     expect(builder.build).not.toHaveBeenCalled();
   });
 
@@ -657,7 +720,17 @@ describe('JaafarAutomationGraphService', () => {
     expect(result.response).toContain('Goal: Sync orders');
     expect(conversations.addMessage).toHaveBeenCalledWith(
       'conv-1',
-      expect.objectContaining({ role: 'assistant' }),
+      expect.objectContaining({ role: 'user', content: 'Sync my orders' }),
+    );
+    // The approval gate is stamped on the run row so a later chat verdict
+    // ("ok i approve") can route to resume() instead of a fresh design.
+    expect(runs.updateMetadata).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        approvalPending: true,
+        approvalGate: 'design_approval',
+        approvalSummary: expect.stringContaining('Draft automation blueprint'),
+      }),
     );
   });
 
@@ -802,6 +875,168 @@ describe('JaafarAutomationGraphService', () => {
 
     expect(result.status).toBe('FAILED');
     expect(result.response).toContain('cannot be retried');
+    expect(builder.build).not.toHaveBeenCalled();
+  });
+
+  it('stamps the rejection and refuses to retry it — no approval-gate bypass', async () => {
+    const svc = service();
+    await svc.run(input());
+    await svc.resume('run-1', { approved: false, reason: 'Too risky' });
+
+    expect(runs.updateMetadata).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({ approvalDecision: 'rejected', rejectionReason: 'Too risky' }),
+    );
+
+    // A rejected run is FAILED + phase FAILED — exactly what isRepairable
+    // accepts. Without the rejection stamp, retryFromFailure would hydrate
+    // the rejected blueprint and provision it.
+    agentRuns.isRepairable.mockResolvedValue(true);
+    agentRuns.snapshot.mockResolvedValue({
+      run: {
+        id: 'run-1',
+        agentId: 'agent-1',
+        userId: 'user-1',
+        organizationId: 'org-1',
+        status: 'FAILED',
+        currentPhase: 'FAILED',
+        error: 'automation rejected at approval gate',
+        metadata: {
+          automationV2: true,
+          approvalDecision: 'rejected',
+          rejectedAt: '2026-09-11T00:00:00.000Z',
+          userMessage: 'Sync my orders',
+        },
+        automationPlan: blueprint,
+        requirements: [],
+        conditions: [],
+        executionResults: {},
+        repairAttempts: [],
+      },
+      transitions: [],
+    });
+
+    const result = await service().retryFromFailure('run-1', { userId: 'user-1' });
+
+    expect(result.status).toBe('FAILED');
+    expect(result.response).toContain('rejected this automation design');
+    expect(builder.build).not.toHaveBeenCalled();
+  });
+
+  it('escalates credential failures immediately instead of burning the repair budget', async () => {
+    clientApi.getWorkflow.mockRejectedValue(new Error('invalid credentials'));
+    classifier.classify.mockReturnValue({
+      code: 'CREDENTIAL_ERROR',
+      retryable: false,
+      repairStrategy: 'fix_credentials',
+      summary: 'Authentication with n8n failed during verify.',
+      userAction: 'Reconnect the n8n instance.',
+    });
+    repair.needsPatch.mockReturnValue(false);
+    repair.escalationMessage.mockReturnValue('Reconnect the n8n instance and retry.');
+
+    const svc = service();
+    await svc.run(input());
+    const resumed = await svc.resume('run-1', { approved: true }, { userId: 'user-1' });
+
+    expect(resumed.status).toBe('FAILED');
+    expect(resumed.response).toBe('Reconnect the n8n instance and retry.');
+    // Provisioned once, then straight to escalation — no futile patch loop.
+    expect(builder.build).toHaveBeenCalledTimes(1);
+    expect(repair.diagnoseAndPatch).not.toHaveBeenCalled();
+    expect(agentRuns.appendRepairAttempt).not.toHaveBeenCalled();
+  });
+
+  it('provisions the final (MAX) repair patch instead of discarding it', async () => {
+    validator.validate.mockResolvedValue({
+      ok: false,
+      checks: [{ name: 'workflow_responded', passed: false, detail: 'boom' }],
+      durationMs: 5,
+      testInput: { test: true },
+      classified: {
+        code: 'LOGIC_ERROR',
+        retryable: false,
+        repairStrategy: 'replan_step',
+        summary: 'Broken output.',
+      },
+    });
+
+    const svc = service();
+    await svc.run(input());
+    const resumed = await svc.resume('run-1', { approved: true }, { userId: 'user-1' });
+
+    expect(resumed.status).toBe('FAILED');
+    // Initial provision + all MAX_REPAIR_ATTEMPTS patches reach provisioning.
+    expect(builder.build).toHaveBeenCalledTimes(1 + 3);
+    expect(agentRuns.appendRepairAttempt).toHaveBeenCalledTimes(3);
+  });
+
+  it('loops a failed repair revalidation back to diagnosis instead of provisioning it', async () => {
+    validator.validate.mockResolvedValue({
+      ok: false,
+      checks: [{ name: 'workflow_responded', passed: false, detail: 'boom' }],
+      durationMs: 5,
+      testInput: { test: true },
+      classified: {
+        code: 'LOGIC_ERROR',
+        retryable: false,
+        repairStrategy: 'replan_step',
+        summary: 'Broken output.',
+      },
+    });
+    // The initial static validation passes; every post-patch revalidation fails.
+    builder.validateOnly
+      .mockResolvedValueOnce({ valid: true, errors: [], warnings: [], coverage: [] })
+      .mockResolvedValue({
+        valid: false,
+        errors: [{ code: 'INVALID_PLAN', message: 'patched plan is broken' }],
+        warnings: [],
+        coverage: [],
+      });
+
+    const svc = service();
+    await svc.run(input());
+    const resumed = await svc.resume('run-1', { approved: true }, { userId: 'user-1' });
+
+    expect(resumed.status).toBe('FAILED');
+    // The known-invalid patched blueprints never reach provisioning.
+    expect(builder.build).toHaveBeenCalledTimes(1);
+    expect(agentRuns.appendRepairAttempt).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({ stage: 'validate', code: 'INVALID_CONFIGURATION' }),
+    );
+  });
+
+  it('re-validates a deferred draft against the newly connected instance', async () => {
+    agentRuns.snapshot.mockResolvedValue({
+      run: {
+        id: 'run-1',
+        agentId: 'agent-1',
+        userId: 'user-1',
+        organizationId: 'org-1',
+        status: 'WAITING',
+        currentPhase: AGENT_RUN_PHASE.STATIC_VALIDATION,
+        metadata: { automationV2: true, buildDeferred: true, userMessage: 'Sync my orders' },
+        automationPlan: blueprint,
+        requirements: [{ id: 'R1', field: 'sync', required: true }],
+        conditions: [],
+      },
+      transitions: [],
+    });
+    builder.validateOnly.mockResolvedValue({
+      valid: false,
+      errors: [
+        { code: 'NODE_NOT_FOUND', message: 'n8n-nodes-base.customCrm is not on this instance' },
+      ],
+      warnings: [],
+      coverage: [],
+    });
+
+    const result = await service().provisionDeferred('run-1', { userId: 'user-1' });
+
+    expect(result.status).toBe('FAILED');
+    expect(result.response).toContain('no longer validates');
+    // The invalid-for-this-instance plan never reaches provisioning.
     expect(builder.build).not.toHaveBeenCalled();
   });
 });

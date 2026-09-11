@@ -42,15 +42,7 @@ export class MockDatabaseService {
     args: { where: Record<string, unknown>; select?: Record<string, unknown> },
   ) {
     const col = this.collection(model);
-    const entry = Array.from(col.values()).find((item: any) =>
-      Object.entries(args.where).every(([k, v]) =>
-        k === 'OR'
-          ? (v as Array<Record<string, unknown>>).some((condition) =>
-              Object.entries(condition).every(([field, value]) => (item as any)[field] === value),
-            )
-          : (item as any)[k] === v,
-      ),
-    );
+    const entry = Array.from(col.values()).find((item: any) => this.matchesWhere(item, args.where));
     return Promise.resolve(entry ?? null);
   }
 
@@ -62,17 +54,53 @@ export class MockDatabaseService {
     const col = this.collection(model);
     let results = Array.from(col.values());
     if (args.where) {
-      results = results.filter((item: any) =>
-        Object.entries(args.where!).every(([k, v]) =>
-          k === 'OR'
-            ? (v as Array<Record<string, unknown>>).some((condition) =>
-                Object.entries(condition).every(([field, value]) => item[field] === value),
-              )
-            : item[k] === v,
-        ),
-      );
+      results = results.filter((item: any) => this.matchesWhere(item, args.where!));
     }
     return Promise.resolve(results);
+  }
+
+  /**
+   * Prisma-ish where matching for the mock store. Scalars keep strict
+   * equality; plain objects with comparison keys emulate Prisma scalar
+   * filters (needed for TTL filters like `createdAt: { gte }`, which strict
+   * equality could never match). Anything else stays strict.
+   */
+  private matchesWhere(item: any, where: Record<string, unknown>): boolean {
+    return Object.entries(where).every(([key, expected]) => {
+      if (key === 'OR') {
+        return (expected as Array<Record<string, unknown>>).some((condition) =>
+          Object.entries(condition).every(([field, value]) => item[field] === value),
+        );
+      }
+      if (this.isOperatorFilter(expected)) {
+        return this.matchesOperator(item[key], expected);
+      }
+      return item[key] === expected;
+    });
+  }
+
+  private isOperatorFilter(value: unknown): value is Record<string, unknown> {
+    if (!value || typeof value !== 'object' || value instanceof Date || Array.isArray(value)) {
+      return false;
+    }
+    return ['gte', 'gt', 'lte', 'lt', 'equals', 'in'].some((op) => op in value);
+  }
+
+  private matchesOperator(actual: unknown, filter: Record<string, unknown>): boolean {
+    if ('equals' in filter && actual !== filter.equals) return false;
+    if ('in' in filter && !(filter.in as unknown[]).includes(actual)) return false;
+    const comparable = ['gte', 'gt', 'lte', 'lt'].some((op) => op in filter);
+    if (comparable) {
+      if (actual === undefined || actual === null) return false;
+      const left = actual instanceof Date ? actual.getTime() : (actual as number);
+      const rightValue = (filter.gte ?? filter.gt ?? filter.lte ?? filter.lt) as unknown;
+      const right = rightValue instanceof Date ? rightValue.getTime() : (rightValue as number);
+      if ('gte' in filter && !(left >= right)) return false;
+      if ('gt' in filter && !(left > right)) return false;
+      if ('lte' in filter && !(left <= right)) return false;
+      if ('lt' in filter && !(left < right)) return false;
+    }
+    return true;
   }
 
   create(

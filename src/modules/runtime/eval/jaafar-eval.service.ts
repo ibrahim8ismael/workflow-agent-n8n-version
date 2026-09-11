@@ -7,6 +7,7 @@ import { AutomationErrorClassifierService } from '../services/automation-error-c
 import { AutomationPlanReviewService } from '../services/automation-plan-review.service';
 import { AutomationWorkflowBuilderService } from '../services/automation-workflow-builder.service';
 import { applyAssumptionPolicy, resolveClarification } from '../services/understanding-policy';
+import { classifyApprovalReply } from '../shared/approval-reply';
 import { type EvalDataset, type EvalScenario, evalDatasetSchema } from './eval-dataset.schema';
 import datasetJson from './jaafar-eval-dataset.json';
 
@@ -96,6 +97,8 @@ export class JaafarEvalService {
         }
         case 'assumption-policy':
           return { ...base, passed: this.checkAssumptionPolicy(scenario), skipped: false };
+        case 'approval-reply':
+          return { ...base, passed: this.checkApprovalReply(scenario), skipped: false };
       }
     } catch (error) {
       return {
@@ -230,6 +233,18 @@ export class JaafarEvalService {
     ) {
       throw new Error(
         `expected question to contain "${offline.expectedQuestionContains}", got "${question ?? '(none)'}"`,
+      );
+    }
+    return true;
+  }
+
+  private checkApprovalReply(scenario: EvalScenario): boolean {
+    const offline = scenario.offline;
+    if (offline?.kind !== 'approval-reply') return false;
+    const decision = classifyApprovalReply(offline.message);
+    if (decision !== offline.expectedDecision) {
+      throw new Error(
+        `expected decision ${offline.expectedDecision}, got ${decision} for ${JSON.stringify(offline.message)}`,
       );
     }
     return true;

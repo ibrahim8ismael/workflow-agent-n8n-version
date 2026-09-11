@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { JaafarRuntimeService } from './jaafar-runtime.service';
 
@@ -411,6 +412,178 @@ describe('JaafarRuntimeService', () => {
     expect(runs.transitionStatus).toHaveBeenCalledWith('task-run', 'WAITING');
   });
 
+  function pendingApprovalRow() {
+    return {
+      id: 'pending-run',
+      status: 'WAITING',
+      metadata: {
+        runtimeMode: 'automation_design',
+        automationV2: true,
+        approvalPending: true,
+        approvalGate: 'design_approval',
+        approvalSummary: 'Draft automation blueprint: Order sync',
+      },
+    };
+  }
+
+  it('routes a chat approval to resume() instead of a fresh design', async () => {
+    const { service, runs, conversations, automationGraph, jaafarGraph } = createService();
+    runs.create.mockResolvedValue({ id: 'new-run' });
+    runs.findLatestWaitingInConversation.mockResolvedValue(pendingApprovalRow());
+    runs.findById.mockImplementation(async (id: string) =>
+      id === 'pending-run' ? pendingApprovalRow() : { id, status: 'EXECUTING', metadata: {} },
+    );
+
+    const events = [];
+    for await (const event of service.stream({
+      agentId: 'agent-1',
+      userMessage: 'ok i approve',
+      conversationId: 'conv-1',
+      userId: 'user-1',
+    })) {
+      events.push(event);
+    }
+
+    expect(automationGraph.resume).toHaveBeenCalledWith(
+      'pending-run',
+      { approved: true },
+      { userId: 'user-1', organizationId: undefined },
+    );
+    expect(jaafarGraph.classify).not.toHaveBeenCalled();
+    expect(events.map((event) => event.type)).toEqual(['token', 'run.completed']);
+    expect(events[0]).toMatchObject({ runId: 'pending-run' });
+    expect(events[1]).toMatchObject({ runId: 'pending-run', payload: { response: 'Done' } });
+    // The just-created run is superseded, never designed through.
+    expect(runs.cancel).toHaveBeenCalledWith('new-run');
+    expect(conversations.addMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.objectContaining({ role: 'user', content: 'ok i approve' }),
+    );
+  });
+
+  it('routes a chat rejection to cancel with a human message', async () => {
+    const { service, runs, conversations, automationGraph, jaafarGraph } = createService();
+    runs.create.mockResolvedValue({ id: 'new-run' });
+    runs.findLatestWaitingInConversation.mockResolvedValue(pendingApprovalRow());
+    runs.findById.mockImplementation(async (id: string) =>
+      id === 'pending-run' ? pendingApprovalRow() : { id, status: 'EXECUTING', metadata: {} },
+    );
+
+    const events = [];
+    for await (const event of service.stream({
+      agentId: 'agent-1',
+      userMessage: 'لا',
+      conversationId: 'conv-1',
+      userId: 'user-1',
+    })) {
+      events.push(event);
+    }
+
+    expect(automationGraph.resume).not.toHaveBeenCalled();
+    expect(jaafarGraph.classify).not.toHaveBeenCalled();
+    expect(runs.cancel).toHaveBeenCalledWith('pending-run');
+    expect(events.map((event) => event.type)).toEqual(['run.cancelled']);
+    // Arabic verdict → Arabic answer.
+    expect(events[0]).toMatchObject({
+      runId: 'pending-run',
+      payload: { reason: expect.stringContaining('تم رفض هذا التصميم') },
+    });
+    expect(conversations.addMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.objectContaining({
+        role: 'assistant',
+        content: expect.stringContaining('تم رفض هذا التصميم'),
+      }),
+    );
+
+    // English verdict → English answer.
+    const englishEvents = [];
+    for await (const event of service.stream({
+      agentId: 'agent-1',
+      userMessage: 'no',
+      conversationId: 'conv-1',
+      userId: 'user-1',
+    })) {
+      englishEvents.push(event);
+    }
+    expect(englishEvents[0]).toMatchObject({
+      runId: 'pending-run',
+      payload: { reason: expect.stringContaining('nothing was provisioned') },
+    });
+  });
+
+  it('ignores verdict-looking messages when no design awaits approval', async () => {
+    const { service, automationGraph, jaafarGraph } = createService();
+    jaafarGraph.classify.mockResolvedValue({
+      understanding: { route: 'conversation', intent: 'conversation' },
+    });
+
+    const events = [];
+    for await (const event of service.stream({
+      agentId: 'agent-1',
+      userMessage: 'ok',
+      conversationId: 'conv-1',
+      userId: 'user-1',
+    })) {
+      events.push(event);
+    }
+
+    expect(jaafarGraph.classify).toHaveBeenCalled();
+    expect(automationGraph.resume).not.toHaveBeenCalled();
+    expect(events.map((event) => event.type)).toContain('run.completed');
+  });
+
+  it('ignores verdicts on deferred or non-approval waits', async () => {
+    const { service, runs, automationGraph, jaafarGraph } = createService();
+    runs.findLatestWaitingInConversation.mockResolvedValue({
+      id: 'deferred-run',
+      status: 'WAITING',
+      metadata: { buildDeferred: true, approvalPending: false, approvalGate: 'deferred' },
+    });
+    jaafarGraph.classify.mockResolvedValue({
+      understanding: { route: 'conversation', intent: 'conversation' },
+    });
+
+    const events = [];
+    for await (const event of service.stream({
+      agentId: 'agent-1',
+      userMessage: 'ok build it',
+      conversationId: 'conv-1',
+      userId: 'user-1',
+    })) {
+      events.push(event);
+    }
+
+    expect(jaafarGraph.classify).toHaveBeenCalled();
+    expect(automationGraph.resume).not.toHaveBeenCalled();
+    expect(events.map((event) => event.type)).toContain('run.completed');
+  });
+
+  it('routes chat approvals on the blocking start() path too', async () => {
+    const { service, runs, automationGraph, jaafarGraph } = createService();
+    runs.create.mockResolvedValue({ id: 'new-run' });
+    runs.findLatestWaitingInConversation.mockResolvedValue(pendingApprovalRow());
+    runs.findById.mockImplementation(async (id: string) =>
+      id === 'pending-run' ? pendingApprovalRow() : { id, status: 'EXECUTING', metadata: {} },
+    );
+
+    const result = await service.start({
+      agentId: 'agent-1',
+      userMessage: 'ok',
+      conversationId: 'conv-1',
+      userId: 'user-1',
+    });
+
+    expect(automationGraph.resume).toHaveBeenCalledWith(
+      'pending-run',
+      { approved: true },
+      { userId: 'user-1', organizationId: undefined },
+    );
+    expect(jaafarGraph.classify).not.toHaveBeenCalled();
+    expect(automationGraph.run).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ runId: 'pending-run', status: 'COMPLETED' });
+  });
+
   it('streams explicit execution runs through the task graph', async () => {
     const { service, runs, jaafarGraph, executionGraph } = createService();
     jaafarGraph.classify.mockResolvedValue({
@@ -524,6 +697,89 @@ describe('JaafarRuntimeService', () => {
 
     expect(result.status).toBe('FAILED');
     expect(result.response).toContain('no longer waiting');
+  });
+
+  it('re-parks the row WAITING when a resumed run hits another approval gate', async () => {
+    // Regression: resume() pre-transitions WAITING→EXECUTING but never parked
+    // the row again for a SECOND approval gate — the next approve() fell into
+    // the legacy handler and the run became unrecoverable.
+    const { service, runs, executionGraph } = createService();
+    runs.findById
+      .mockResolvedValueOnce({
+        status: 'WAITING',
+        metadata: { runtimeMode: 'execution', executionGraphInput: { runId: 'task-run' } },
+      })
+      .mockResolvedValue({ status: 'EXECUTING', metadata: {} });
+    executionGraph.resume.mockResolvedValue({ route: 'waiting', response: 'Approve next tool' });
+
+    const result = await service.resume('task-run', { userId: 'user-1' });
+
+    expect(result.status).toBe('WAITING');
+    expect(runs.transitionStatus).toHaveBeenCalledWith('task-run', 'WAITING');
+  });
+
+  it('answers a concurrent duplicate approve gracefully without resuming the graph twice', async () => {
+    const { service, runs, executionGraph } = createService();
+    runs.findById.mockResolvedValue({
+      status: 'WAITING',
+      metadata: { runtimeMode: 'execution', executionGraphInput: { runId: 'task-run' } },
+    });
+    // The WAITING→EXECUTING CAS claim was already taken by the other caller.
+    runs.transitionStatus.mockRejectedValue(
+      new ConflictException('Run task-run changed concurrently'),
+    );
+
+    const result = await service.approve('task-run', { approved: true }, { userId: 'user-1' });
+
+    expect(result.response).toContain('already being processed');
+    expect(executionGraph.resume).not.toHaveBeenCalled();
+  });
+
+  it('never routes a non-WAITING graph execution run into the legacy handler', async () => {
+    const { service, runs, executionGraph, runtime } = createService();
+    runs.findById.mockResolvedValue({
+      status: 'EXECUTING',
+      metadata: { runtimeMode: 'execution', executionGraphInput: { runId: 'task-run' } },
+    });
+
+    const result = await service.approve('task-run', { approved: true }, { userId: 'user-1' });
+
+    expect(result.status).toBe('FAILED');
+    expect(result.response).toContain('no longer waiting');
+    expect(executionGraph.resume).not.toHaveBeenCalled();
+    expect(runtime.approve).not.toHaveBeenCalled();
+  });
+
+  it('tolerates an already-terminal row when mirroring graph completion', async () => {
+    // Regression: the V2 graph parks the row COMPLETED itself; the wrapper's
+    // second terminal write threw and turned a successful automation into a
+    // 500 with skipped billing.
+    const { service, runs, jaafarGraph, automationGraph } = createService();
+    jaafarGraph.classify.mockResolvedValue({
+      route: 'automation_design',
+      understanding: { route: 'automation_design', intent: 'automation_design' },
+    });
+    automationGraph.run.mockResolvedValue({
+      runId: 'task-run',
+      status: 'COMPLETED',
+      response: 'Automation built.',
+      usage: {},
+    });
+    runs.findById.mockResolvedValue({
+      status: 'COMPLETED',
+      metadata: { runtimeMode: 'automation_design' },
+    });
+
+    const result = await service.start({
+      agentId: 'agent-1',
+      userMessage: 'Design an automation',
+      mode: 'automation_design',
+      userId: 'user-1',
+    } as never);
+
+    expect(result.status).toBe('COMPLETED');
+    expect(automationGraph.run).toHaveBeenCalled();
+    expect(runs.complete).not.toHaveBeenCalled();
   });
 
   it('rejects approval outside the run scope', async () => {
