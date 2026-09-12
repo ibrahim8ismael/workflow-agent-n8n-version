@@ -24,6 +24,17 @@ function createService() {
     resume: vi
       .fn()
       .mockResolvedValue({ runId: 'task-run', status: 'COMPLETED', response: 'Done', usage: {} }),
+    resumeStream: vi.fn().mockReturnValue(
+      (async function* () {
+        yield { type: 'token', runId: 'pending-run', content: 'Provisioning in your n8n ✓\n' };
+        yield {
+          type: 'run.completed',
+          runId: 'pending-run',
+          response: 'Done',
+          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        };
+      })(),
+    ),
     retryFromFailure: vi
       .fn()
       .mockResolvedValue({ runId: 'task-run', status: 'COMPLETED', response: 'Done', usage: {} }),
@@ -444,15 +455,20 @@ describe('JaafarRuntimeService', () => {
       events.push(event);
     }
 
-    expect(automationGraph.resume).toHaveBeenCalledWith(
-      'pending-run',
-      { approved: true },
-      { userId: 'user-1', organizationId: undefined },
-    );
+    expect(automationGraph.resumeStream).toHaveBeenCalledWith('pending-run', {
+      userId: 'user-1',
+      organizationId: undefined,
+    });
+    expect(automationGraph.resume).not.toHaveBeenCalled();
     expect(jaafarGraph.classify).not.toHaveBeenCalled();
-    expect(events.map((event) => event.type)).toEqual(['token', 'run.completed']);
+    // Opener token + streamed resume progress + terminal event.
+    expect(events.map((event) => event.type)).toEqual(['token', 'token', 'run.completed']);
     expect(events[0]).toMatchObject({ runId: 'pending-run' });
-    expect(events[1]).toMatchObject({ runId: 'pending-run', payload: { response: 'Done' } });
+    expect(events[1]).toMatchObject({
+      runId: 'pending-run',
+      payload: { content: 'Provisioning in your n8n ✓\n' },
+    });
+    expect(events[2]).toMatchObject({ runId: 'pending-run', payload: { response: 'Done' } });
     // The just-created run is superseded, never designed through.
     expect(runs.cancel).toHaveBeenCalledWith('new-run');
     expect(conversations.addMessage).toHaveBeenCalledWith(

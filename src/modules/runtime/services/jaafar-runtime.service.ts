@@ -413,34 +413,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       // loops back into a new blueprint and nothing is ever provisioned.
       const chatApproval = await this.resolveChatApproval(runtimeRequest, run.id);
       if (chatApproval) {
-        // Keep the SSE stream alive across the blocking resume (provisioning
-        // takes a while) — the client renders progress, not a frozen spinner.
-        if (chatApproval.decision === 'approve') {
-          yield {
-            type: 'token',
-            runId: chatApproval.pending.runId,
-            occurredAt: new Date().toISOString(),
-            payload: { content: 'On it — building your automation now ⏳\n' },
-          };
-        }
-        try {
-          const result = await this.applyChatApproval(run.id, chatApproval, runtimeRequest);
-          yield this.chatApprovalTerminalEvent(chatApproval.pending.runId, result);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Approval failed';
-          yield {
-            type: 'run.failed',
-            runId: chatApproval.pending.runId,
-            occurredAt: new Date().toISOString(),
-            payload: {
-              error: {
-                code: 'UNKNOWN_RUNTIME_FAILURE' as RuntimeErrorCode,
-                message,
-                retryable: false,
-              },
-            },
-          };
-        }
+        yield* this.streamChatApproval(run.id, chatApproval, runtimeRequest);
         return;
       }
       const graphInput = {
@@ -1199,7 +1172,20 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
       case 'token':
         return { type: 'token', runId, occurredAt, payload: { content: event.content } };
       case 'approval.required':
-        return { type: 'approval.required', runId, occurredAt, payload: { reason: event.reason } };
+        return {
+          type: 'approval.required',
+          runId,
+          occurredAt,
+          payload: {
+            reason: event.reason,
+            ...(event.blueprintName ? { blueprintName: event.blueprintName } : {}),
+            ...(event.blueprintGoal ? { blueprintGoal: event.blueprintGoal } : {}),
+            ...(event.triggerType ? { triggerType: event.triggerType } : {}),
+            ...(typeof event.stepCount === 'number' ? { stepCount: event.stepCount } : {}),
+            ...(event.blueprintRevision ? { blueprintRevision: event.blueprintRevision } : {}),
+            ...(event.summary ? { summary: event.summary } : {}),
+          },
+        };
       case 'run.waiting':
         return { type: 'run.waiting', runId, occurredAt, payload: { reason: event.reason } };
       case 'run.completed':
@@ -1573,21 +1559,7 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     approval: { decision: 'approve' | 'reject'; pending: PendingApprovalContext },
     request: RuntimeRequest,
   ): Promise<RuntimeResult> {
-    await this.abandonStreamingRun(newRunId, `superseded_by_chat_${approval.decision}`);
-    // Persist the user turn BEFORE resuming — a mid-resume failure must
-    // never erase it from history (Phase 0 lesson).
-    if (request.conversationId) {
-      try {
-        await this.conversations.addMessage(request.conversationId, {
-          role: 'user',
-          content: request.userMessage,
-        });
-        await this.conversations.titleFromFirstMessage(request.conversationId, request.userMessage);
-      } catch {
-        /* best-effort */
-      }
-    }
-    const scope = { userId: request.userId, organizationId: request.organizationId };
+    const scope = await this.prepareChatApproval(newRunId, approval, request);
     if (approval.decision === 'approve') {
       const result = await this.resume(approval.pending.runId, scope);
       // A WAITING re-park (multi-gate resume) persists nothing itself — the
@@ -1612,6 +1584,97 @@ export class JaafarRuntimeService implements JaafarRuntimeServiceContract {
     // Rejection cancels the row without persisting — the turn needs its answer.
     await this.persistAssistantTurn(request.conversationId, result.response);
     return result;
+  }
+
+  /**
+   * Stream variant of applyChatApproval: approvals resume the parked design
+   * as a stream (real progress events: provisioning, verification, testing)
+   * instead of a blocking invoke. Rejections stay instant.
+   */
+  private async *streamChatApproval(
+    newRunId: string,
+    approval: { decision: 'approve' | 'reject'; pending: PendingApprovalContext },
+    request: RuntimeRequest,
+  ): AsyncGenerator<RuntimeEvent> {
+    const scope = await this.prepareChatApproval(newRunId, approval, request);
+    const pendingRunId = approval.pending.runId;
+    if (approval.decision === 'reject') {
+      const arabic = /[\u0600-\u06FF]/.test(request.userMessage);
+      const result = await this.approve(
+        pendingRunId,
+        {
+          approved: false,
+          reason: arabic
+            ? 'تمام — تم رفض هذا التصميم ولن يتم إنشاء أي شيء. أرسل طلباً جديداً وسأجهز لك تصميماً جديداً.'
+            : 'Understood — this design is rejected and nothing was provisioned. Send a new request anytime and I will draft a fresh design.',
+        },
+        scope,
+      );
+      await this.persistAssistantTurn(request.conversationId, result.response);
+      yield this.chatApprovalTerminalEvent(pendingRunId, result);
+      return;
+    }
+    // Keep the SSE stream alive across the resume — the client renders
+    // progress tokens, not a frozen spinner.
+    yield {
+      type: 'token',
+      runId: pendingRunId,
+      occurredAt: new Date().toISOString(),
+      payload: { content: 'On it — building your automation now ⏳\n' },
+    };
+    let terminal = false;
+    try {
+      for await (const event of this.automationGraph.resumeStream(pendingRunId, scope)) {
+        const mapped = this.mapAutomationGraphEvent(event);
+        terminal =
+          mapped.type === 'run.completed' ||
+          mapped.type === 'run.waiting' ||
+          mapped.type === 'run.failed' ||
+          mapped.type === 'run.cancelled';
+        await this.applyTerminalStreamStatus(mapped);
+        await this.recordEvent(mapped);
+        if (terminal) await this.recordBilling(mapped.runId);
+        yield mapped;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Approval failed';
+      yield {
+        type: 'run.failed',
+        runId: pendingRunId,
+        occurredAt: new Date().toISOString(),
+        payload: {
+          error: {
+            code: 'UNKNOWN_RUNTIME_FAILURE' as RuntimeErrorCode,
+            message,
+            retryable: false,
+          },
+        },
+      };
+    }
+  }
+
+  /**
+   * Shared head of both chat-approval paths: park the just-created run and
+   * persist the user turn BEFORE touching the parked run (Phase 0 lesson).
+   */
+  private async prepareChatApproval(
+    newRunId: string,
+    approval: { decision: 'approve' | 'reject'; pending: PendingApprovalContext },
+    request: RuntimeRequest,
+  ): Promise<RuntimeScope> {
+    await this.abandonStreamingRun(newRunId, `superseded_by_chat_${approval.decision}`);
+    if (request.conversationId) {
+      try {
+        await this.conversations.addMessage(request.conversationId, {
+          role: 'user',
+          content: request.userMessage,
+        });
+        await this.conversations.titleFromFirstMessage(request.conversationId, request.userMessage);
+      } catch {
+        /* best-effort */
+      }
+    }
+    return { userId: request.userId, organizationId: request.organizationId };
   }
 
   /** Mirrors an approval result onto the SSE stream for the parked run. */

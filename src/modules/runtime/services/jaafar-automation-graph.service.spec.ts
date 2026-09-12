@@ -251,6 +251,50 @@ describe('JaafarAutomationGraphService', () => {
     expect(phases).toContain(AGENT_RUN_PHASE.COMPLETED);
   });
 
+  it('streams resume progress through provision + verify to COMPLETED', async () => {
+    // Prime the checkpoint by running to the gate first.
+    const svc = service();
+    await svc.run(input());
+    const events = [];
+    for await (const event of svc.resumeStream('run-1', { userId: 'user-1' })) events.push(event);
+
+    const types = events.map((e) => e.type);
+    expect(types).toContain('token');
+    expect(types.at(-1)).toBe('run.completed');
+    const tokens = events
+      .filter((e) => e.type === 'token')
+      .map((e) => (e as { content: string }).content)
+      .join('');
+    expect(tokens).toContain('Provisioning');
+    expect(builder.build).toHaveBeenCalled();
+  });
+
+  it('resumeStream refuses non-waiting runs with the graceful message', async () => {
+    agentRuns.snapshot.mockResolvedValue({
+      run: {
+        id: 'run-1',
+        userId: 'user-1',
+        organizationId: 'org-1',
+        status: 'COMPLETED',
+        currentPhase: AGENT_RUN_PHASE.COMPLETED,
+        metadata: { automationV2: true },
+      },
+      transitions: [],
+    });
+
+    const events = [];
+    for await (const event of service().resumeStream('run-1', { userId: 'user-1' })) {
+      events.push(event);
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'run.failed',
+      code: 'AUTOMATION_RESUME_REJECTED',
+    });
+    expect((events[0] as { message: string }).message).toContain('no longer waiting');
+  });
+
   it('fails the run with the human reason on rejection — nothing provisioned', async () => {
     const svc = service();
     await svc.run(input());
@@ -338,6 +382,10 @@ describe('JaafarAutomationGraphService', () => {
     expect(events[approvalIndex]).toMatchObject({
       runId: 'run-1',
       reason: 'automation_design_approval',
+      blueprintName: 'Order sync',
+      blueprintGoal: 'Sync orders',
+      triggerType: 'webhook',
+      stepCount: 1,
     });
     expect(events.at(-1)).toMatchObject({ type: 'run.waiting', reason: 'approval' });
     expect(events.findIndex((e) => e.type === 'run.waiting')).toBeGreaterThan(approvalIndex);

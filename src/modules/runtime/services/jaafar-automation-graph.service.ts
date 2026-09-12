@@ -82,7 +82,19 @@ export type AutomationGraphStreamEvent =
   | { type: 'token'; runId: string; content: string }
   // Fired at the design approval gate so stream clients can render an
   // approve/reject affordance (mirrors the execution graph's gate event).
-  | { type: 'approval.required'; runId: string; reason: string }
+  // Carries the blueprint card fields so the client never has to scrape
+  // chat text or read legacy design-session metadata.
+  | {
+      type: 'approval.required';
+      runId: string;
+      reason: string;
+      blueprintName?: string;
+      blueprintGoal?: string;
+      triggerType?: string;
+      stepCount?: number;
+      blueprintRevision?: string;
+      summary?: string;
+    }
   | { type: 'run.waiting'; runId: string; reason: 'approval' | 'clarification' }
   | {
       type: 'run.completed';
@@ -375,33 +387,7 @@ export class JaafarAutomationGraphService {
         { input: { ...input, runId } },
         { ...this.graphConfig(runId, input), streamMode: 'updates' },
       );
-      for await (const update of stream) {
-        for (const event of this.mapStreamUpdate(runId, update as Record<string, unknown>)) {
-          if (event.type === 'run.completed') {
-            // The complete node already persisted the assistant turn — the
-            // old second write here duplicated the completion message in
-            // every streamed run's history.
-            // Token totals accumulated on the run row across graph LLM calls.
-            try {
-              const row = await this.runs.findById(runId);
-              (event as { usage: unknown }).usage = {
-                promptTokens: Number(row.promptTokens ?? 0),
-                completionTokens: Number(row.completionTokens ?? 0),
-                totalTokens: Number(row.totalTokens ?? 0),
-              };
-            } catch {
-              /* keep zero usage */
-            }
-          }
-          yield event;
-          if (event.type === 'run.waiting') {
-            await this.agentRuns.advance(runId, {
-              toStatus: 'WAITING',
-              reason: `automation awaiting ${event.reason}`,
-            });
-          }
-        }
-      }
+      yield* this.pumpGraphStream(runId, stream);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Automation run failed';
       await this.failRun(runId, message);
@@ -424,40 +410,13 @@ export class JaafarAutomationGraphService {
     decision: AutomationApprovalDecision,
     scope?: { userId?: string; organizationId?: string },
   ): Promise<ExecuteResponse> {
-    const snapshot = await this.agentRuns.snapshot(runId);
-    const run = snapshot.run as {
-      userId?: string | null;
-      organizationId?: string | null;
-      status: string;
-      metadata?: unknown;
-    };
-    if (scope?.userId && run.userId && run.userId !== scope.userId) {
-      return this.scopeFailure(runId, 'user');
-    }
-    if (
-      scope?.organizationId &&
-      run.organizationId &&
-      run.organizationId !== scope.organizationId
-    ) {
-      return this.scopeFailure(runId, 'organization');
-    }
-    const metadata = (run.metadata as Record<string, unknown> | null) ?? {};
-    if (!metadata.automationV2) {
+    const guards = await this.checkResumeGuards(runId, scope);
+    if (!guards.ok) {
       return {
         runId,
         mode: 'automation_design',
         status: 'FAILED',
-        response:
-          'This design was started by the previous Jaafar version and cannot be approved anymore. Please restate your request and I will prepare a fresh design.',
-        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-      };
-    }
-    if (run.status !== 'WAITING') {
-      return {
-        runId,
-        mode: 'automation_design',
-        status: 'FAILED',
-        response: `This automation is no longer waiting for approval (status=${run.status}). Send a new message to start another design.`,
+        response: guards.response,
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       };
     }
@@ -494,8 +453,8 @@ export class JaafarAutomationGraphService {
       const result = await this.build().invoke(
         new Command({ resume: { approved: true } }),
         this.graphConfig(runId, {
-          userId: scope?.userId ?? run.userId ?? undefined,
-          organizationId: scope?.organizationId ?? run.organizationId ?? undefined,
+          userId: scope?.userId ?? guards.userId,
+          organizationId: scope?.organizationId ?? guards.organizationId,
         }),
       );
       return this.result(runId, result, 'COMPLETED');
@@ -504,6 +463,140 @@ export class JaafarAutomationGraphService {
       await this.failRun(runId, message);
       throw error;
     }
+  }
+
+  /**
+   * Streamed variant of resume() for chat approvals: same guards as resume(),
+   * but the parked interrupt is resumed as a stream so the client sees real
+   * progress (provisioning, verification, testing) instead of a frozen
+   * spinner. Rejections are instant and stay on the blocking resume() path.
+   */
+  async *resumeStream(
+    runId: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): AsyncGenerator<AutomationGraphStreamEvent> {
+    const guards = await this.checkResumeGuards(runId, scope);
+    if (!guards.ok) {
+      yield {
+        type: 'run.failed',
+        runId,
+        code: 'AUTOMATION_RESUME_REJECTED',
+        message: guards.response,
+      };
+      return;
+    }
+    try {
+      const stream = await this.build().stream(new Command({ resume: { approved: true } }), {
+        ...this.graphConfig(runId, {
+          userId: scope?.userId ?? guards.userId,
+          organizationId: scope?.organizationId ?? guards.organizationId,
+        }),
+        streamMode: 'updates',
+      });
+      yield* this.pumpGraphStream(runId, stream);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Automation provisioning failed';
+      await this.failRun(runId, message);
+      yield {
+        type: 'run.failed',
+        runId,
+        code: 'AUTOMATION_FAILED',
+        message: `Automation build failed: ${message.slice(0, 300)}. Nothing was activated — send a new message and I will try again.`,
+      };
+    }
+  }
+
+  /**
+   * Shared update→event pump for stream() and resumeStream(): maps LangGraph
+   * updates to SSE events, backfills completion usage from the run row, and
+   * re-parks WAITING so a later approval routes through the graph path.
+   */
+  private async *pumpGraphStream(
+    runId: string,
+    stream: AsyncIterable<unknown>,
+  ): AsyncGenerator<AutomationGraphStreamEvent> {
+    for await (const update of stream) {
+      for (const event of this.mapStreamUpdate(runId, update as Record<string, unknown>)) {
+        if (event.type === 'run.completed') {
+          // The complete node already persisted the assistant turn — a second
+          // write here duplicated the completion message in every streamed
+          // run's history. Token totals accumulated on the run row across
+          // graph LLM calls.
+          try {
+            const row = await this.runs.findById(runId);
+            (event as { usage: unknown }).usage = {
+              promptTokens: Number(row.promptTokens ?? 0),
+              completionTokens: Number(row.completionTokens ?? 0),
+              totalTokens: Number(row.totalTokens ?? 0),
+            };
+          } catch {
+            /* keep zero usage */
+          }
+        }
+        yield event;
+        if (event.type === 'run.waiting') {
+          await this.agentRuns.advance(runId, {
+            toStatus: 'WAITING',
+            reason: `automation awaiting ${event.reason}`,
+          });
+        }
+      }
+    }
+  }
+
+  /**
+   * Guards shared by resume() and resumeStream(): scope match, V2 run, and
+   * still-WAITING status. Response texts match resume()'s legacy contract so
+   * both entry points answer identically.
+   */
+  private async checkResumeGuards(
+    runId: string,
+    scope?: { userId?: string; organizationId?: string },
+  ): Promise<
+    { ok: true; userId?: string; organizationId?: string } | { ok: false; response: string }
+  > {
+    const snapshot = await this.agentRuns.snapshot(runId);
+    const run = snapshot.run as {
+      userId?: string | null;
+      organizationId?: string | null;
+      status: string;
+      metadata?: unknown;
+    };
+    if (scope?.userId && run.userId && run.userId !== scope.userId) {
+      return {
+        ok: false,
+        response: 'This automation is not available in the current user scope.',
+      };
+    }
+    if (
+      scope?.organizationId &&
+      run.organizationId &&
+      run.organizationId !== scope.organizationId
+    ) {
+      return {
+        ok: false,
+        response: 'This automation is not available in the current organization scope.',
+      };
+    }
+    const metadata = (run.metadata as Record<string, unknown> | null) ?? {};
+    if (!metadata.automationV2) {
+      return {
+        ok: false,
+        response:
+          'This design was started by the previous Jaafar version and cannot be approved anymore. Please restate your request and I will prepare a fresh design.',
+      };
+    }
+    if (run.status !== 'WAITING') {
+      return {
+        ok: false,
+        response: `This automation is no longer waiting for approval (status=${run.status}). Send a new message to start another design.`,
+      };
+    }
+    return {
+      ok: true,
+      userId: run.userId ?? undefined,
+      organizationId: run.organizationId ?? undefined,
+    };
   }
 
   /**
@@ -2305,20 +2398,56 @@ export class JaafarAutomationGraphService {
       // The interrupt payload carries the blueprint for review — render it
       // as content so stream clients show the design, not just a wait state.
       // Defensive: any shape surprise falls back to the bare wait event.
+      let summary = '';
+      let approvalCard: {
+        blueprintName?: string;
+        blueprintGoal?: string;
+        triggerType?: string;
+        stepCount?: number;
+        blueprintRevision?: string;
+        summary?: string;
+      } = {};
       try {
         const raw = update.__interrupt__ as Array<{ value?: unknown }> | { value?: unknown };
         const interrupts = Array.isArray(raw) ? raw : [raw];
         const found = interrupts
           .map((item) => item?.value)
           .find((value) => value && typeof value === 'object') as
-          | { blueprint?: AutomationBlueprint }
+          | {
+              blueprint?: AutomationBlueprint;
+              blueprintRevision?: string;
+            }
           | undefined;
-        const summary = this.formatApprovalSummary(found?.blueprint);
+        summary = this.formatApprovalSummary(found?.blueprint);
+        const card = found?.blueprint as
+          | {
+              name?: string;
+              goal?: string;
+              trigger?: { type?: string } | string;
+              steps?: unknown[];
+            }
+          | undefined;
+        const triggerType = typeof card?.trigger === 'string' ? card.trigger : card?.trigger?.type;
+        approvalCard = {
+          ...(card?.name ? { blueprintName: card.name } : {}),
+          ...(card?.goal ? { blueprintGoal: card.goal } : {}),
+          ...(triggerType ? { triggerType } : {}),
+          ...(Array.isArray(card?.steps) ? { stepCount: card.steps.length } : {}),
+          ...(typeof found?.blueprintRevision === 'string'
+            ? { blueprintRevision: found.blueprintRevision }
+            : {}),
+          ...(summary ? { summary } : {}),
+        };
         if (summary) events.push({ type: 'token', runId, content: summary });
       } catch {
         /* bare run.waiting below */
       }
-      events.push({ type: 'approval.required', runId, reason: 'automation_design_approval' });
+      events.push({
+        type: 'approval.required',
+        runId,
+        reason: 'automation_design_approval',
+        ...approvalCard,
+      });
       events.push({ type: 'run.waiting', runId, reason: 'approval' });
       return events;
     }

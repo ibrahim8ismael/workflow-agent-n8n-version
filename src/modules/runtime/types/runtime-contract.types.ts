@@ -125,7 +125,15 @@ export interface RuntimeEventPayloads {
   'graph.node.started': { node: string };
   'graph.node.completed': { node: string; durationMs: number };
   'plan.created': { stepCount: number; requiresApproval: boolean };
-  'approval.required': { reason: string };
+  'approval.required': {
+    reason: string;
+    blueprintName?: string;
+    blueprintGoal?: string;
+    triggerType?: string;
+    stepCount?: number;
+    blueprintRevision?: string;
+    summary?: string;
+  };
   'tool.started': { callId: string; toolName: string };
   'tool.completed': { callId: string; toolName: string; durationMs: number };
   'tool.failed': { callId: string; toolName: string; error: RuntimeError };
