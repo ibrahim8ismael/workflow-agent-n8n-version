@@ -537,6 +537,72 @@ describe('JaafarAutomationGraphService', () => {
     );
   });
 
+  it('self-corrects a failed blueprint generation at high effort instead of failing', async () => {
+    llmRuntime.generateObject
+      .mockRejectedValueOnce(
+        Object.assign(
+          new Error(
+            'No object generated: the model did not return a response. [structured-output:SCHEMA_INVALID]',
+          ),
+          {
+            kind: 'SCHEMA_INVALID',
+            details: { rawSample: '{bad', finishReason: 'stop' },
+          },
+        ),
+      )
+      .mockResolvedValue({
+        object: blueprint,
+        usage: { promptTokens: 5, completionTokens: 5, totalTokens: 10 },
+      });
+
+    const result = await service().run(input());
+
+    expect(result.status).toBe('WAITING');
+    expect(llmRuntime.generateObject).toHaveBeenCalledTimes(2);
+    expect(llmRuntime.generateObject).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ mode: 'medium', maxTokens: 4000 }),
+    );
+    const corrective = vi.mocked(llmRuntime.generateObject).mock.calls[1]?.[0] as {
+      mode: string;
+      maxTokens: number;
+      timeoutMs: number;
+      messages: Array<{ content: string }>;
+    };
+    expect(corrective.mode).toBe('high');
+    expect(corrective.maxTokens).toBe(6000);
+    const correctivePrompt = corrective.messages.map((m) => m.content).join('\n');
+    expect(correctivePrompt).toContain('prior_failure');
+    expect(correctivePrompt).toContain('SCHEMA_INVALID');
+  });
+
+  it('records plan failure diagnostics and humanizes truncation when correction fails', async () => {
+    llmRuntime.generateObject.mockRejectedValue(
+      Object.assign(new Error('No object generated: empty [structured-output:EMPTY]'), {
+        kind: 'EMPTY',
+        details: { rawSample: '', finishReason: 'length' },
+      }),
+    );
+
+    const result = await service().run(input());
+
+    expect(result.status).toBe('FAILED');
+    // First attempt + exactly one corrective pass — never an open loop.
+    expect(llmRuntime.generateObject).toHaveBeenCalledTimes(2);
+    expect(result.response).toContain('too large for one response');
+    expect(result.response).toContain('Nothing was provisioned');
+    expect(runs.updateMetadata).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        planFailure: expect.objectContaining({
+          kind: 'EMPTY',
+          finishReason: 'length',
+          truncated: true,
+        }),
+      }),
+    );
+  });
+
   it('replans a generic node pick into the native node after NATIVE_NODE_AVAILABLE', async () => {
     planReview.review
       .mockReturnValueOnce({

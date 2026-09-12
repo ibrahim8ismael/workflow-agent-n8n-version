@@ -274,13 +274,24 @@ export class LLMRuntimeService implements ILLMRuntime {
   private isRetryable(error: unknown): boolean {
     const message =
       error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-    return (
-      !/(authentication|unauthorized|forbidden|invalid|validation|permission|schema)/.test(
-        message,
-      ) &&
-      /(timeout|timed out|network|rate limit|429|500|502|503|504|temporar|unavailable|fetch|no object generated|unexpected end of json|did not return a response)/.test(
+    // Authentication/permission problems are deterministic — never retry.
+    if (/(authentication|unauthorized|forbidden|permission)/.test(message)) return false;
+    // Structured-output generation failures are usually transient model
+    // behavior (empty output, malformed JSON, schema mismatch, truncation):
+    // retry the same candidate, then move through the fallback ladder. These
+    // markers are checked BEFORE the invalid/validation/schema exclusion
+    // below — an AI SDK `[structured-output:SCHEMA_INVALID]` is a flaky
+    // generation, not a deterministic request error.
+    if (
+      /(no object generated|did not return a response|unexpected end of json|structured-output|finishreason)/.test(
         message,
       )
+    ) {
+      return true;
+    }
+    if (/(invalid|validation|schema)/.test(message)) return false;
+    return /(timeout|timed out|network|rate limit|429|500|502|503|504|temporar|unavailable|fetch)/.test(
+      message,
     );
   }
 

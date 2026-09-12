@@ -252,6 +252,21 @@ const AutomationGraphState = Annotation.Root({
 const MAX_PLAN_ATTEMPTS = 2;
 
 /**
+ * True when a blueprint-generation failure looks like output truncation
+ * (finishReason `length`, cut-off markers) rather than a shape error. The
+ * adapter's StructuredOutputError carries `details.finishReason`; raw
+ * provider errors carry it in the message.
+ */
+function isTruncatedGeneration(error: unknown): boolean {
+  if (error && typeof error === 'object' && 'details' in error) {
+    const finishReason = (error as { details?: { finishReason?: unknown } }).details?.finishReason;
+    if (typeof finishReason === 'string' && finishReason === 'length') return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /truncat|cut off|finish.?reason.{0,20}length|maximum context|max_tokens/i.test(message);
+}
+
+/**
  * Jaafar V2 automation graph (docs/Jaafar-improve.md §10–§22, Phase 3).
  *
  * understand → plan → review_plan (fix loop) → build → static_validate →
@@ -849,34 +864,34 @@ export class JaafarAutomationGraphService {
             .catch(() => []),
           this.loadInstance(state.input).catch(() => null),
         ]);
-        const result = await this.llmRuntime
-          .generateObject({
-            mode: state.input.effort ?? 'medium',
-            systemPrompt: this.planSystemPrompt(
+        let result: Awaited<ReturnType<LLMRuntimeService['generateObject']>>;
+        try {
+          result = await this.generateBlueprint(state, planContext, capabilities, instance);
+        } catch (error) {
+          // One self-correction pass at higher effort before failing the
+          // design (mirrors the understanding service): a flaky
+          // structured-output generation must not kill the whole run. The raw
+          // failure is fed back so the model repairs its own output shape.
+          const firstFailure = error instanceof Error ? error.message : String(error);
+          try {
+            result = await this.generateBlueprint(
+              state,
               planContext,
               capabilities,
               instance,
-              state,
-              this.relevantNodeTypes(state.understanding, capabilities, instance),
-            ),
-            messages: [
-              {
-                role: 'user',
-                content: this.planUserPrompt(state.understanding, state.planFeedback),
-              },
-            ],
-            schema: automationBlueprintSchema,
-            temperature: 0.2,
-            // Blueprints with node hints are large; truncation surfaces as an
-            // empty object downstream, so budget generously.
-            maxTokens: 4000,
-            timeoutMs: 90_000,
-          })
-          .catch((error: unknown) => {
-            throw new Error(
-              `plan generation failed: ${error instanceof Error ? error.message : String(error)}`,
+              firstFailure,
             );
-          });
+          } catch (correctiveError) {
+            await this.recordPlanFailure(state.input.runId, correctiveError);
+            const detail =
+              correctiveError instanceof Error ? correctiveError.message : String(correctiveError);
+            // Mark truncation in the message itself: the humanizer downstream
+            // only sees this string, not the structured error details.
+            throw new Error(
+              `plan generation failed${isTruncatedGeneration(correctiveError) ? ' (output truncated)' : ''}: ${detail}`,
+            );
+          }
+        }
         const blueprint = automationBlueprintSchema.parse(result.object);
         await this.recordUsage(state.input.runId, result.usage);
         return {
@@ -1994,6 +2009,110 @@ export class JaafarAutomationGraphService {
     }
   }
 
+  /**
+   * Blueprint generation with one built-in self-correction. The first pass
+   * runs at the requested effort; a generation failure (empty output,
+   * malformed JSON, schema mismatch, truncation) triggers exactly one
+   * corrective pass at high effort with a larger budget and the raw failure
+   * fed back — mirroring the understanding service's correction pattern.
+   */
+  private generateBlueprint(
+    state: AutomationGraphState,
+    planContext: StageContext,
+    capabilities: Array<{
+      displayName: string;
+      connectionStatus: string;
+      credentialType?: string;
+      provider?: string;
+      suggestedNodeType?: string;
+    }>,
+    instance: N8nInstanceInventory | null,
+    priorFailure?: string,
+  ): Promise<Awaited<ReturnType<LLMRuntimeService['generateObject']>>> {
+    const corrective = priorFailure !== undefined;
+    return this.llmRuntime.generateObject({
+      mode: corrective ? 'high' : (state.input.effort ?? 'medium'),
+      systemPrompt: this.planSystemPrompt(
+        planContext,
+        capabilities,
+        instance,
+        state,
+        this.relevantNodeTypes(state.understanding, capabilities, instance),
+      ),
+      messages: [
+        {
+          role: 'user',
+          content: this.planUserPrompt(
+            state.understanding!,
+            state.planFeedback,
+            corrective ? this.planGenerationFailureHint(priorFailure) : undefined,
+          ),
+        },
+      ],
+      schema: automationBlueprintSchema,
+      temperature: 0.2,
+      // Corrective pass gets a larger budget: truncation is a common
+      // first-pass failure for blueprints with node hints, and retrying with
+      // the same budget would fail the same way.
+      maxTokens: corrective ? 6000 : 4000,
+      timeoutMs: corrective ? 120_000 : 90_000,
+    });
+  }
+
+  /**
+   * Feedback text for the corrective blueprint pass. Truncation gets
+   * different guidance than schema errors: re-emitting the same shape fails
+   * the same way, so the model is told to compact rather than repeat.
+   */
+  private planGenerationFailureHint(priorFailure: string): string {
+    if (isTruncatedGeneration(priorFailure)) {
+      return (
+        `Your previous blueprint response was CUT OFF before completion (${priorFailure}). ` +
+        `Regenerate the COMPLETE blueprint in a more compact form: keep every required step, ` +
+        `but shorten long strings and nodeHint parameters. Never emit a partial blueprint.`
+      );
+    }
+    return (
+      `Your previous blueprint response failed validation and was discarded (${priorFailure}). ` +
+      `Regenerate the COMPLETE blueprint, fixing the reported problem. ` +
+      `Keep every step, requirementIds coverage, and nodeHint.`
+    );
+  }
+
+  /**
+   * Persists a plan-generation failure diagnostic into run metadata so the
+   * next debug answers empty/malformed/schema-invalid/truncated directly.
+   * Best-effort: never masks the original failure.
+   */
+  private async recordPlanFailure(runId: string, error: unknown): Promise<void> {
+    try {
+      const structured =
+        error && typeof error === 'object' && 'kind' in error
+          ? (error as { kind?: unknown; details?: { rawSample?: unknown; finishReason?: unknown } })
+          : null;
+      const kind = typeof structured?.kind === 'string' ? structured.kind : 'MODEL_REQUEST_FAILED';
+      const rawSample =
+        typeof structured?.details?.rawSample === 'string' ? structured.details.rawSample : '';
+      const finishReason =
+        typeof structured?.details?.finishReason === 'string'
+          ? structured.details.finishReason
+          : 'unknown';
+      await this.runs.updateMetadata(runId, {
+        planFailure: {
+          kind,
+          rawSample,
+          finishReason,
+          truncated: isTruncatedGeneration(error),
+          message:
+            error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+          at: new Date().toISOString(),
+        },
+      });
+    } catch {
+      /* best-effort */
+    }
+  }
+
   private planSystemPrompt(
     planContext: StageContext,
     capabilities: Array<{
@@ -2087,7 +2206,11 @@ export class JaafarAutomationGraphService {
     }
   }
 
-  private planUserPrompt(understanding: JaafarUnderstanding, feedback?: string): string {
+  private planUserPrompt(
+    understanding: JaafarUnderstanding,
+    feedback?: string,
+    priorFailure?: string,
+  ): string {
     return [
       `<goal>${understanding.goal}</goal>`,
       `<trigger>${JSON.stringify(understanding.trigger)}</trigger>`,
@@ -2098,6 +2221,7 @@ export class JaafarAutomationGraphService {
       `<requirements>${JSON.stringify(understanding.requirements)}</requirements>`,
       `<assumptions>${JSON.stringify(understanding.assumptions)}</assumptions>`,
       feedback ? `<prior_plan_feedback>\n${feedback}\n</prior_plan_feedback>` : '',
+      priorFailure ? `<prior_failure>\n${priorFailure}\n</prior_failure>` : '',
       'Return the complete automation blueprint now.',
     ]
       .filter(Boolean)
@@ -2332,6 +2456,9 @@ export class JaafarAutomationGraphService {
    */
   private designFailureMessage(message: string): string {
     const short = message.length > 300 ? `${message.slice(0, 300)}…` : message;
+    if (/cut off|truncat|finish.?reason.{0,20}length/i.test(message)) {
+      return `the design was too large for one response and got cut off (${short}). Try a simpler automation or split it into parts, and I'll draft it.`;
+    }
     if (/failed review|static validation/i.test(message)) {
       return `the design didn't pass my own validation checks (${short}). Try simplifying the request or giving more concrete details, and I'll draft it again.`;
     }

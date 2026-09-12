@@ -86,6 +86,51 @@ describe('LLMRuntimeService', () => {
     expect(adapter.generateText).toHaveBeenCalledTimes(1);
   });
 
+  it('retries structured-output generation failures on the same candidate', async () => {
+    vi.mocked(adapter.generateObject)
+      .mockRejectedValueOnce(
+        new Error(
+          'No object generated: the model did not return a response. [structured-output:SCHEMA_INVALID]',
+        ),
+      )
+      .mockResolvedValueOnce({
+        object: { answer: true },
+        finishReason: 'stop',
+        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+      } as never);
+
+    const result = await service.generateObject({
+      mode: 'medium',
+      messages: [],
+      schema: {} as never,
+      maxRetries: 1,
+    });
+
+    expect(adapter.generateObject).toHaveBeenCalledTimes(2);
+    expect(result.object).toEqual({ answer: true });
+    expect(result.execution.retries).toBe(1);
+  });
+
+  it('falls through to the fallback ladder when structured-output failures persist', async () => {
+    vi.mocked(config.get).mockImplementation((key: string, fallback?: unknown) => {
+      if (key === 'LLM_LOW_FALLBACKS') return 'anthropic:claude-3-haiku';
+      return fallback as never;
+    });
+    vi.mocked(adapter.generateObject).mockRejectedValue(
+      new Error('No object generated: empty [structured-output:EMPTY]'),
+    );
+
+    await expect(
+      service.generateObject({ mode: 'low', messages: [], schema: {} as never, maxRetries: 0 }),
+    ).rejects.toThrow('No object generated');
+    // Primary candidate + one fallback attempt — never a silent single try.
+    expect(adapter.generateObject).toHaveBeenCalledTimes(2);
+    expect(adapter.generateObject).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ model: 'anthropic:claude-3-haiku' }),
+    );
+  });
+
   it('returns structured output through the resolved mode', async () => {
     const result = await service.generateObject({
       mode: 'high',
