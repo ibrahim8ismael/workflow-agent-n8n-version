@@ -21,6 +21,12 @@ test.use(HAS_AUTH ? { storageState: STORAGE_STATE } : {});
 test.setTimeout(180_000);
 test.slow();
 
+test('logged-out visitors are sent to signin (no auth needed)', async ({ page }) => {
+  test.skip(HAS_AUTH, 'only meaningful without a recorded session');
+  await page.goto('/new');
+  await expect(page).toHaveURL(/\/signin/, { timeout: 30_000 });
+});
+
 test('jaafar answers in chat via the browser', async ({ page }) => {
   test.skip(!HAS_AUTH, 'no authenticated session — record once: npm run test:browser:auth');
 
