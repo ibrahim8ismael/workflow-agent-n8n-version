@@ -19,7 +19,7 @@
     "test:browser": "playwright test",
     "test:browser:ui": "playwright test --ui",
     "test:browser:headed": "playwright test --headed",
-    "test:browser:auth": "playwright codegen --save-storage=tests/browser/.auth/user.json http://localhost:3000/signin",
+    "test:browser:auth": "playwright test --project=setup",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",

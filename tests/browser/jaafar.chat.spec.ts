@@ -1,5 +1,3 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { expect, test } from '@playwright/test';
 
 /**
@@ -9,27 +7,25 @@ import { expect, test } from '@playwright/test';
  * Prerequisites (each in its own terminal):
  *   1. engine: npm run dev          (http://localhost:4000)
  *   2. client: npm run dev          (http://localhost:3000, in woops-client)
- *   3. auth:   npm run test:browser:auth  (one-time OTP login, saves session)
  *
- * Without the recorded session this test skips instead of failing.
+ * Login happens automatically: the `setup` project signs in through the
+ * real /signin + /otp-verify UI (OTP read from local Mailpit) and every
+ * test below reuses that saved session — except the logged-out test,
+ * which explicitly opts out of it.
  */
-const STORAGE_STATE = path.resolve(__dirname, '.auth/user.json');
-const HAS_AUTH = fs.existsSync(STORAGE_STATE);
-
-test.use(HAS_AUTH ? { storageState: STORAGE_STATE } : {});
-
 test.setTimeout(180_000);
 test.slow();
 
-test('logged-out visitors are sent to signin (no auth needed)', async ({ page }) => {
-  test.skip(HAS_AUTH, 'only meaningful without a recorded session');
-  await page.goto('/new');
-  await expect(page).toHaveURL(/\/signin/, { timeout: 30_000 });
+test.describe('logged out', () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test('logged-out visitors are sent to signin', async ({ page }) => {
+    await page.goto('/new');
+    await expect(page).toHaveURL(/\/signin/, { timeout: 30_000 });
+  });
 });
 
 test('jaafar answers in chat via the browser', async ({ page }) => {
-  test.skip(!HAS_AUTH, 'no authenticated session — record once: npm run test:browser:auth');
-
   await page.goto('/new');
 
   const composer = page.getByPlaceholder('Send a message...');
@@ -44,8 +40,6 @@ test('jaafar answers in chat via the browser', async ({ page }) => {
 });
 
 test('jaafar parks an automation design behind approval', async ({ page }) => {
-  test.skip(!HAS_AUTH, 'no authenticated session — record once: npm run test:browser:auth');
-
   await page.goto('/new');
 
   const composer = page.getByPlaceholder('Send a message...');

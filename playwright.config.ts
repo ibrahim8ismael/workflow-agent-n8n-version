@@ -11,9 +11,11 @@ import { defineConfig, devices } from '@playwright/test';
  *   PLAYWRIGHT_CLIENT_URL  default http://localhost:3000
  *   PLAYWRIGHT_API_URL     default http://localhost:4000
  *
- * Authenticated chat test needs a one-time recorded session:
- *   npm run test:browser:auth
- * then log in via OTP in the opened browser. Saved to tests/browser/.auth/user.json (gitignored).
+ * Authenticated chat tests log in through the real UI first:
+ *   the `setup` project (tests/browser/auth.setup.ts) signs in as
+ *   PLAYWRIGHT_TEST_EMAIL (default test@woops.cc) reading the OTP from
+ *   the local Mailpit (PLAYWRIGHT_MAILPIT_URL, default :8025),
+ *   then saves tests/browser/.auth/user.json (gitignored).
  */
 const CLIENT_URL = process.env.PLAYWRIGHT_CLIENT_URL ?? 'http://localhost:3000';
 
@@ -35,9 +37,14 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   projects: [
+    { name: 'setup', testMatch: /auth\.setup\.ts/ },
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      dependencies: ['setup'],
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: 'tests/browser/.auth/user.json',
+      },
     },
   ],
 });
